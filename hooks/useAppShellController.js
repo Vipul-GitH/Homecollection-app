@@ -1,0 +1,865 @@
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {useWindowDimensions} from 'react-native';
+import {bottomTabs} from '../constants/navigation/tabs';
+import {getPatientMutationId} from '../screens/bookings/appointmentDetails/helpers';
+import {getSpecimenNameForTestCode} from '../services/local/panelCatalogSpecimenLookup';
+import {
+  getCachedAppointmentDetailState,
+  persistAppointmentDetailState,
+  queuePendingLocalAction,
+} from '../services/storage/offlineBookingStorage';
+import {useAssignedBookings} from './useAssignedBookings';
+import {useLocationGate} from './useLocationGate';
+import {useSessionAuth} from './useSessionAuth';
+
+const toStableValue = value =>
+  value === null || value === undefined ? '' : String(value).trim();
+
+const getTestDedupeKey = test =>
+  toStableValue(
+    test?.dedupe_key ||
+      test?.booked_code ||
+      test?.testcode1 ||
+      test?.test_code ||
+      test?.code,
+  ).toUpperCase();
+
+const buildTestSelectionKey = (panelCompany, test, childTest = null) =>
+  [
+    toStableValue(panelCompany?.compCatId) || 'na',
+    childTest ? 'child' : 'test',
+    getTestDedupeKey(childTest || test),
+    childTest?.catalog_key || test?.catalog_key || '',
+    childTest?.booked_code || test?.booked_code || 'na',
+    childTest?.description || test?.description || 'na',
+  ].join('|');
+
+const parseCatalogKey = catalogKey => {
+  const [compCatId = '', gcode = '', scode = '', bookedCode = ''] =
+    toStableValue(catalogKey).split('|');
+  return {compCatId, gcode, scode, bookedCode};
+};
+
+const buildSeededPatientTests = patient =>
+  (Array.isArray(patient?.tests) ? patient.tests : []).map(test => ({
+    key: `seed|${test?.code || 'na'}|${test?.name || 'na'}`,
+    panelCompanyName: patient?.panelCompany || 'Current Panel',
+    panelCompanyId: '',
+    booked_code: test?.code || 'N/A',
+    description: test?.name || 'Unnamed Test',
+    specimenName:
+      test?.specimen_name ||
+      test?.specimenName ||
+      getSpecimenNameForTestCode(test?.code) ||
+      'N/A',
+    isChildTest: false,
+  }));
+
+const buildSelectedChildTests = (children, parentContext = {}) =>
+  (Array.isArray(children) ? children : []).map(child => ({
+    catalog_key: child?.catalog_key || parentContext.catalogKey || '',
+    gcode: child?.gcode || parentContext.gcode || '',
+    scode: child?.scode || parentContext.scode || '',
+    testcode1: child?.testcode1 || child?.booked_code || child?.test_code || '',
+    booked_code: child?.booked_code || 'N/A',
+    test_code: child?.test_code || child?.booked_code || '',
+    description: child?.description || 'Unnamed Test',
+    is_profile: Boolean(child?.is_profile || child?.isProfile),
+    has_children: Boolean(
+      child?.has_children ||
+        child?.hasChildren ||
+        (Array.isArray(child?.child_tests) && child.child_tests.length) ||
+        (Array.isArray(child?.childTests) && child.childTests.length),
+    ),
+    specimenName:
+      child?.specimen_name ||
+      child?.specimenName ||
+      getSpecimenNameForTestCode(child?.booked_code || '') ||
+      'N/A',
+    childTests: buildSelectedChildTests(child?.child_tests || child?.childTests, {
+      catalogKey: child?.catalog_key || parentContext.catalogKey || '',
+      gcode: child?.gcode || parentContext.gcode || '',
+      scode: child?.scode || parentContext.scode || '',
+    }),
+  }));
+
+const buildEmptyAppointmentDetailState = () => ({
+  patientApiPanelCompaniesMap: {},
+  patientPanelCompaniesMap: {},
+  activePatientPanelCompanyMap: {},
+  patientSelectedTestsMap: {},
+  patientReportCourierMap: {},
+});
+
+const getTerminalBookingStatus = booking => {
+  const statusCode = Number(booking?.bookingStatusCode || 0);
+  const statusLabel = toStableValue(booking?.status).toLowerCase();
+
+  if (
+    statusCode === 5 ||
+    (statusLabel.includes('partial') && statusLabel.includes('complete'))
+  ) {
+    return {bookingStatusCode: 5, status: 'Partial Complete'};
+  }
+
+  if (statusCode === 3 || statusLabel.includes('complete')) {
+    return {bookingStatusCode: 3, status: 'Completed'};
+  }
+
+  if (statusCode === 4 || statusLabel.includes('cancel')) {
+    return {bookingStatusCode: 4, status: 'Cancelled'};
+  }
+
+  return null;
+};
+
+const getLoadingOverlayCopy = ({
+  appointmentsViewMode,
+  isLoadingCompletedAppointments,
+  loadingAssignedBookingId,
+  bookingActionLoading,
+  isAddingPatient,
+  isUpdatingPatient,
+  cancellingPatientId,
+  addingTestPatientId,
+}) => {
+  const title = bookingActionLoading
+    ? 'Updating Booking'
+    : isAddingPatient
+    ? 'Adding Patient'
+    : isUpdatingPatient
+    ? 'Updating Patient'
+    : cancellingPatientId
+    ? 'Cancelling Patient'
+    : addingTestPatientId
+    ? 'Loading Tests'
+    : loadingAssignedBookingId
+    ? 'Opening Booking'
+    : isLoadingCompletedAppointments
+    ? 'Loading Completed'
+    : appointmentsViewMode === 'started'
+    ? 'Loading Started'
+    : 'Loading Appointments';
+
+  const message = bookingActionLoading
+    ? 'Updating the booking status...'
+    : isAddingPatient
+    ? 'Saving patient details...'
+    : isUpdatingPatient
+    ? 'Updating patient details...'
+    : cancellingPatientId
+    ? 'Cancelling the selected patient...'
+    : addingTestPatientId
+    ? 'Fetching panel test catalog...'
+    : loadingAssignedBookingId
+    ? 'Fetching appointment details and patient tests...'
+    : isLoadingCompletedAppointments
+    ? 'Fetching your completed appointment history...'
+    : appointmentsViewMode === 'started'
+    ? 'Fetching your started appointments...'
+    : 'Fetching your assigned appointments...';
+
+  return {title, message};
+};
+
+export const useAppShellController = () => {
+  const [activeTab, setActiveTab] = useState('home');
+  const [tabHistory, setTabHistory] = useState([]);
+  const [selectedBooking, setSelectedBooking] = useState(null);
+  const [selectedBookingScreen, setSelectedBookingScreen] = useState('details');
+  const [selectedSamplePatient, setSelectedSamplePatient] = useState(null);
+  const [selectedSamplePanelCompany, setSelectedSamplePanelCompany] = useState(null);
+  const [appointmentDetailState, setAppointmentDetailState] = useState(
+    buildEmptyAppointmentDetailState,
+  );
+  const [appointmentsViewMode, setAppointmentsViewMode] = useState('default');
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [isShowingSplash, setIsShowingSplash] = useState(true);
+  const isAppointmentDetailStateHydratedRef = useRef(false);
+  const lastAppointmentsViewModeRef = useRef('assigned');
+  const {width, height} = useWindowDimensions();
+  const session = useSessionAuth();
+  const location = useLocationGate();
+  const bookings = useAssignedBookings({
+    accessToken: session.accessToken,
+    loggedInUser: session.loggedInUser,
+  });
+
+  const isSmallPhone = width < 340;
+  const isLargePhone = width >= 430;
+  const horizontalPadding = isSmallPhone ? 14 : isLargePhone ? 22 : 18;
+  const contentWidth = Math.min(width - horizontalPadding * 2, 460);
+  const homeContentWidth = Math.min(width - horizontalPadding * 2, 520);
+  const loginTopSpacing = height < 700 ? 28 : 40;
+  const loginBottomSpacing = height < 700 ? 20 : 28;
+
+  const startedAppointments = useMemo(
+    () =>
+      bookings.assignedAppointments.filter(
+        booking =>
+          Number(booking.bookingStatusCode) === 2 || booking.status === 'Started',
+      ),
+    [bookings.assignedAppointments],
+  );
+
+  const isHomeOverlayVisible =
+    bookings.isLoadingAssignedAppointments ||
+    bookings.isLoadingCompletedAppointments ||
+    Boolean(bookings.loadingAssignedBookingId) ||
+    Boolean(bookings.bookingActionLoading) ||
+    bookings.isAddingPatient ||
+    bookings.isUpdatingPatient ||
+    Boolean(bookings.cancellingPatientId) ||
+    Boolean(bookings.addingTestPatientId);
+
+  const loadingOverlayCopy = getLoadingOverlayCopy({
+    appointmentsViewMode,
+    isLoadingCompletedAppointments: bookings.isLoadingCompletedAppointments,
+    loadingAssignedBookingId: bookings.loadingAssignedBookingId,
+    bookingActionLoading: bookings.bookingActionLoading,
+    isAddingPatient: bookings.isAddingPatient,
+    isUpdatingPatient: bookings.isUpdatingPatient,
+    cancellingPatientId: bookings.cancellingPatientId,
+    addingTestPatientId: bookings.addingTestPatientId,
+  });
+
+  useEffect(() => {
+    const splashTimer = setTimeout(() => {
+      setIsShowingSplash(false);
+    }, 2800);
+
+    return () => clearTimeout(splashTimer);
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const restoreAppointmentDetailState = async () => {
+      try {
+        const cachedState = await getCachedAppointmentDetailState();
+        if (!isMounted || !Object.keys(cachedState).length) {
+          isAppointmentDetailStateHydratedRef.current = true;
+          return;
+        }
+
+        setAppointmentDetailState(previousState => ({
+          ...previousState,
+          ...cachedState,
+          patientApiPanelCompaniesMap: {
+            ...(previousState?.patientApiPanelCompaniesMap || {}),
+            ...(cachedState?.patientApiPanelCompaniesMap || {}),
+          },
+          patientPanelCompaniesMap: {
+            ...(previousState?.patientPanelCompaniesMap || {}),
+            ...(cachedState?.patientPanelCompaniesMap || {}),
+          },
+          activePatientPanelCompanyMap: {
+            ...(previousState?.activePatientPanelCompanyMap || {}),
+            ...(cachedState?.activePatientPanelCompanyMap || {}),
+          },
+          patientSelectedTestsMap: {
+            ...(previousState?.patientSelectedTestsMap || {}),
+            ...(cachedState?.patientSelectedTestsMap || {}),
+          },
+          patientReportCourierMap: {
+            ...(previousState?.patientReportCourierMap || {}),
+            ...(cachedState?.patientReportCourierMap || {}),
+          },
+        }));
+      } catch (error) {
+        // Local cache restore is best-effort; the screen can continue without it.
+      } finally {
+        isAppointmentDetailStateHydratedRef.current = true;
+      }
+    };
+
+    restoreAppointmentDetailState();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isAppointmentDetailStateHydratedRef.current) {
+      return;
+    }
+
+    persistAppointmentDetailState(appointmentDetailState).catch(() => {});
+  }, [appointmentDetailState]);
+
+  useEffect(() => {
+    if (['assigned', 'started', 'completed'].includes(appointmentsViewMode)) {
+      lastAppointmentsViewModeRef.current = appointmentsViewMode;
+    }
+  }, [appointmentsViewMode]);
+
+  const resetHomeNavigation = useCallback(() => {
+    setActiveTab('home');
+    setTabHistory([]);
+    setSelectedBooking(null);
+    setSelectedBookingScreen('details');
+    setSelectedSamplePatient(null);
+    setSelectedSamplePanelCompany(null);
+    setAppointmentDetailState(buildEmptyAppointmentDetailState());
+    setAppointmentsViewMode('default');
+  }, []);
+
+  const handleLoginSubmit = useCallback(async () => {
+    const didLoginSucceed = await session.handleLogin();
+
+    if (didLoginSucceed) {
+      resetHomeNavigation();
+    }
+  }, [resetHomeNavigation, session]);
+
+  const navigateToAppointmentsView = useCallback(
+    async ({
+      sourceTab,
+      viewMode,
+      fetcher,
+      errorSetter,
+      emptyListLength,
+      missingTokenMessage,
+    }) => {
+      setSelectedBooking(null);
+      setSelectedBookingScreen('details');
+      setSelectedSamplePatient(null);
+      setSelectedSamplePanelCompany(null);
+      setAppointmentDetailState(buildEmptyAppointmentDetailState());
+      setAppointmentsViewMode(viewMode);
+      setTabHistory(previousHistory => [...previousHistory, sourceTab]);
+      setActiveTab('appointments');
+
+      if (!session.accessToken) {
+        errorSetter(emptyListLength ? '' : missingTokenMessage);
+        return;
+      }
+
+      await fetcher();
+    },
+    [session.accessToken],
+  );
+
+  const handleTabChange = useCallback(
+    async nextTab => {
+      if (nextTab === activeTab) {
+        return;
+      }
+
+      setSelectedBooking(null);
+      setSelectedBookingScreen('details');
+      setSelectedSamplePatient(null);
+      setSelectedSamplePanelCompany(null);
+      setAppointmentDetailState(buildEmptyAppointmentDetailState());
+
+      if (nextTab === 'appointments') {
+        setAppointmentsViewMode('assigned');
+        setTabHistory(previousHistory =>
+          activeTab === nextTab ? previousHistory : [...previousHistory, activeTab],
+        );
+        setActiveTab('appointments');
+
+        if (!session.accessToken) {
+          bookings.setAssignedAppointmentsError(
+            bookings.assignedAppointments.length
+              ? ''
+              : 'A valid login token is required before opening assigned appointments.',
+          );
+          return;
+        }
+
+        await bookings.fetchAssignedAppointments();
+        return;
+      }
+
+      setAppointmentsViewMode('default');
+      setTabHistory(previousHistory => [...previousHistory, activeTab]);
+      setActiveTab(nextTab);
+    },
+    [activeTab, bookings, session.accessToken],
+  );
+
+  const handleAssignedCardPress = useCallback(
+    async () =>
+      navigateToAppointmentsView({
+        sourceTab: activeTab,
+        viewMode: 'assigned',
+        fetcher: bookings.fetchAssignedAppointments,
+        errorSetter: bookings.setAssignedAppointmentsError,
+        emptyListLength: bookings.assignedAppointments.length,
+        missingTokenMessage:
+          'A valid login token is required before opening assigned appointments.',
+      }),
+    [activeTab, bookings, navigateToAppointmentsView],
+  );
+
+  const handleCompletedCardPress = useCallback(
+    async () =>
+      navigateToAppointmentsView({
+        sourceTab: activeTab,
+        viewMode: 'completed',
+        fetcher: bookings.fetchCompletedAppointments,
+        errorSetter: bookings.setCompletedAppointmentsError,
+        emptyListLength: bookings.completedAppointments.length,
+        missingTokenMessage:
+          'A valid login token is required before opening completed appointments.',
+      }),
+    [activeTab, bookings, navigateToAppointmentsView],
+  );
+
+  const handleStartedCardPress = useCallback(
+    async () =>
+      navigateToAppointmentsView({
+        sourceTab: activeTab,
+        viewMode: 'started',
+        fetcher: bookings.fetchAssignedAppointments,
+        errorSetter: bookings.setAssignedAppointmentsError,
+        emptyListLength: startedAppointments.length,
+        missingTokenMessage:
+          'A valid login token is required before opening started appointments.',
+      }),
+    [activeTab, bookings, navigateToAppointmentsView, startedAppointments.length],
+  );
+
+  const handleAssignedViewDetails = useCallback(
+    async booking => {
+      const bookingDetail = await bookings.openAssignedBooking(booking);
+
+      if (bookingDetail) {
+        const terminalStatusFromList = getTerminalBookingStatus(booking);
+        const finalBooking = {
+          ...bookingDetail,
+          ...(terminalStatusFromList || {}),
+          sourceType:
+            bookingDetail?.sourceType ||
+            booking?.sourceType ||
+            booking?.source_type ||
+            (bookingDetail?.appointmentId || booking?.appointmentId
+              ? 'APPOINTMENT'
+              : 'BOOKING'),
+          appointmentId:
+            bookingDetail?.appointmentId ||
+            booking?.appointmentId ||
+            booking?.appointment_id ||
+            '',
+        };
+
+        setSelectedBooking({
+          ...finalBooking,
+        });
+        setSelectedBookingScreen('details');
+        setSelectedSamplePatient(null);
+        setSelectedSamplePanelCompany(null);
+        setAppointmentDetailState(buildEmptyAppointmentDetailState());
+      }
+    },
+    [bookings],
+  );
+
+  const handleOpenSampleCollection = useCallback(
+    patient => {
+      if (!selectedBooking || !patient) {
+        return;
+      }
+
+      const patientId = getPatientMutationId(patient);
+      if (patientId) {
+        setAppointmentDetailState(previousState => {
+          const patientSelectedTestsMap =
+            previousState?.patientSelectedTestsMap || {};
+
+          if (patientSelectedTestsMap[patientId]) {
+            return previousState;
+          }
+
+          return {
+            ...previousState,
+            patientSelectedTestsMap: {
+              ...patientSelectedTestsMap,
+              [patientId]: buildSeededPatientTests(patient),
+            },
+          };
+        });
+      }
+
+      setSelectedSamplePatient(patient);
+      setSelectedSamplePanelCompany(null);
+      setSelectedBookingScreen('sample-collection');
+    },
+    [selectedBooking],
+  );
+
+  const handleOpenAddTest = useCallback(
+    (patient, panelCompany) => {
+      if (!selectedBooking || !patient || !panelCompany) {
+        return;
+      }
+
+      const patientId = getPatientMutationId(patient);
+      if (patientId) {
+        setAppointmentDetailState(previousState => {
+          const patientSelectedTestsMap =
+            previousState?.patientSelectedTestsMap || {};
+
+          if (patientSelectedTestsMap[patientId]) {
+            return previousState;
+          }
+
+          return {
+            ...previousState,
+            patientSelectedTestsMap: {
+              ...patientSelectedTestsMap,
+              [patientId]: buildSeededPatientTests(patient),
+            },
+          };
+        });
+      }
+
+      setSelectedSamplePatient(patient);
+      setSelectedSamplePanelCompany(panelCompany);
+      setSelectedBookingScreen('add-test');
+    },
+    [selectedBooking],
+  );
+
+  const handleTogglePatientTestSelection = useCallback(
+    ({patient, panelCompany, test, childTest = null}) => {
+      const patientId = getPatientMutationId(patient);
+      if (!patientId) {
+        return;
+      }
+
+      const key = buildTestSelectionKey(panelCompany, test, childTest);
+      const catalogKey = childTest?.catalog_key || test?.catalog_key || '';
+      const catalogContext = parseCatalogKey(catalogKey);
+      const gcode = childTest?.gcode || test?.gcode || catalogContext.gcode || '';
+      const scode = childTest?.scode || test?.scode || catalogContext.scode || '';
+      const childContext = {catalogKey, gcode, scode};
+      const profileChildTests = !childTest
+        ? buildSelectedChildTests(test?.child_tests || test?.childTests, childContext)
+        : buildSelectedChildTests(
+            childTest?.child_tests || childTest?.childTests,
+            childContext,
+          );
+      const nextEntry = {
+        key,
+        panelCompanyName: panelCompany?.name || 'Selected Panel',
+        panelCompanyId: panelCompany?.compCatId || '',
+        testcode1:
+          childTest?.testcode1 ||
+          childTest?.booked_code ||
+          test?.testcode1 ||
+          test?.booked_code ||
+          test?.test_code ||
+          '',
+        catalog_key: catalogKey,
+        gcode,
+        scode,
+        dedupe_key: getTestDedupeKey(childTest || test),
+        booked_code: childTest?.booked_code || test?.booked_code || 'N/A',
+        test_code: childTest?.test_code || test?.test_code || '',
+        description:
+          childTest?.description || test?.description || 'Unnamed Test',
+        specimenName:
+          childTest?.specimen_name ||
+          test?.specimen_name ||
+          getSpecimenNameForTestCode(
+            childTest?.booked_code || test?.booked_code || '',
+          ) ||
+          'N/A',
+        childTests: profileChildTests,
+        isChildTest: Boolean(childTest),
+        parentDescription: childTest ? test?.description || '' : '',
+      };
+
+      setAppointmentDetailState(previousState => {
+        const previousMap = previousState?.patientSelectedTestsMap || {};
+        const previousTests =
+          previousMap[patientId] || buildSeededPatientTests(patient);
+        const selectedDedupeKey = getTestDedupeKey(childTest || test);
+        const selectedPanelCompanyId = toStableValue(panelCompany?.compCatId);
+        const alreadySelected = previousTests.some(
+          item =>
+            item.key === key ||
+            (toStableValue(item?.panelCompanyId) === selectedPanelCompanyId &&
+              getTestDedupeKey(item) === selectedDedupeKey),
+        );
+
+        return {
+          ...previousState,
+          patientSelectedTestsMap: {
+            ...previousMap,
+            [patientId]: alreadySelected
+              ? previousTests.filter(
+                  item =>
+                    item.key !== key &&
+                    !(
+                      toStableValue(item?.panelCompanyId) ===
+                        selectedPanelCompanyId &&
+                      getTestDedupeKey(item) === selectedDedupeKey
+                    ),
+                )
+              : [...previousTests, nextEntry],
+          },
+        };
+      });
+
+      queuePendingLocalAction({
+        type: 'test-selection-toggle',
+        bookingId: selectedBooking?.id,
+        patientId,
+        payload: {
+          panelCompany: {
+            id: panelCompany?.id || '',
+            name: panelCompany?.name || '',
+            compCatId: panelCompany?.compCatId || '',
+            centerId: panelCompany?.centerId || '',
+          },
+          test: nextEntry,
+          queuedOfflineCapable: true,
+        },
+      }).catch(() => {});
+    },
+    [selectedBooking?.id],
+  );
+
+  const handleRemovePatientSelectedTest = useCallback(({patient, testKey}) => {
+    const patientId = getPatientMutationId(patient);
+    if (!patientId || !testKey) {
+      return;
+    }
+
+    setAppointmentDetailState(previousState => {
+      const previousMap = previousState?.patientSelectedTestsMap || {};
+      const previousTests =
+        previousMap[patientId] || buildSeededPatientTests(patient);
+
+      return {
+        ...previousState,
+        patientSelectedTestsMap: {
+          ...previousMap,
+          [patientId]: previousTests.filter(item => item.key !== testKey),
+        },
+      };
+    });
+
+    queuePendingLocalAction({
+      type: 'test-selection-remove',
+      bookingId: selectedBooking?.id,
+      patientId,
+      payload: {
+        testKey,
+        queuedOfflineCapable: true,
+      },
+    }).catch(() => {});
+  }, [selectedBooking?.id]);
+
+  const handleBookingAction = useCallback(
+    async action => {
+      if (!selectedBooking) {
+        return;
+      }
+
+      await bookings.submitBookingAction({
+        booking: selectedBooking,
+        action,
+        onLocalBookingUpdate: nextStatusUpdate => {
+          setSelectedBooking(previousBooking =>
+            previousBooking
+              ? {
+                  ...previousBooking,
+                  status: nextStatusUpdate.status,
+                  bookingStatusCode: nextStatusUpdate.bookingStatusCode,
+                }
+              : previousBooking,
+          );
+        },
+      });
+    },
+    [bookings, selectedBooking],
+  );
+
+  const handleAddPatient = useCallback(
+    async patientPayload => {
+      if (!selectedBooking) {
+        return false;
+      }
+
+      const updatedBookingDetail = await bookings.submitAssignedBookingPatient({
+        booking: selectedBooking,
+        patient: patientPayload,
+      });
+
+      if (updatedBookingDetail) {
+        setSelectedBooking(updatedBookingDetail);
+        return true;
+      }
+
+      return false;
+    },
+    [bookings, selectedBooking],
+  );
+
+  const handleUpdatePatient = useCallback(
+    async ({patientId, patient}) => {
+      if (!selectedBooking) {
+        return false;
+      }
+
+      const updatedBookingDetail = await bookings.updateAssignedBookingPatient({
+        booking: selectedBooking,
+        patientId,
+        patient,
+      });
+
+      if (updatedBookingDetail) {
+        setSelectedBooking(updatedBookingDetail);
+        return true;
+      }
+
+      return false;
+    },
+    [bookings, selectedBooking],
+  );
+
+  const handleCancelPatient = useCallback(
+    async patient => {
+      if (!selectedBooking) {
+        return false;
+      }
+
+      const updatedBookingDetail = await bookings.cancelAssignedBookingPatient({
+        booking: selectedBooking,
+        patient,
+      });
+
+      if (updatedBookingDetail) {
+        setSelectedBooking(updatedBookingDetail);
+        return true;
+      }
+
+      return false;
+    },
+    [bookings, selectedBooking],
+  );
+
+  const handleAddTestForPatient = useCallback(
+    async patient => {
+      if (!selectedBooking) {
+        return false;
+      }
+
+      return bookings.addTestForPatient({
+        booking: selectedBooking,
+        patient,
+      });
+    },
+    [bookings, selectedBooking],
+  );
+
+  const handlePanelCompanySelect = useCallback(
+    async ({patient, compCatId}) => {
+      if (!selectedBooking) {
+        return null;
+      }
+
+      return bookings.fetchPanelCatalogForCompany({
+        booking: selectedBooking,
+        patient,
+        compCatId,
+      });
+    },
+    [bookings, selectedBooking],
+  );
+
+  const performLogout = useCallback(async () => {
+    setShowLogoutModal(false);
+    resetHomeNavigation();
+    await Promise.all([session.resetSession(), bookings.clearAssignedState()]);
+  }, [bookings, resetHomeNavigation, session]);
+
+  const handleGoBack = useCallback(() => {
+    if (selectedBooking && selectedBookingScreen !== 'details') {
+      setSelectedSamplePatient(null);
+      setSelectedSamplePanelCompany(null);
+      setSelectedBookingScreen('details');
+      return;
+    }
+
+    if (selectedBooking) {
+      setSelectedBooking(null);
+      setSelectedBookingScreen('details');
+      setSelectedSamplePatient(null);
+      setSelectedSamplePanelCompany(null);
+      return;
+    }
+
+    setTabHistory(previousHistory => {
+      if (previousHistory.length === 0) {
+        setAppointmentsViewMode('default');
+        setActiveTab('home');
+        return previousHistory;
+      }
+
+      const nextHistory = [...previousHistory];
+      const previousTab = nextHistory.pop();
+      setAppointmentsViewMode(
+        previousTab === 'appointments'
+          ? lastAppointmentsViewModeRef.current || 'assigned'
+          : 'default',
+      );
+      setActiveTab(previousTab || 'home');
+      return nextHistory;
+    });
+  }, [selectedBooking, selectedBookingScreen]);
+
+  return {
+    activeTab,
+    bottomTabs,
+    contentWidth,
+    homeContentWidth,
+    horizontalPadding,
+    isHomeOverlayVisible,
+    isShowingSplash,
+    isSmallPhone,
+    loadingOverlayMessage: loadingOverlayCopy.message,
+    loadingOverlayTitle: loadingOverlayCopy.title,
+    location,
+    loginBottomSpacing,
+    loginTopSpacing,
+    appointmentsViewMode,
+    appointmentDetailState,
+    selectedBooking,
+    selectedBookingScreen,
+    selectedSamplePatient,
+    selectedSamplePanelCompany,
+    showLogoutModal,
+    startedAppointments,
+    tabHistory,
+    session,
+    bookings,
+    actions: {
+      handleAddPatient,
+      handleAddTestForPatient,
+      handleAssignedCardPress,
+      handleAssignedViewDetails,
+      handleBookingAction,
+      handleCancelPatient,
+      handleCompletedCardPress,
+      handleGoBack,
+      handleLoginSubmit,
+      handleOpenAddTest,
+      handleOpenSampleCollection,
+      handlePanelCompanySelect,
+      handleRemovePatientSelectedTest,
+      handleStartedCardPress,
+      handleTabChange,
+      handleTogglePatientTestSelection,
+      handleUpdatePatient,
+      performLogout,
+      setShowLogoutModal,
+      setAppointmentDetailState,
+    },
+  };
+};

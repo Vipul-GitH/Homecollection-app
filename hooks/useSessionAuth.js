@@ -1,0 +1,156 @@
+import {useCallback, useEffect, useState} from 'react';
+import {
+  diagnoseLoginConnectivity,
+  loginUserApi,
+} from '../services/api/authApi';
+import {clearSession, persistSession} from '../services/storage/sessionStorage';
+import {logDebug, warnDebug} from '../utils/app/logger';
+
+export const useSessionAuth = () => {
+  const [currentScreen, setCurrentScreen] = useState('login');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const [loggedInUser, setLoggedInUser] = useState('');
+  const [accessToken, setAccessToken] = useState('');
+
+  useEffect(() => {
+    const resetPersistedSessionOnLaunch = async () => {
+      try {
+        await clearSession();
+        logDebug('[Session] Cleared persisted login session on app launch');
+      } catch (error) {
+        warnDebug('Session launch reset error:', error);
+      }
+    };
+
+    resetPersistedSessionOnLaunch();
+  }, []);
+
+  const handleUsernameChange = useCallback(
+    text => {
+      setUsername(text);
+
+      if (loginError) {
+        setLoginError('');
+      }
+    },
+    [loginError],
+  );
+
+  const handlePasswordChange = useCallback(
+    text => {
+      setPassword(text);
+
+      if (loginError) {
+        setLoginError('');
+      }
+    },
+    [loginError],
+  );
+
+  const handleLogin = useCallback(async () => {
+    const trimmedUsername = username.trim();
+    const trimmedPassword = password.trim();
+
+    if (!trimmedUsername || !trimmedPassword) {
+      setLoginError('Both username and password are required.');
+      return false;
+    }
+
+    try {
+      setIsLoggingIn(true);
+      setLoginError('');
+
+      const {displayName, accessToken: nextAccessToken} = await loginUserApi({
+        username: trimmedUsername,
+        password: trimmedPassword,
+      });
+
+      if (!nextAccessToken) {
+        setLoginError('No access token was returned in the login response.');
+        return false;
+      }
+
+      setLoggedInUser(displayName);
+      setAccessToken(nextAccessToken);
+      await persistSession({
+        accessToken: nextAccessToken,
+        loggedInUser: displayName,
+      });
+      logDebug('[Login] Request succeeded', {
+        displayName,
+        hasAccessToken: Boolean(nextAccessToken),
+      });
+      setCurrentScreen('home');
+      return true;
+    } catch (error) {
+      logDebug('[Login] Final error details', {
+        message: error?.message,
+        name: error?.name,
+        status: error?.status,
+        statusText: error?.statusText,
+        responseBody: error?.responseBody || null,
+        causeMessage: error?.cause?.message || null,
+      });
+
+      const shouldRunLoginDiagnostics =
+        __DEV__ &&
+        (error?.name === 'TypeError' ||
+          String(error?.message || '')
+            .toLowerCase()
+            .includes('network request failed'));
+
+      if (shouldRunLoginDiagnostics) {
+        try {
+          await diagnoseLoginConnectivity();
+        } catch (diagnosticError) {
+          logDebug('[Login Diagnostic] Runner failure', {
+            message: diagnosticError?.message,
+            name: diagnosticError?.name,
+          });
+        }
+      }
+
+      warnDebug('Login error:', error);
+      setLoginError(
+        error?.message ||
+          'Unable to reach the login API. Please check the server and network.',
+      );
+      return false;
+    } finally {
+      setIsLoggingIn(false);
+    }
+  }, [password, username]);
+
+  const resetSession = useCallback(async () => {
+    setCurrentScreen('login');
+    setAccessToken('');
+    setLoggedInUser('');
+    setUsername('');
+    setPassword('');
+    setLoginError('');
+
+    try {
+      await clearSession();
+    } catch (error) {
+      warnDebug('Session clear error:', error);
+    }
+  }, []);
+
+  return {
+    currentScreen,
+    username,
+    password,
+    isLoggingIn,
+    loginError,
+    loggedInUser,
+    accessToken,
+    setCurrentScreen,
+    handleLogin,
+    handleUsernameChange,
+    handlePasswordChange,
+    resetSession,
+  };
+};

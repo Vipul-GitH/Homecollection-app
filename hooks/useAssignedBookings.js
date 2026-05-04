@@ -1,0 +1,1081 @@
+import {useCallback, useEffect, useRef, useState} from 'react';
+import {Alert, AppState} from 'react-native';
+import {
+  addAssignedBookingPatientApi,
+  cancelAssignedBookingPatientApi,
+  fetchAssignedBookingDetailApi,
+  fetchAssignedBookingHistoryApi,
+  fetchAssignedBookingsApi,
+  fetchPanelCatalogByCompanyApi,
+  fetchPanelTestCatalogApi,
+  updateAssignedBookingPatientApi,
+  updateAssignedBookingStatusApi,
+} from '../services/api/bookingApi';
+import {
+  clearOfflineBookingStorage,
+  clearOfflineBookingViewCache,
+  getCachedAssignedBookings,
+  getCachedBookingDetail,
+  getCachedCompletedBookings,
+  getPendingBookingActions,
+  getPendingPatientActions,
+  persistAssignedBookings,
+  persistBookingDetail,
+  persistCompletedBookings,
+  queuePendingBookingAction,
+  queuePendingPatientAction,
+  removePendingBookingAction,
+  removePendingPatientAction,
+  updateCachedBookingPatients,
+  updateCachedBookingStatus,
+} from '../services/storage/offlineBookingStorage';
+import {
+  getStatusCodeFromAction,
+  getStatusFromAction,
+  isLikelyOfflineError,
+} from '../utils/app/runtimeHelpers';
+import {logDebug, warnDebug} from '../utils/app/logger';
+import {showPlatformMessage} from '../utils/ui/notifications';
+
+const toDisplayValue = value => {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  return String(value).trim();
+};
+
+const toPatientAge = value => {
+  const normalizedValue = toDisplayValue(value);
+  return normalizedValue || 'N/A';
+};
+
+const toPatientStatusCode = value => {
+  const normalizedValue = Number(value);
+  return Number.isFinite(normalizedValue) ? normalizedValue : 0;
+};
+
+const buildLocalPatientFromPayload = ({
+  patient,
+  existingPatient,
+  patientId,
+  isOfflinePending,
+}) => ({
+  ...existingPatient,
+  id: toDisplayValue(patientId) || existingPatient?.id,
+  bookingPatientId:
+    toDisplayValue(patientId) || existingPatient?.bookingPatientId || '',
+  patientId: existingPatient?.patientId || '',
+  title: toDisplayValue(patient?.title) || existingPatient?.title || 'Mr',
+  name:
+    toDisplayValue(patient?.full_name) ||
+    existingPatient?.name ||
+    'Unsynced Patient',
+  age: toPatientAge(patient?.age_years ?? existingPatient?.age),
+  dob: toDisplayValue(patient?.date_of_birth) || existingPatient?.dob || 'N/A',
+  panelCompany:
+    toDisplayValue(patient?.panel_company) ||
+    existingPatient?.panelCompany ||
+    'N/A',
+  mobileNumber:
+    toDisplayValue(patient?.contact_mobile || patient?.primary_mobile) ||
+    existingPatient?.mobileNumber ||
+    'N/A',
+  alternateMobileNumber:
+    toDisplayValue(patient?.alternate_mobile) ||
+    existingPatient?.alternateMobileNumber ||
+    'N/A',
+  email: toDisplayValue(patient?.email) || existingPatient?.email || '',
+  labmatePid:
+    toDisplayValue(patient?.labmate_pid) || existingPatient?.labmatePid || '',
+  reportCourier:
+    patient?.report_courier === true ||
+    String(patient?.report_courier || '').trim().toLowerCase() === 'yes'
+      ? 'Yes'
+      : 'No',
+  bookingPatientStatusCode: toPatientStatusCode(
+    existingPatient?.bookingPatientStatusCode ?? 1,
+  ),
+  gender: toDisplayValue(patient?.gender) || existingPatient?.gender || 'N/A',
+  tag: toDisplayValue(patient?.tag) || existingPatient?.tag || 'N/A',
+  tests: existingPatient?.tests || [],
+  tubes: existingPatient?.tubes || [],
+  documents: existingPatient?.documents || [],
+  isOfflinePending: Boolean(isOfflinePending),
+});
+
+const getPatientMutationId = patient =>
+  toDisplayValue(
+    patient?.bookingPatientId ||
+      patient?.booking_patient_id ||
+      patient?.patientId ||
+      patient?.patient_id ||
+      patient?.id,
+  );
+
+const resolveBookingRoutingMeta = booking => {
+  const appointmentId =
+    booking?.appointmentId || booking?.appointment_id || '';
+  const sourceTypeRaw = booking?.sourceType || booking?.source_type || '';
+  const normalizedSourceType = String(sourceTypeRaw).trim().toUpperCase();
+
+  return {
+    appointmentId,
+    sourceType: normalizedSourceType || (appointmentId ? 'APPOINTMENT' : 'BOOKING'),
+  };
+};
+
+const isStartedBooking = booking =>
+  Number(booking?.bookingStatusCode) === 2 ||
+  String(booking?.status || '').trim().toLowerCase() === 'started';
+
+const isSameBooking = (leftBooking, rightBooking) =>
+  String(leftBooking?.id || '') === String(rightBooking?.id || '');
+
+const getBookingDisplayCode = booking =>
+  toDisplayValue(booking?.bookingCode || booking?.booking_code || booking?.id) ||
+  'the active booking';
+
+export const useAssignedBookings = ({accessToken, loggedInUser}) => {
+  const [assignedAppointments, setAssignedAppointments] = useState([]);
+  const [isLoadingAssignedAppointments, setIsLoadingAssignedAppointments] =
+    useState(false);
+  const [assignedAppointmentsError, setAssignedAppointmentsError] =
+    useState('');
+  const [completedAppointments, setCompletedAppointments] = useState([]);
+  const [isLoadingCompletedAppointments, setIsLoadingCompletedAppointments] =
+    useState(false);
+  const [completedAppointmentsError, setCompletedAppointmentsError] =
+    useState('');
+  const [loadingAssignedBookingId, setLoadingAssignedBookingId] = useState('');
+  const [bookingActionLoading, setBookingActionLoading] = useState('');
+  const [isAddingPatient, setIsAddingPatient] = useState(false);
+  const [isUpdatingPatient, setIsUpdatingPatient] = useState(false);
+  const [cancellingPatientId, setCancellingPatientId] = useState('');
+  const [addingTestPatientId, setAddingTestPatientId] = useState('');
+  const [isPreloadingPanelTests, setIsPreloadingPanelTests] = useState(false);
+  const [panelTestCatalogCache, setPanelTestCatalogCache] = useState(null);
+  const panelTestCatalogPreloadPromiseRef = useRef(null);
+
+  useEffect(() => {
+    const loadCachedAssignedAppointments = async () => {
+      try {
+        const cachedBookings = await getCachedAssignedBookings();
+
+        if (cachedBookings.length) {
+          setAssignedAppointments(cachedBookings);
+        }
+      } catch (error) {
+        warnDebug('Assigned appointments cache restore error:', error);
+      }
+    };
+
+    loadCachedAssignedAppointments();
+  }, []);
+
+  const applyBookingStatusLocally = useCallback(async (bookingId, action) => {
+    const nextStatus = getStatusFromAction(action);
+    const nextStatusCode = getStatusCodeFromAction(action);
+
+    setAssignedAppointments(previousAppointments =>
+      previousAppointments.map(booking =>
+        String(booking.id) === String(bookingId)
+          ? {
+              ...booking,
+              status: nextStatus,
+              bookingStatusCode: nextStatusCode,
+            }
+          : booking,
+      ),
+    );
+
+    try {
+      await updateCachedBookingStatus(bookingId, nextStatus, nextStatusCode);
+    } catch (error) {
+      warnDebug('Local booking status cache update error:', error);
+    }
+  }, []);
+
+  const persistUpdatedBookingDetail = useCallback(
+    async ({bookingId, updatedBookingDetail}) => {
+      if (!bookingId || !updatedBookingDetail) {
+        return;
+      }
+
+      await persistBookingDetail(updatedBookingDetail);
+      await updateCachedBookingPatients({
+        bookingId,
+        patientCount:
+          updatedBookingDetail.patientCount ||
+          updatedBookingDetail.patients?.length,
+        patients: updatedBookingDetail.patients,
+      });
+
+      setAssignedAppointments(previousAppointments =>
+        previousAppointments.map(appointment =>
+          String(appointment.id) === String(bookingId)
+            ? {
+                ...appointment,
+                patientCount:
+                  updatedBookingDetail.patientCount ||
+                  updatedBookingDetail.patients?.length ||
+                  appointment.patientCount,
+                patients: updatedBookingDetail.patients || appointment.patients,
+              }
+            : appointment,
+        ),
+      );
+    },
+    [],
+  );
+
+  const applyPatientMutationLocally = useCallback(
+    async ({booking, updater}) => {
+      const bookingId = booking?.id;
+
+      if (!bookingId || typeof updater !== 'function') {
+        return null;
+      }
+
+      const previousPatients = Array.isArray(booking?.patients)
+        ? booking.patients
+        : [];
+      const nextPatients = updater(previousPatients);
+      const patients = Array.isArray(nextPatients) ? nextPatients : previousPatients;
+      const updatedBookingDetail = {
+        ...booking,
+        patients,
+        patientCount: patients.length || booking.patientCount,
+      };
+
+      try {
+        await persistUpdatedBookingDetail({bookingId, updatedBookingDetail});
+      } catch (error) {
+        warnDebug('Local patient cache update error:', error);
+      }
+
+      return updatedBookingDetail;
+    },
+    [persistUpdatedBookingDetail],
+  );
+
+  const syncPendingBookingActions = useCallback(async () => {
+    if (!accessToken) {
+      return;
+    }
+
+    const pendingActions = await getPendingBookingActions();
+
+    if (!pendingActions.length) {
+      return;
+    }
+
+    for (const pendingAction of pendingActions) {
+      try {
+        await updateAssignedBookingStatusApi({
+          accessToken,
+          bookingId: pendingAction.bookingId,
+          action: pendingAction.action,
+          appointmentId: pendingAction.appointmentId,
+          sourceType: pendingAction.sourceType,
+        });
+
+        await removePendingBookingAction(pendingAction.id);
+        await updateCachedBookingStatus(
+          pendingAction.bookingId,
+          getStatusFromAction(pendingAction.action),
+          getStatusCodeFromAction(pendingAction.action),
+        );
+      } catch (error) {
+        if (!isLikelyOfflineError(error)) {
+          await removePendingBookingAction(pendingAction.id);
+        }
+      }
+    }
+  }, [accessToken]);
+
+  const syncPendingPatientActions = useCallback(async () => {
+    if (!accessToken) {
+      return;
+    }
+
+    const pendingActions = await getPendingPatientActions();
+
+    if (!pendingActions.length) {
+      return;
+    }
+
+    const bookingIdsToRefresh = new Set();
+
+    for (const pendingAction of pendingActions) {
+      try {
+        if (pendingAction.type === 'add') {
+          await addAssignedBookingPatientApi({
+            accessToken,
+            bookingId: pendingAction.bookingId,
+            patient: pendingAction.patient,
+          });
+        } else if (pendingAction.type === 'update') {
+          await updateAssignedBookingPatientApi({
+            accessToken,
+            bookingId: pendingAction.bookingId,
+            patientId: pendingAction.patientId,
+            patient: pendingAction.patient,
+          });
+        } else if (pendingAction.type === 'cancel') {
+          await cancelAssignedBookingPatientApi({
+            accessToken,
+            bookingId: pendingAction.bookingId,
+            bookingPatientId: pendingAction.patientId,
+          });
+        }
+
+        await removePendingPatientAction(pendingAction.id);
+        bookingIdsToRefresh.add(pendingAction.bookingId);
+      } catch (error) {
+        if (!isLikelyOfflineError(error)) {
+          await removePendingPatientAction(pendingAction.id);
+        }
+      }
+    }
+
+    for (const bookingId of bookingIdsToRefresh) {
+      try {
+        const updatedBookingDetail = await fetchAssignedBookingDetailApi({
+          accessToken,
+          booking: {id: bookingId},
+        });
+
+        await persistUpdatedBookingDetail({bookingId, updatedBookingDetail});
+      } catch (error) {
+        warnDebug('Synced patient detail refresh skipped:', error);
+      }
+    }
+  }, [accessToken, persistUpdatedBookingDetail]);
+
+  const syncPendingOfflineWork = useCallback(async () => {
+    await syncPendingBookingActions();
+    await syncPendingPatientActions();
+  }, [syncPendingBookingActions, syncPendingPatientActions]);
+
+  const warmAssignedBookingDetailsCache = useCallback(
+    async bookings => {
+      if (!accessToken || !Array.isArray(bookings) || !bookings.length) {
+        return;
+      }
+
+      for (const booking of bookings) {
+        const bookingId = booking?.id;
+
+        if (!bookingId) {
+          continue;
+        }
+
+        try {
+          const cachedDetail = await getCachedBookingDetail(bookingId);
+
+          if (cachedDetail) {
+            continue;
+          }
+
+          const bookingDetail = await fetchAssignedBookingDetailApi({
+            accessToken,
+            booking,
+          });
+          await persistBookingDetail(bookingDetail);
+        } catch (error) {
+          warnDebug('Assigned booking detail background cache skipped:', error);
+        }
+      }
+    },
+    [accessToken],
+  );
+
+  useEffect(() => {
+    if (!accessToken) {
+      return undefined;
+    }
+
+    syncPendingOfflineWork().catch(error => {
+      warnDebug('Pending offline sync error:', error);
+    });
+
+    const appStateSubscription = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') {
+        syncPendingOfflineWork().catch(error => {
+          warnDebug('Pending offline sync error:', error);
+        });
+      }
+    });
+
+    return () => {
+      appStateSubscription.remove();
+    };
+  }, [accessToken, syncPendingOfflineWork]);
+
+  const preloadPanelTestCatalog = useCallback(
+    async ({forceRefresh = false} = {}) => {
+      if (!accessToken) {
+        return null;
+      }
+
+      if (!forceRefresh && panelTestCatalogCache) {
+        return panelTestCatalogCache;
+      }
+
+      if (!forceRefresh && panelTestCatalogPreloadPromiseRef.current) {
+        return panelTestCatalogPreloadPromiseRef.current;
+      }
+
+      const preloadPromise = (async () => {
+        try {
+          setIsPreloadingPanelTests(true);
+          const responseData = await fetchPanelTestCatalogApi({accessToken});
+          setPanelTestCatalogCache(responseData);
+          return responseData;
+        } catch (error) {
+          return null;
+        } finally {
+          setIsPreloadingPanelTests(false);
+          panelTestCatalogPreloadPromiseRef.current = null;
+        }
+      })();
+
+      panelTestCatalogPreloadPromiseRef.current = preloadPromise;
+      return preloadPromise;
+    },
+    [accessToken, panelTestCatalogCache],
+  );
+
+  useEffect(() => {
+    if (accessToken) {
+      return;
+    }
+
+    setPanelTestCatalogCache(null);
+    setIsPreloadingPanelTests(false);
+    panelTestCatalogPreloadPromiseRef.current = null;
+  }, [accessToken]);
+
+  useEffect(() => {
+    if (!accessToken) {
+      return;
+    }
+
+    // Preload in background after login so Add Test feels faster.
+    preloadPanelTestCatalog().catch(error => {
+      warnDebug('Panel catalog background preload error:', error);
+    });
+  }, [accessToken, preloadPanelTestCatalog]);
+
+  const fetchAssignedAppointments = useCallback(async () => {
+    try {
+      setIsLoadingAssignedAppointments(true);
+      setAssignedAppointmentsError('');
+      await syncPendingOfflineWork();
+      const normalizedBookings = await fetchAssignedBookingsApi({
+        accessToken,
+        loggedInUser,
+      });
+      setAssignedAppointments(normalizedBookings);
+      await persistAssignedBookings(normalizedBookings);
+      warmAssignedBookingDetailsCache(normalizedBookings).catch(error => {
+        warnDebug('Assigned booking detail background cache error:', error);
+      });
+    } catch (error) {
+      logDebug('[Assigned] Network or fetch error', {
+        message: error?.message,
+        name: error?.name,
+      });
+      warnDebug('Assigned appointments error:', error);
+
+      const cachedBookings = await getCachedAssignedBookings();
+
+      if (cachedBookings.length) {
+        setAssignedAppointments(cachedBookings);
+        setAssignedAppointmentsError('');
+        showPlatformMessage(
+          'Offline Mode',
+          'Showing saved assigned appointments in offline mode.',
+        );
+      } else {
+        setAssignedAppointments([]);
+        setAssignedAppointmentsError(
+          error?.message ||
+            'Unable to reach the assigned appointments API. Please check the server and network.',
+        );
+      }
+    } finally {
+      setIsLoadingAssignedAppointments(false);
+    }
+  }, [
+    accessToken,
+    loggedInUser,
+    syncPendingOfflineWork,
+    warmAssignedBookingDetailsCache,
+  ]);
+
+  const fetchCompletedAppointments = useCallback(async () => {
+    try {
+      setIsLoadingCompletedAppointments(true);
+      setCompletedAppointmentsError('');
+      const normalizedBookings = await fetchAssignedBookingHistoryApi({
+        accessToken,
+      });
+      setCompletedAppointments(normalizedBookings);
+      await persistCompletedBookings(normalizedBookings);
+    } catch (error) {
+      logDebug('[Assigned History] Network or fetch error', {
+        message: error?.message,
+        name: error?.name,
+      });
+      warnDebug('Completed appointments error:', error);
+
+      const cachedBookings = await getCachedCompletedBookings();
+
+      if (cachedBookings.length) {
+        setCompletedAppointments(cachedBookings);
+        setCompletedAppointmentsError('');
+        showPlatformMessage(
+          'Offline Mode',
+          'Showing saved completed appointments in offline mode.',
+        );
+      } else {
+        setCompletedAppointments([]);
+        setCompletedAppointmentsError(
+          error?.message ||
+            'Unable to reach the completed appointments API. Please check the server and network.',
+        );
+      }
+    } finally {
+      setIsLoadingCompletedAppointments(false);
+    }
+  }, [accessToken]);
+
+  const openAssignedBooking = useCallback(
+    async booking => {
+      const bookingId = booking?.id;
+
+      if (!bookingId) {
+        Alert.alert(
+          'Missing Booking',
+          'The selected appointment does not include a booking ID.',
+        );
+        return null;
+      }
+
+      try {
+        setLoadingAssignedBookingId(bookingId);
+        await syncPendingOfflineWork();
+        const bookingDetail = await fetchAssignedBookingDetailApi({
+          accessToken,
+          booking,
+        });
+        await persistBookingDetail(bookingDetail);
+        return bookingDetail;
+      } catch (error) {
+        warnDebug('Assigned booking detail error:', error);
+
+        const cachedBookingDetail = await getCachedBookingDetail(bookingId);
+
+        if (cachedBookingDetail) {
+          showPlatformMessage(
+            'Offline Mode',
+            'Showing saved booking details while offline.',
+          );
+          return cachedBookingDetail;
+        }
+
+        Alert.alert(
+          'Unable to Load Details',
+          error?.message || 'Unable to reach the assigned booking details API.',
+        );
+        return null;
+      } finally {
+        setLoadingAssignedBookingId('');
+      }
+    },
+    [accessToken, syncPendingOfflineWork],
+  );
+
+  const submitBookingAction = useCallback(
+    async ({booking, action, onLocalBookingUpdate}) => {
+      const bookingId = booking?.id;
+
+      if (!bookingId) {
+        Alert.alert(
+          'Missing Booking',
+          'The selected appointment does not include a booking ID.',
+        );
+        return false;
+      }
+
+      if (!accessToken) {
+        Alert.alert(
+          'Missing Session',
+          'A valid login token is required before updating booking status.',
+        );
+        return false;
+      }
+
+      if (action === 'start') {
+        const activeStartedBooking = assignedAppointments.find(
+          appointment =>
+            isStartedBooking(appointment) && !isSameBooking(appointment, booking),
+        );
+
+        if (activeStartedBooking) {
+          Alert.alert(
+            'Booking Already Started',
+            `${getBookingDisplayCode(
+              activeStartedBooking,
+            )} is already started. Please stop or complete it before starting another appointment.`,
+          );
+          return false;
+        }
+      }
+
+      try {
+        setBookingActionLoading(action);
+        const {appointmentId, sourceType} = resolveBookingRoutingMeta(booking);
+        await updateAssignedBookingStatusApi({
+          accessToken,
+          bookingId,
+          action,
+          appointmentId,
+          sourceType,
+        });
+        await applyBookingStatusLocally(bookingId, action);
+        onLocalBookingUpdate({
+          status: getStatusFromAction(action),
+          bookingStatusCode: getStatusCodeFromAction(action),
+        });
+
+        const successMessage =
+          action === 'start'
+            ? 'Booking started successfully.'
+            : action === 'cancel'
+            ? 'Booking cancelled successfully.'
+            : action === 'stop'
+            ? 'Booking stopped successfully.'
+            : 'Booking completed successfully.';
+
+        showPlatformMessage('Success', successMessage);
+        return true;
+      } catch (error) {
+        if (isLikelyOfflineError(error)) {
+          const {appointmentId, sourceType} = resolveBookingRoutingMeta(booking);
+          await queuePendingBookingAction({
+            bookingId,
+            action,
+            appointmentId,
+            sourceType,
+          });
+          await applyBookingStatusLocally(bookingId, action);
+          onLocalBookingUpdate({
+            status: getStatusFromAction(action),
+            bookingStatusCode: getStatusCodeFromAction(action),
+          });
+          showPlatformMessage(
+            'Saved Offline',
+            'No internet connection. The booking action has been saved and will sync automatically.',
+          );
+          return true;
+        }
+
+        Alert.alert(
+          'Status Update Failed',
+          error?.message || 'Unable to update booking status.',
+        );
+        return false;
+      } finally {
+        setBookingActionLoading('');
+      }
+    },
+    [accessToken, applyBookingStatusLocally, assignedAppointments],
+  );
+
+  const submitAssignedBookingPatient = useCallback(
+    async ({booking, patient}) => {
+      const bookingId = booking?.id;
+
+      if (!bookingId) {
+        Alert.alert(
+          'Missing Booking',
+          'The selected appointment does not include a booking ID.',
+        );
+        return null;
+      }
+
+      if (!accessToken) {
+        Alert.alert(
+          'Missing Session',
+          'A valid login token is required before adding a patient.',
+        );
+        return null;
+      }
+
+      try {
+        setIsAddingPatient(true);
+        await addAssignedBookingPatientApi({
+          accessToken,
+          bookingId,
+          patient,
+        });
+
+        const updatedBookingDetail = await fetchAssignedBookingDetailApi({
+          accessToken,
+          booking,
+        });
+        await persistUpdatedBookingDetail({bookingId, updatedBookingDetail});
+
+        showPlatformMessage('Success', 'Patient added successfully.');
+        return updatedBookingDetail;
+      } catch (error) {
+        if (isLikelyOfflineError(error)) {
+          const localPatientId = `offline-patient-${Date.now()}`;
+          await queuePendingPatientAction({
+            bookingId,
+            type: 'add',
+            localPatientId,
+            patient,
+          });
+
+          const localBookingDetail = await applyPatientMutationLocally({
+            booking,
+            updater: previousPatients => [
+              ...previousPatients,
+              buildLocalPatientFromPayload({
+                patient,
+                patientId: localPatientId,
+                isOfflinePending: true,
+              }),
+            ],
+          });
+
+          showPlatformMessage(
+            'Saved Offline',
+            'Patient details have been saved and will sync automatically.',
+          );
+          return localBookingDetail;
+        }
+
+        Alert.alert(
+          'Unable to Add Patient',
+          error?.message || 'Unable to add the patient right now.',
+        );
+        return null;
+      } finally {
+        setIsAddingPatient(false);
+      }
+    },
+    [accessToken, applyPatientMutationLocally, persistUpdatedBookingDetail],
+  );
+
+  const updateAssignedBookingPatient = useCallback(
+    async ({booking, patientId, patient}) => {
+      const bookingId = booking?.id;
+
+      if (!bookingId || !patientId) {
+        Alert.alert(
+          'Missing Patient',
+          'The selected patient does not include a valid patient ID.',
+        );
+        return null;
+      }
+
+      if (!accessToken) {
+        Alert.alert(
+          'Missing Session',
+          'A valid login token is required before updating a patient.',
+        );
+        return null;
+      }
+
+      try {
+        setIsUpdatingPatient(true);
+        await updateAssignedBookingPatientApi({
+          accessToken,
+          bookingId,
+          patientId,
+          patient,
+        });
+
+        const updatedBookingDetail = await fetchAssignedBookingDetailApi({
+          accessToken,
+          booking,
+        });
+        await persistUpdatedBookingDetail({bookingId, updatedBookingDetail});
+
+        showPlatformMessage('Success', 'Patient updated successfully.');
+        return updatedBookingDetail;
+      } catch (error) {
+        if (isLikelyOfflineError(error)) {
+          await queuePendingPatientAction({
+            bookingId,
+            type: 'update',
+            patientId,
+            localPatientId: patientId,
+            patient,
+          });
+
+          const localBookingDetail = await applyPatientMutationLocally({
+            booking,
+            updater: previousPatients =>
+              previousPatients.map(previousPatient =>
+                String(previousPatient.id) === String(patientId)
+                  ? buildLocalPatientFromPayload({
+                      patient,
+                      existingPatient: previousPatient,
+                      patientId,
+                      isOfflinePending: true,
+                    })
+                  : previousPatient,
+              ),
+          });
+
+          showPlatformMessage(
+            'Saved Offline',
+            'Patient updates have been saved and will sync automatically.',
+          );
+          return localBookingDetail;
+        }
+
+        Alert.alert(
+          'Unable to Update Patient',
+          error?.message || 'Unable to update the patient right now.',
+        );
+        return null;
+      } finally {
+        setIsUpdatingPatient(false);
+      }
+    },
+    [accessToken, applyPatientMutationLocally, persistUpdatedBookingDetail],
+  );
+
+  const cancelAssignedBookingPatient = useCallback(
+    async ({booking, patient}) => {
+      const bookingId = booking?.id;
+      const bookingPatientId = getPatientMutationId(patient);
+
+      if (!bookingId || !bookingPatientId) {
+        Alert.alert(
+          'Missing Patient',
+          'The selected patient does not include a valid booking patient ID.',
+        );
+        return null;
+      }
+
+      if (!accessToken) {
+        Alert.alert(
+          'Missing Session',
+          'A valid login token is required before cancelling a patient.',
+        );
+        return null;
+      }
+
+      try {
+        setCancellingPatientId(String(bookingPatientId));
+        await cancelAssignedBookingPatientApi({
+          accessToken,
+          bookingId,
+          bookingPatientId,
+        });
+
+        const updatedBookingDetail = await fetchAssignedBookingDetailApi({
+          accessToken,
+          booking,
+        });
+        await persistUpdatedBookingDetail({bookingId, updatedBookingDetail});
+
+        showPlatformMessage('Success', 'Patient cancelled successfully.');
+        return updatedBookingDetail;
+      } catch (error) {
+        if (isLikelyOfflineError(error)) {
+          const queuedAction = await queuePendingPatientAction({
+            bookingId,
+            type: 'cancel',
+            patientId: bookingPatientId,
+            localPatientId: bookingPatientId,
+          });
+          const shouldRemoveLocalPatient =
+            queuedAction?.type === 'cancel-local-add';
+
+          const localBookingDetail = await applyPatientMutationLocally({
+            booking,
+            updater: previousPatients =>
+              shouldRemoveLocalPatient
+                ? previousPatients.filter(
+                    previousPatient =>
+                      String(previousPatient.id) !== String(bookingPatientId),
+                  )
+                : previousPatients.map(previousPatient =>
+                    String(previousPatient.id) === String(bookingPatientId)
+                      ? {
+                          ...previousPatient,
+                          bookingPatientStatusCode: 4,
+                          isOfflinePending: true,
+                        }
+                      : previousPatient,
+                  ),
+          });
+
+          showPlatformMessage(
+            'Saved Offline',
+            'Patient cancellation has been saved and will sync automatically.',
+          );
+          return localBookingDetail;
+        }
+
+        Alert.alert(
+          'Unable to Cancel Patient',
+          error?.message || 'Unable to cancel the patient right now.',
+        );
+        return null;
+      } finally {
+        setCancellingPatientId('');
+      }
+    },
+    [accessToken, applyPatientMutationLocally, persistUpdatedBookingDetail],
+  );
+
+  const addTestForPatient = useCallback(
+    async ({booking, patient}) => {
+      const bookingId = booking?.id;
+      const bookingPatientId = getPatientMutationId(patient);
+
+      if (!bookingId || !bookingPatientId) {
+        Alert.alert(
+          'Missing Patient',
+          'The selected patient does not include a valid booking patient ID.',
+        );
+        return null;
+      }
+
+      if (!accessToken) {
+        Alert.alert(
+          'Missing Session',
+          'A valid login token is required before adding a test.',
+        );
+        return null;
+      }
+
+      try {
+        setAddingTestPatientId(String(bookingPatientId));
+        const responseData =
+          panelTestCatalogCache || (await preloadPanelTestCatalog());
+        return responseData;
+      } catch (error) {
+        Alert.alert(
+          'Unable to Add Test',
+          error?.message || 'Unable to fetch test catalog right now.',
+        );
+        return null;
+      } finally {
+        setAddingTestPatientId('');
+      }
+    },
+    [accessToken, panelTestCatalogCache, preloadPanelTestCatalog],
+  );
+
+  const fetchPanelCatalogForCompany = useCallback(
+    async ({booking, patient, compCatId}) => {
+      const bookingId = booking?.id;
+      const bookingPatientId = getPatientMutationId(patient);
+      const normalizedCompCatId = toDisplayValue(compCatId);
+
+      if (!bookingId || !bookingPatientId) {
+        Alert.alert(
+          'Missing Patient',
+          'The selected patient does not include a valid booking patient ID.',
+        );
+        return null;
+      }
+
+      if (!normalizedCompCatId) {
+        Alert.alert(
+          'Missing Company',
+          'The selected panel company does not include a valid CompCatID.',
+        );
+        return null;
+      }
+
+      if (!accessToken) {
+        Alert.alert(
+          'Missing Session',
+          'A valid login token is required before loading panel catalog.',
+        );
+        return null;
+      }
+
+      try {
+        setAddingTestPatientId(String(bookingPatientId));
+        const responseData = await fetchPanelCatalogByCompanyApi({
+          accessToken,
+          compCatId: normalizedCompCatId,
+        });
+        return responseData;
+      } catch (error) {
+        Alert.alert(
+          'Unable to Load Catalog',
+          error?.message || 'Unable to fetch panel catalog right now.',
+        );
+        return null;
+      } finally {
+        setAddingTestPatientId('');
+      }
+    },
+    [accessToken],
+  );
+
+  const clearAssignedState = useCallback(async () => {
+    setAssignedAppointments([]);
+    setAssignedAppointmentsError('');
+    setCompletedAppointments([]);
+    setCompletedAppointmentsError('');
+    setLoadingAssignedBookingId('');
+    setBookingActionLoading('');
+    setIsAddingPatient(false);
+    setIsUpdatingPatient(false);
+    setCancellingPatientId('');
+    setAddingTestPatientId('');
+    setIsPreloadingPanelTests(false);
+    setPanelTestCatalogCache(null);
+
+    try {
+      await clearOfflineBookingViewCache();
+    } catch (error) {
+      warnDebug('Offline booking storage clear error:', error);
+    }
+  }, []);
+
+  return {
+    assignedAppointments,
+    isLoadingAssignedAppointments,
+    assignedAppointmentsError,
+    completedAppointments,
+    isLoadingCompletedAppointments,
+    completedAppointmentsError,
+    loadingAssignedBookingId,
+    bookingActionLoading,
+    isAddingPatient,
+    isUpdatingPatient,
+    cancellingPatientId,
+    addingTestPatientId,
+    isPreloadingPanelTests,
+    setAssignedAppointments,
+    setAssignedAppointmentsError,
+    setCompletedAppointmentsError,
+    fetchAssignedAppointments,
+    fetchCompletedAppointments,
+    openAssignedBooking,
+    submitBookingAction,
+    submitAssignedBookingPatient,
+    updateAssignedBookingPatient,
+    cancelAssignedBookingPatient,
+    addTestForPatient,
+    fetchPanelCatalogForCompany,
+    preloadPanelTestCatalog,
+    clearAssignedState,
+  };
+};

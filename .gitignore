@@ -1,0 +1,111 @@
+# OSX
+#
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Xcode
+#
+build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata
+*.xccheckout
+*.moved-aside
+DerivedData
+*.hmap
+*.ipa
+*.xcuserstate
+**/.xcode.env.local
+
+# Android/IntelliJ
+#
+build/
+.idea
+.gradle
+.gradle-user
+local.properties
+*.iml
+*.hprof
+.cxx/
+*.keystore
+!debug.keystore
+*.jks
+keystore.properties
+.kotlin/
+android/app/build/
+android/build/
+android/.cxx/
+
+# node.js
+#
+node_modules/
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# fastlane
+#
+# It is recommended to not store the screenshots in the git repo. Instead, use fastlane to re-generate the
+# screenshots whenever they are needed.
+# For more information about the recommended setup visit:
+# https://docs.fastlane.tools/best-practices/source-control/
+
+**/fastlane/report.xml
+**/fastlane/Preview.html
+**/fastlane/screenshots
+**/fastlane/test_output
+
+# Bundle artifact
+*.jsbundle
+*.apk
+*.aab
+*.apks
+
+# Ruby / CocoaPods
+**/Pods/
+/vendor/bundle/
+
+# Temporary files created by Metro to check the health of the file watcher
+.metro-health-check*
+.expo/
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+emulator-stdout.log
+emulator-stderr.log
+
+# Local Android emulator / build scratch space
+.android-avd-home/
+.android-emulator-home/
+.android-user-home/
+android-home-temp/
+gradle-home-temp/
+.gradle-home/
+
+# Local certificate material
+certs/**/*.pfx
+certs/**/privkey*.pem
+certs/**/private*.pem
+
+# testing
+/coverage
+
+# Yarn
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
