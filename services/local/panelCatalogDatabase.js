@@ -29,14 +29,45 @@ export const getDatabasePanelCompaniesResponse = async () => {
   return parseNativeJson(await CatalogDatabaseModule.getPanelCompanies());
 };
 
-export const getDatabasePanelCatalogByCompanyResponse = async compCatId => {
+export const getDatabaseMatchedPanelCompaniesForPatientResponse = async patient => {
   if (!isCatalogDatabaseAvailable()) {
     return null;
   }
 
   return parseNativeJson(
+    await CatalogDatabaseModule.getMatchedPanelCompaniesForPatient(
+      JSON.stringify(patient || {}),
+    ),
+  );
+};
+
+export const getDatabasePanelCatalogByCompanyResponse = async panelCompany => {
+  if (!isCatalogDatabaseAvailable()) {
+    return null;
+  }
+
+  if (
+    panelCompany &&
+    typeof panelCompany === 'object' &&
+    CatalogDatabaseModule.getPanelCatalogByCompanyIdentity
+  ) {
+    return parseNativeJson(
+      await CatalogDatabaseModule.getPanelCatalogByCompanyIdentity(
+        JSON.stringify(panelCompany),
+      ),
+    );
+  }
+
+  const fallbackCompCatId =
+    panelCompany && typeof panelCompany === 'object'
+      ? panelCompany.compCatId || panelCompany.CompCatID || ''
+      : panelCompany;
+
+  return parseNativeJson(
     await CatalogDatabaseModule.getPanelCatalogByCompany(
-      compCatId === null || compCatId === undefined ? '' : String(compCatId),
+      fallbackCompCatId === null || fallbackCompCatId === undefined
+        ? ''
+        : String(fallbackCompCatId),
     ),
   );
 };

@@ -25,6 +25,7 @@ export default function LoginScreen({
   password,
   loginError,
   isLoggingIn,
+  loginLoadingMessage,
   locationStatus,
   onUsernameChange,
   onPasswordChange,
@@ -132,7 +133,7 @@ export default function LoginScreen({
           styles={styles}
           visible={isLoggingIn}
           title="Signing In"
-          message="Verifying your credentials securely..."
+          message={loginLoadingMessage || 'Verifying your credentials securely...'}
         />
       </SafeAreaView>
     </>

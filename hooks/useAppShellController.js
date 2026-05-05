@@ -1,7 +1,10 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {useWindowDimensions} from 'react-native';
 import {bottomTabs} from '../constants/navigation/tabs';
-import {getPatientMutationId} from '../screens/bookings/appointmentDetails/helpers';
+import {
+  getPatientMutationId,
+} from '../screens/bookings/appointmentDetails/helpers';
+import {getLocalMatchedPanelCompaniesResponse} from '../services/local/panelCatalogLocal';
 import {getSpecimenNameForTestCode} from '../services/local/panelCatalogSpecimenLookup';
 import {
   getCachedAppointmentDetailState,
@@ -40,20 +43,114 @@ const parseCatalogKey = catalogKey => {
   return {compCatId, gcode, scode, bookedCode};
 };
 
-const buildSeededPatientTests = patient =>
+const buildSeededPatientTests = (patient, panelCompany = null) =>
   (Array.isArray(patient?.tests) ? patient.tests : []).map(test => ({
     key: `seed|${test?.code || 'na'}|${test?.name || 'na'}`,
-    panelCompanyName: patient?.panelCompany || 'Current Panel',
-    panelCompanyId: '',
+    panelCompanyName:
+      panelCompany?.name || test?.panelCompanyName || patient?.panelCompany || 'Current Panel',
+    panelCompanyId:
+      panelCompany?.compCatId ||
+      test?.compCatId ||
+      test?.comp_cat_id ||
+      patient?.compCatId ||
+      patient?.comp_cat_id ||
+      '',
+    centerId: panelCompany?.centerId || test?.centerId || test?.CenterID || '',
+    atype: panelCompany?.atype || test?.atype || test?.Atype || '',
+    panelCode:
+      panelCompany?.panelCode || test?.panelCode || patient?.panelCode || '',
+    panelAbarid:
+      panelCompany?.panelAbarid || test?.panelAbarid || patient?.panelAbarid || '',
     booked_code: test?.code || 'N/A',
+    catalog_key:
+      test?.catalog_key ||
+      [
+        panelCompany?.compCatId ||
+          test?.compCatId ||
+          test?.comp_cat_id ||
+          patient?.compCatId ||
+          patient?.comp_cat_id ||
+          '',
+        '',
+        '',
+        test?.code || '',
+      ].join('|'),
+    gcode: test?.gcode || '',
+    scode: test?.scode || '',
+    test_code: test?.test_code || '',
     description: test?.name || 'Unnamed Test',
     specimenName:
       test?.specimen_name ||
       test?.specimenName ||
       getSpecimenNameForTestCode(test?.code) ||
       'N/A',
+    mrp: Number(test?.mrp || test?.charge || test?.amount || 0) || 0,
     isChildTest: false,
   }));
+
+const withPanelContextForTests = (tests, patient, panelCompany = null) =>
+  (Array.isArray(tests) ? tests : []).map(test => {
+    const panelCompanyId =
+      panelCompany?.compCatId ||
+      test?.panelCompanyId ||
+      test?.compCatId ||
+      test?.comp_cat_id ||
+      patient?.compCatId ||
+      patient?.comp_cat_id ||
+      '';
+    const centerId =
+      panelCompany?.centerId || test?.centerId || test?.CenterID || '';
+    const atype = panelCompany?.atype || test?.atype || test?.Atype || '';
+    const panelCode =
+      panelCompany?.panelCode || test?.panelCode || patient?.panelCode || '';
+    const panelAbarid =
+      panelCompany?.panelAbarid || test?.panelAbarid || patient?.panelAbarid || '';
+
+    return {
+      ...test,
+      panelCompanyName:
+        test?.panelCompanyName ||
+        panelCompany?.name ||
+        patient?.panelCompany ||
+        'Current Panel',
+      panelCompanyId,
+      centerId,
+      atype,
+      panelCode,
+      panelAbarid,
+      catalog_key:
+        test?.catalog_key ||
+        [panelCompanyId, test?.gcode || '', test?.scode || '', test?.booked_code || test?.code || '']
+          .join('|'),
+      mrp: Number(test?.mrp || test?.charge || test?.amount || 0) || 0,
+    };
+  });
+
+const resolvePanelCompanyFromPatientName = async patient => {
+  try {
+    const response = await getLocalMatchedPanelCompaniesResponse(patient);
+    const matchedCompanies = Array.isArray(response?.items) ? response.items : [];
+    if (!matchedCompanies.length) {
+      return null;
+    }
+
+    const [bestMatch] = matchedCompanies;
+    return {
+      id: toStableValue(bestMatch?.id),
+      syncKey: toStableValue(bestMatch?.sync_key || bestMatch?.syncKey),
+      centerId: toStableValue(bestMatch?.CenterID),
+      atype: toStableValue(bestMatch?.Atype),
+      name: toStableValue(bestMatch?.pname) || 'Unnamed Company',
+      compCatId: toStableValue(bestMatch?.CompCatID),
+      details: toStableValue(bestMatch?.CatDetails),
+      billingChargeMode: toStableValue(bestMatch?.BillingChargeMode),
+      panelCode: toStableValue(bestMatch?.code || bestMatch?.Code),
+      panelAbarid: toStableValue(bestMatch?.ABARID || bestMatch?.abarid),
+    };
+  } catch (error) {
+    return null;
+  }
+};
 
 const buildSelectedChildTests = (children, parentContext = {}) =>
   (Array.isArray(children) ? children : []).map(child => ({
@@ -132,7 +229,7 @@ const getLoadingOverlayCopy = ({
     : cancellingPatientId
     ? 'Cancelling Patient'
     : addingTestPatientId
-    ? 'Loading Tests'
+    ? 'Loading Catalog'
     : loadingAssignedBookingId
     ? 'Opening Booking'
     : isLoadingCompletedAppointments
@@ -150,7 +247,7 @@ const getLoadingOverlayCopy = ({
     : cancellingPatientId
     ? 'Cancelling the selected patient...'
     : addingTestPatientId
-    ? 'Fetching panel test catalog...'
+    ? 'Fetching local panel catalog...'
     : loadingAssignedBookingId
     ? 'Fetching appointment details and patient tests...'
     : isLoadingCompletedAppointments
@@ -169,6 +266,8 @@ export const useAppShellController = () => {
   const [selectedBookingScreen, setSelectedBookingScreen] = useState('details');
   const [selectedSamplePatient, setSelectedSamplePatient] = useState(null);
   const [selectedSamplePanelCompany, setSelectedSamplePanelCompany] = useState(null);
+  const [localDatabaseLoadingMessage, setLocalDatabaseLoadingMessage] =
+    useState('');
   const [appointmentDetailState, setAppointmentDetailState] = useState(
     buildEmptyAppointmentDetailState,
   );
@@ -185,9 +284,10 @@ export const useAppShellController = () => {
     loggedInUser: session.loggedInUser,
   });
 
-  const isSmallPhone = width < 340;
+  const isTinyPhone = width < 340;
+  const isSmallPhone = width < 370;
   const isLargePhone = width >= 430;
-  const horizontalPadding = isSmallPhone ? 14 : isLargePhone ? 22 : 18;
+  const horizontalPadding = isTinyPhone ? 10 : isSmallPhone ? 14 : isLargePhone ? 22 : 18;
   const contentWidth = Math.min(width - horizontalPadding * 2, 460);
   const homeContentWidth = Math.min(width - horizontalPadding * 2, 520);
   const loginTopSpacing = height < 700 ? 28 : 40;
@@ -210,18 +310,24 @@ export const useAppShellController = () => {
     bookings.isAddingPatient ||
     bookings.isUpdatingPatient ||
     Boolean(bookings.cancellingPatientId) ||
-    Boolean(bookings.addingTestPatientId);
+    Boolean(bookings.addingTestPatientId) ||
+    Boolean(localDatabaseLoadingMessage);
 
-  const loadingOverlayCopy = getLoadingOverlayCopy({
-    appointmentsViewMode,
-    isLoadingCompletedAppointments: bookings.isLoadingCompletedAppointments,
-    loadingAssignedBookingId: bookings.loadingAssignedBookingId,
-    bookingActionLoading: bookings.bookingActionLoading,
-    isAddingPatient: bookings.isAddingPatient,
-    isUpdatingPatient: bookings.isUpdatingPatient,
-    cancellingPatientId: bookings.cancellingPatientId,
-    addingTestPatientId: bookings.addingTestPatientId,
-  });
+  const loadingOverlayCopy = localDatabaseLoadingMessage
+    ? {
+        title: 'Loading Local Data',
+        message: localDatabaseLoadingMessage,
+      }
+    : getLoadingOverlayCopy({
+        appointmentsViewMode,
+        isLoadingCompletedAppointments: bookings.isLoadingCompletedAppointments,
+        loadingAssignedBookingId: bookings.loadingAssignedBookingId,
+        bookingActionLoading: bookings.bookingActionLoading,
+        isAddingPatient: bookings.isAddingPatient,
+        isUpdatingPatient: bookings.isUpdatingPatient,
+        cancellingPatientId: bookings.cancellingPatientId,
+        addingTestPatientId: bookings.addingTestPatientId,
+      });
 
   useEffect(() => {
     const splashTimer = setTimeout(() => {
@@ -448,6 +554,13 @@ export const useAppShellController = () => {
         setSelectedBooking({
           ...finalBooking,
         });
+        setActiveTab('appointments');
+        setAppointmentsViewMode(
+          Number(finalBooking?.bookingStatusCode || 0) === 2 ||
+            finalBooking?.status === 'Started'
+            ? 'started'
+            : 'assigned',
+        );
         setSelectedBookingScreen('details');
         setSelectedSamplePatient(null);
         setSelectedSamplePanelCompany(null);
@@ -458,33 +571,54 @@ export const useAppShellController = () => {
   );
 
   const handleOpenSampleCollection = useCallback(
-    patient => {
+    async (patient, panelCompany = null) => {
       if (!selectedBooking || !patient) {
         return;
       }
 
+      let resolvedPanelCompany = panelCompany;
+      if (!resolvedPanelCompany) {
+        setLocalDatabaseLoadingMessage(
+          'Resolving patient panel company from local database...',
+        );
+        try {
+          resolvedPanelCompany = await resolvePanelCompanyFromPatientName(patient);
+        } finally {
+          setLocalDatabaseLoadingMessage('');
+        }
+      }
       const patientId = getPatientMutationId(patient);
       if (patientId) {
         setAppointmentDetailState(previousState => {
           const patientSelectedTestsMap =
             previousState?.patientSelectedTestsMap || {};
 
-          if (patientSelectedTestsMap[patientId]) {
-            return previousState;
+          if ((patientSelectedTestsMap[patientId] || []).length) {
+            return {
+              ...previousState,
+              patientSelectedTestsMap: {
+                ...patientSelectedTestsMap,
+                [patientId]: withPanelContextForTests(
+                  patientSelectedTestsMap[patientId],
+                  patient,
+                  resolvedPanelCompany,
+                ),
+              },
+            };
           }
 
           return {
             ...previousState,
             patientSelectedTestsMap: {
-              ...patientSelectedTestsMap,
-              [patientId]: buildSeededPatientTests(patient),
+                ...patientSelectedTestsMap,
+              [patientId]: buildSeededPatientTests(patient, resolvedPanelCompany),
             },
           };
         });
       }
 
       setSelectedSamplePatient(patient);
-      setSelectedSamplePanelCompany(null);
+      setSelectedSamplePanelCompany(resolvedPanelCompany || null);
       setSelectedBookingScreen('sample-collection');
     },
     [selectedBooking],
@@ -502,7 +636,7 @@ export const useAppShellController = () => {
           const patientSelectedTestsMap =
             previousState?.patientSelectedTestsMap || {};
 
-          if (patientSelectedTestsMap[patientId]) {
+          if ((patientSelectedTestsMap[patientId] || []).length) {
             return previousState;
           }
 
@@ -510,7 +644,7 @@ export const useAppShellController = () => {
             ...previousState,
             patientSelectedTestsMap: {
               ...patientSelectedTestsMap,
-              [patientId]: buildSeededPatientTests(patient),
+              [patientId]: buildSeededPatientTests(patient, panelCompany),
             },
           };
         });
@@ -561,6 +695,7 @@ export const useAppShellController = () => {
         test_code: childTest?.test_code || test?.test_code || '',
         description:
           childTest?.description || test?.description || 'Unnamed Test',
+        mrp: Number(childTest?.mrp || test?.mrp || childTest?.charge || test?.charge || 0) || 0,
         specimenName:
           childTest?.specimen_name ||
           test?.specimen_name ||
@@ -615,6 +750,9 @@ export const useAppShellController = () => {
             name: panelCompany?.name || '',
             compCatId: panelCompany?.compCatId || '',
             centerId: panelCompany?.centerId || '',
+            atype: panelCompany?.atype || '',
+            panelCode: panelCompany?.panelCode || '',
+            panelAbarid: panelCompany?.panelAbarid || '',
           },
           test: nextEntry,
           queuedOfflineCapable: true,
@@ -759,7 +897,7 @@ export const useAppShellController = () => {
   );
 
   const handlePanelCompanySelect = useCallback(
-    async ({patient, compCatId}) => {
+    async ({patient, compCatId, panelCompany}) => {
       if (!selectedBooking) {
         return null;
       }
@@ -768,6 +906,7 @@ export const useAppShellController = () => {
         booking: selectedBooking,
         patient,
         compCatId,
+        panelCompany,
       });
     },
     [bookings, selectedBooking],
@@ -860,6 +999,7 @@ export const useAppShellController = () => {
       performLogout,
       setShowLogoutModal,
       setAppointmentDetailState,
+      setLocalDatabaseLoadingMessage,
     },
   };
 };

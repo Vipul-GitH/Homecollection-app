@@ -45,13 +45,14 @@ const getPreviewStatusTone = status => {
   };
 };
 
-export default function DashboardScreen({
+function DashboardScreen({
   styles,
   isSmallPhone,
   appointments,
   onAssignedCardPress,
   onStartedCardPress,
   onCompletedCardPress,
+  onUpcomingBookingPress,
 }) {
   const upcomingBookings = appointments.slice(0, 2);
 
@@ -171,9 +172,11 @@ export default function DashboardScreen({
 
         {upcomingBookings.length ? (
           upcomingBookings.map((booking, index) => (
-            <View
+            <TouchableOpacity
               key={`upcoming-${booking.id || 'na'}-${booking.bookingCode || 'na'}-${index}`}
-              style={styles.dashboardPreviewCard}>
+              activeOpacity={0.85}
+              style={styles.dashboardPreviewCard}
+              onPress={() => onUpcomingBookingPress?.(booking)}>
               <View style={styles.dashboardPreviewRow}>
                 <Text style={styles.dashboardPreviewTitle} numberOfLines={1}>
                   {booking.bookingCode}
@@ -189,7 +192,7 @@ export default function DashboardScreen({
               <Text style={styles.dashboardPreviewMeta} numberOfLines={1}>
                 {booking.address?.fullAddress || 'Address not available'}
               </Text>
-            </View>
+            </TouchableOpacity>
           ))
         ) : (
           <View style={styles.dashboardPreviewCard}>
@@ -203,3 +206,5 @@ export default function DashboardScreen({
     </>
   );
 }
+
+export default React.memo(DashboardScreen);

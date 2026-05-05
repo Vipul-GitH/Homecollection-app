@@ -6,6 +6,7 @@ import {
   Modal,
   NativeModules,
   Platform,
+  ScrollView,
   Text,
   TouchableOpacity,
   UIManager,
@@ -15,6 +16,10 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import {collectUniqueTubesForSelectedTests} from '../../utils/bookings/sampleTubeMapping';
+import PatientDocumentsList from './patient/PatientDocumentsList';
+import PanelCompanyChips from './patient/PanelCompanyChips';
+import ReportCourierSelector from './patient/ReportCourierSelector';
+import PatientTestsAccordion from './patient/PatientTestsAccordion';
 
 const {LocalDocumentPickerModule} = NativeModules;
 const DUMMY_DOCUMENT_SOURCE = require('../../assests/splash-screen.png');
@@ -150,8 +155,14 @@ function PatientDetailCard({
   isCancelBookingDisabled,
   cancelBookingLabel = 'Cancel Patient',
 }) {
-  const {width} = useWindowDimensions();
+  const {width, height} = useWindowDimensions();
   const isNarrowCard = width < 370;
+  const documentViewerWidth = Math.min(width - 40, 640);
+  const documentViewerHeight = clamp(
+    Math.round(height * (isNarrowCard ? 0.34 : 0.4)),
+    isNarrowCard ? 260 : 320,
+    420,
+  );
   const [isTestsExpanded, setIsTestsExpanded] = useState(false);
   const [activeDocumentIndex, setActiveDocumentIndex] = useState(-1);
   const [documentZoom, setDocumentZoom] = useState(DOCUMENT_ZOOM_MIN);
@@ -189,11 +200,17 @@ function PatientDetailCard({
   const paymentBillingMode = getBillingChargeMode(activePanelCompany || patient);
   const paymentDisplayLabel = getPaymentLabelFromBillingMode(paymentBillingMode);
   const shouldShowPaymentProofUpload = paymentBillingMode.includes('C');
+  const rawReportCourierValue = toStableValue(
+    reportCourierValueProp !== undefined
+      ? reportCourierValueProp
+      : patient.reportCourier,
+  ).toLowerCase();
   const reportCourierValue =
-    toStableValue(reportCourierValueProp || patient.reportCourier).toLowerCase() ===
-    'yes'
+    rawReportCourierValue === 'yes'
       ? 'Yes'
-      : 'No';
+      : rawReportCourierValue === 'no'
+      ? 'No'
+      : '';
   const canOpenPanelCompanyTests = typeof onSelectPanelCompany === 'function';
   const panelCompanyHintText = canOpenPanelCompanyTests
     ? 'Tap panel to add tests'
@@ -244,8 +261,14 @@ function PatientDetailCard({
     : DUMMY_PATIENT_DOCUMENTS);
   const activeDocument =
     activeDocumentIndex >= 0 ? normalizedDocuments[activeDocumentIndex] : null;
-  const documentViewerWidth = Math.min(width - 76, 520);
-  const documentViewerHeight = 300;
+  const documentViewerTests = useMemo(
+    () =>
+      displayTests.map(test => ({
+        id: test.id,
+        label: `${test.name}`,
+      })),
+    [displayTests],
+  );
   const clampDocumentOffset = useCallback((zoom, offset) => {
     if (zoom <= DOCUMENT_ZOOM_MIN) {
       return {x: 0, y: 0};
@@ -564,102 +587,23 @@ function PatientDetailCard({
             </View>
           </View>
         </View>
-        {panelCompanies.length ? (
-          <View style={styles.patientCompanySection}>
-            <View style={styles.patientCompanyHeaderRow}>
-              <Text style={styles.patientCompanySectionLabel}>Panel Companies</Text>
-              <Text style={styles.patientCompanySectionHint}>
-                {panelCompanyHintText}
-              </Text>
-            </View>
-            <View style={styles.patientCompanyChipRow}>
-              {panelCompanies.map(company => {
-                const isActive =
-                  String(activePanelCompanyId) ===
-                  String(company.chipId || company.id);
-                const isAppChip = company.chipSource === 'APP';
-
-                return (
-                  <View
-                    key={company.chipId || company.id}
-                    style={styles.patientCompanyChipWrap}>
-                    <TouchableOpacity
-                      activeOpacity={canOpenPanelCompanyTests ? 0.75 : 1}
-                      style={[
-                        styles.patientCompanyChip,
-                        isActive && styles.patientCompanyChipActive,
-                        !canOpenPanelCompanyTests &&
-                          styles.patientCompanyChipDisabled,
-                      ]}
-                      disabled={!canOpenPanelCompanyTests}
-                      hitSlop={{top: 6, bottom: 6, left: 6, right: 6}}
-                      onPress={() =>
-                        onSelectPanelCompany({patient, panelCompany: company})
-                      }>
-                      <Ionicons
-                        name="add-circle-outline"
-                        size={15}
-                        style={[
-                          styles.patientCompanyChipIcon,
-                          isActive && styles.patientCompanyChipIconActive,
-                          !canOpenPanelCompanyTests &&
-                            styles.patientCompanyChipIconDisabled,
-                        ]}
-                      />
-                      <View style={styles.patientCompanyChipTextWrap}>
-                        <Text
-                          style={[
-                            styles.patientCompanyChipText,
-                            isActive && styles.patientCompanyChipTextActive,
-                            !canOpenPanelCompanyTests &&
-                              styles.patientCompanyChipTextDisabled,
-                          ]}
-                          numberOfLines={1}>
-                          {company.name} ({company.compCatId || 'N/A'})
-                        </Text>
-                        <Text
-                          style={[
-                            styles.patientCompanyChipHintText,
-                            isActive && styles.patientCompanyChipHintTextActive,
-                            !canOpenPanelCompanyTests &&
-                              styles.patientCompanyChipHintTextDisabled,
-                          ]}
-                          numberOfLines={1}>
-                          {canOpenPanelCompanyTests ? 'Add tests' : 'Start first'}
-                        </Text>
-                      </View>
-                      <Ionicons
-                        name="chevron-forward"
-                        size={13}
-                        style={[
-                          styles.patientCompanyChipChevron,
-                          isActive && styles.patientCompanyChipChevronActive,
-                          !canOpenPanelCompanyTests &&
-                            styles.patientCompanyChipChevronDisabled,
-                        ]}
-                      />
-                    </TouchableOpacity>
-                    {isAppChip && onRemovePanelCompany ? (
-                      <TouchableOpacity
-                        activeOpacity={0.85}
-                        style={styles.patientPanelRemoveButton}
-                        onPress={() => onRemovePanelCompany(patient, company)}>
-                        <Ionicons
-                          name="close"
-                          size={13}
-                          style={styles.patientPanelRemoveButtonIcon}
-                        />
-                      </TouchableOpacity>
-                    ) : null}
-                  </View>
-                );
-              })}
-            </View>
-          </View>
-        ) : null}
+        <PanelCompanyChips
+          styles={styles}
+          patient={patient}
+          panelCompanies={panelCompanies}
+          activePanelCompanyId={activePanelCompanyId}
+          canOpenPanelCompanyTests={canOpenPanelCompanyTests}
+          hintText={panelCompanyHintText}
+          onSelectPanelCompany={onSelectPanelCompany}
+          onRemovePanelCompany={onRemovePanelCompany}
+        />
 
       <View style={styles.patientDetailMetaStrip}>
-        <View style={styles.patientDetailMetaItem}>
+        <View
+          style={[
+            styles.patientDetailMetaItem,
+            isNarrowCard && styles.patientDetailMetaItemStacked,
+          ]}>
           <Text style={styles.patientDetailMetaLabel}>Gender</Text>
           <Text style={styles.patientDetailMetaValue} numberOfLines={1}>
             {patient.gender}
@@ -667,7 +611,10 @@ function PatientDetailCard({
         </View>
         <TouchableOpacity
           activeOpacity={0.75}
-          style={styles.patientDetailMetaItem}
+          style={[
+            styles.patientDetailMetaItem,
+            isNarrowCard && styles.patientDetailMetaItemStacked,
+          ]}
           disabled={!getDialablePhoneNumber(patient.mobileNumber)}
           onPress={() => handleCallPatientNumber(patient.mobileNumber)}>
           <Text style={styles.patientDetailMetaLabel}>Mobile</Text>
@@ -683,7 +630,10 @@ function PatientDetailCard({
         </TouchableOpacity>
         <TouchableOpacity
           activeOpacity={0.75}
-          style={styles.patientDetailMetaItem}
+          style={[
+            styles.patientDetailMetaItem,
+            isNarrowCard && styles.patientDetailMetaItemStacked,
+          ]}
           disabled={!getDialablePhoneNumber(patient.alternateMobileNumber)}
           onPress={() => handleCallPatientNumber(patient.alternateMobileNumber)}>
           <Text style={styles.patientDetailMetaLabel}>Alternate</Text>
@@ -699,57 +649,34 @@ function PatientDetailCard({
         </TouchableOpacity>
       </View>
       <View style={styles.patientDetailMetaStrip}>
-        <View style={styles.patientDetailMetaItem}>
+        <View
+          style={[
+            styles.patientDetailMetaItem,
+            isNarrowCard && styles.patientDetailMetaItemStacked,
+          ]}>
           <Text style={styles.patientDetailMetaLabel}>Referred By</Text>
           <Text style={styles.patientDetailMetaValue} numberOfLines={1}>
             {patient.referredBy || 'N/A'}
           </Text>
         </View>
-        <View style={styles.patientDetailMetaItem}>
+        <View
+          style={[
+            styles.patientDetailMetaItem,
+            isNarrowCard && styles.patientDetailMetaItemStacked,
+          ]}>
           <Text style={styles.patientDetailMetaLabel}>Internal Referenced By</Text>
           <Text style={styles.patientDetailMetaValue} numberOfLines={1}>
             {patient.internalReferencedBy || 'N/A'}
           </Text>
         </View>
       </View>
-      <View
-        style={[
-          styles.patientDetailInfoRow,
-          isNarrowCard && styles.patientDetailInfoRowStacked,
-        ]}>
-        <Text style={styles.patientDetailLabel}>Report Courier</Text>
-        <View
-          style={[
-            styles.patientReportCourierControl,
-            isNarrowCard && styles.patientReportCourierControlStacked,
-          ]}>
-          {['Yes', 'No'].map(value => {
-            const isSelected = reportCourierValue === value;
-
-            return (
-              <TouchableOpacity
-                key={value}
-                activeOpacity={0.85}
-                style={[
-                  styles.patientReportCourierButton,
-                  isSelected && styles.patientReportCourierButtonActive,
-                ]}
-                disabled={
-                  typeof onReportCourierChange !== 'function'
-                }
-                onPress={() => onReportCourierChange?.(patient, value)}>
-                <Text
-                  style={[
-                    styles.patientReportCourierButtonText,
-                    isSelected && styles.patientReportCourierButtonTextActive,
-                  ]}>
-                  {value}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </View>
+      <ReportCourierSelector
+        styles={styles}
+        patient={patient}
+        value={reportCourierValue}
+        isNarrow={isNarrowCard}
+        onChange={onReportCourierChange}
+      />
       <View
         style={[
           styles.patientDetailInfoRow,
@@ -837,90 +764,15 @@ function PatientDetailCard({
           ) : null}
         </View>
       ) : null}
-      <View
-        style={[
-          styles.patientDetailInfoRow,
-          isNarrowCard && styles.patientDetailInfoRowStacked,
-        ]}>
-        <Text style={styles.patientDetailLabel}>Tests</Text>
-        <View
-          style={[
-            styles.patientTestsWrap,
-            isNarrowCard && styles.patientTestsWrapStacked,
-          ]}>
-          {displayTests.length ? (
-            <>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.testsAccordionButton}
-                onPress={handleTestsAccordionToggle}>
-                <Text style={styles.testsAccordionButtonText}>
-                  {isTestsExpanded
-                    ? 'Hide Tests'
-                    : `View Tests (${displayTests.length})`}
-                </Text>
-                <Ionicons
-                  name={isTestsExpanded ? 'chevron-up' : 'chevron-down'}
-                  size={16}
-                  style={styles.testsAccordionIcon}
-                />
-              </TouchableOpacity>
-
-              {isTestsExpanded
-                ? displayTests.map(test => (
-                    <View
-                      key={test.id}
-                      style={styles.patientTestChip}>
-                      <View style={styles.sampleCollectionSelectedTextWrap}>
-                        <Text style={styles.patientTestLine}>
-                          <Text style={styles.patientTestCode}>{test.code}</Text>
-                          <Text style={styles.patientTestSeparator}>: </Text>
-                          <Text style={styles.patientTestName}>{test.name}</Text>
-                        </Text>
-                        {test.parentDescription ? (
-                          <Text style={styles.sampleCollectionSelectedMeta}>
-                            Child of {test.parentDescription}
-                          </Text>
-                        ) : null}
-                        {test.panelCompanyName ? (
-                          <Text style={styles.sampleCollectionSelectedMeta}>
-                            Panel: {test.panelCompanyName}
-                            {test.panelCompanyId ? ` (${test.panelCompanyId})` : ''}
-                          </Text>
-                        ) : null}
-                      </View>
-                      {test.isAppAdded && onRemoveSelectedTest ? (
-                        <TouchableOpacity
-                          activeOpacity={0.85}
-                          style={styles.sampleCollectionRemoveButton}
-                          onPress={() =>
-                            onRemoveSelectedTest({
-                              patient,
-                              testKey: test.removeKey,
-                            })
-                          }>
-                          <Ionicons
-                            name="trash-outline"
-                            size={15}
-                            style={styles.sampleCollectionRemoveButtonIcon}
-                          />
-                        </TouchableOpacity>
-                      ) : null}
-                    </View>
-                  ))
-                : null}
-            </>
-          ) : (
-            <Text
-              style={[
-                styles.patientDetailValueWide,
-                isNarrowCard && styles.patientDetailValueWideStacked,
-              ]}>
-              No tests available
-            </Text>
-          )}
-        </View>
-      </View>
+      <PatientTestsAccordion
+        styles={styles}
+        patient={patient}
+        tests={displayTests}
+        isExpanded={isTestsExpanded}
+        isNarrow={isNarrowCard}
+        onToggle={handleTestsAccordionToggle}
+        onRemoveSelectedTest={onRemoveSelectedTest}
+      />
       <View
         style={[
           styles.patientDetailInfoRow,
@@ -935,27 +787,12 @@ function PatientDetailCard({
           {displayTubes.length ? displayTubes.join(', ') : '-'}
         </Text>
       </View>
-      <View
-        style={[
-          styles.patientDetailInfoRow,
-          isNarrowCard && styles.patientDetailInfoRowStacked,
-        ]}>
-        <Text style={styles.patientDetailLabel}>Documents</Text>
-        <View
-          style={[
-            styles.patientDetailDocumentsWrap,
-            isNarrowCard && styles.patientDetailDocumentsWrapStacked,
-          ]}>
-          {normalizedDocuments.map((document, index) => (
-            <TouchableOpacity
-              key={document.id}
-              activeOpacity={0.85}
-              onPress={() => handleOpenDocument(index)}>
-              <Text style={styles.patientDocumentLink}>{document.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-        </View>
+      <PatientDocumentsList
+        styles={styles}
+        documents={normalizedDocuments}
+        isNarrow={isNarrowCard}
+        onOpenDocument={handleOpenDocument}
+      />
         {onCancelBooking ? (
           <TouchableOpacity
             activeOpacity={0.85}
@@ -989,7 +826,7 @@ function PatientDetailCard({
                   styles.patientActionButtonHalf,
                   isNarrowCard && styles.patientActionButtonFull,
                 ]}
-                onPress={() => onOpenSampleCollection(patient)}>
+                onPress={() => onOpenSampleCollection(patient, activePanelCompany)}>
                 <Ionicons
                   name="flask-outline"
                   size={16}
@@ -1038,12 +875,6 @@ function PatientDetailCard({
           />
           <View style={styles.patientDocumentViewerCard}>
             <View style={styles.patientDocumentViewerHeader}>
-              <View>
-                <Text style={styles.patientDocumentViewerEyebrow}>Document Preview</Text>
-                <Text style={styles.patientDocumentViewerTitle}>
-                  {activeDocument?.label || 'Photo'}
-                </Text>
-              </View>
               <TouchableOpacity
                 activeOpacity={0.85}
                 style={styles.patientDocumentViewerCloseButton}
@@ -1056,11 +887,39 @@ function PatientDetailCard({
               </TouchableOpacity>
             </View>
 
-            <View style={styles.patientDocumentViewerImageWrap}>
+            {documentViewerTests.length ? (
+              <View style={styles.patientDocumentViewerTestsSection}>
+                <ScrollView
+                  nestedScrollEnabled
+                  style={styles.patientDocumentViewerTestsScroll}
+                  contentContainerStyle={styles.patientDocumentViewerTestsWrap}>
+                  {documentViewerTests.map(test => (
+                    <View
+                      key={test.id}
+                      style={styles.patientDocumentViewerTestChip}>
+                      <Text
+                        style={styles.patientDocumentViewerTestChipText}
+                        numberOfLines={1}>
+                        {test.label}
+                      </Text>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null}
+
+            <View
+              style={[
+                styles.patientDocumentViewerImageWrap,
+                {minHeight: documentViewerHeight},
+              ]}>
               {activeDocument ? (
                 <View
                   collapsable={false}
-                  style={styles.patientDocumentViewerGestureViewport}
+                  style={[
+                    styles.patientDocumentViewerGestureViewport,
+                    {height: documentViewerHeight},
+                  ]}
                   onStartShouldSetResponder={() => true}
                   onMoveShouldSetResponder={() => true}
                   onResponderGrant={handleDocumentTouchStart}
@@ -1072,6 +931,7 @@ function PatientDetailCard({
                     source={activeDocument.imageSource}
                     style={[
                       styles.patientDocumentViewerImage,
+                      {height: documentViewerHeight},
                       {
                         transform: [
                           {translateX: documentOffset.x},

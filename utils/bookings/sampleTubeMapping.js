@@ -11,6 +11,41 @@ const getTestCode = test =>
 const getSpecimenName = test =>
   toStableValue(test?.specimen_name || test?.specimenName);
 
+const tubeDisplayPriority = new Map(
+  ['EDTA', 'None', 'Flu-F', 'Flu-PP', 'Plain'].map((tube, index) => [
+    tube.toLowerCase(),
+    index,
+  ]),
+);
+
+const orderTubesForDisplay = tubes =>
+  tubes
+    .map((tube, index) => ({tube, index}))
+    .sort((leftItem, rightItem) => {
+      const leftPriority = tubeDisplayPriority.get(leftItem.tube.toLowerCase());
+      const rightPriority = tubeDisplayPriority.get(rightItem.tube.toLowerCase());
+
+      if (leftPriority !== undefined || rightPriority !== undefined) {
+        return (
+          (leftPriority ?? Number.MAX_SAFE_INTEGER) -
+            (rightPriority ?? Number.MAX_SAFE_INTEGER) ||
+          leftItem.index - rightItem.index
+        );
+      }
+
+      return leftItem.index - rightItem.index;
+    })
+    .map(item => item.tube);
+
+const isProfileTest = test =>
+  Boolean(
+    test?.is_profile ||
+      test?.isProfile ||
+      test?.has_children ||
+      test?.hasChildren ||
+      Number(test?.profile || test?.Profile || 0) === 1,
+  );
+
 const getChildTests = test =>
   Array.isArray(test?.childTests)
     ? test.childTests
@@ -51,6 +86,7 @@ export const buildSampleTubeMapsFromTests = selectedTests => {
         description: toStableValue(test?.description || test?.name),
         testcode1: code,
         test_code: toStableValue(test?.test_code),
+        is_profile: isProfileTest(test),
       };
     }
 
@@ -63,6 +99,10 @@ export const buildSampleTubeMapsFromTests = selectedTests => {
       walk(child);
     });
     childrenMap[code] = childCodes;
+    if (childCodes.length) {
+      testsMap[code].has_children = true;
+      testsMap[code].is_profile = true;
+    }
   };
 
   (Array.isArray(selectedTests) ? selectedTests : []).forEach(walk);
@@ -90,7 +130,10 @@ export const collectTubesForSelectedTest = (
 
     visitedCodes.add(code);
 
-    const tube = getSpecimenName(getMapEntry(testsMap, code));
+    const entry = getMapEntry(testsMap, code);
+    const mapCode = normalizeCode(entry?.testcode1 || code);
+    const childCodes = getMapChildren(childrenMap, mapCode);
+    const tube = getSpecimenName(entry);
     const tubeKey = tube.toLowerCase();
 
     if (tube && !seenTubes.has(tubeKey)) {
@@ -98,10 +141,8 @@ export const collectTubesForSelectedTest = (
       tubes.push(tube);
     }
 
-    getMapChildren(childrenMap, code).forEach(childCode => {
-      const normalizedChildCode = normalizeCode(childCode);
-      const childEntry = getMapEntry(testsMap, normalizedChildCode);
-      dfs(childEntry?.testcode1 || normalizedChildCode);
+    childCodes.forEach(childCode => {
+      dfs(childCode);
     });
   };
 
@@ -134,7 +175,7 @@ export const collectUniqueTubesForSelectedTests = (
     });
   });
 
-  return tubes;
+  return orderTubesForDisplay(tubes);
 };
 
 export const collectTubeNodesForSelectedTest = (
@@ -161,26 +202,32 @@ export const collectTubeNodesForSelectedTest = (
     visitedCodes.add(code);
     const entry = getMapEntry(testsMap, code);
     const mapCode = normalizeCode(entry?.testcode1 || code);
-    const specimenName = getSpecimenName(entry) || '-';
-    const nodeKey = `${getTestCode(test)}|${mapCode}|${level}|${parentDescription}`;
-
-    if (!seenNodes.has(nodeKey)) {
-      seenNodes.add(nodeKey);
-      nodes.push({
-        key: nodeKey,
-        booked_code: mapCode,
-        description:
-          toStableValue(entry?.description || entry?.name) || mapCode || 'Unnamed Test',
-        specimenName,
-        level,
-        isChildTest: level > 0,
-        parentDescription,
-      });
-    }
-
     const parentName =
       toStableValue(entry?.description || entry?.name) || mapCode || parentDescription;
-    getMapChildren(childrenMap, mapCode).forEach(childCode =>
+    const childCodes = getMapChildren(childrenMap, mapCode);
+    const specimenName = getSpecimenName(entry);
+
+    if (specimenName) {
+      const nodeKey = `${getTestCode(test)}|${mapCode}|${level}|${parentDescription}`;
+
+      if (!seenNodes.has(nodeKey)) {
+        seenNodes.add(nodeKey);
+        nodes.push({
+          key: nodeKey,
+          booked_code: mapCode,
+          description:
+            toStableValue(entry?.description || entry?.name) ||
+            mapCode ||
+            'Unnamed Test',
+          specimenName,
+          level,
+          isChildTest: level > 0,
+          parentDescription,
+        });
+      }
+    }
+
+    childCodes.forEach(childCode =>
       dfs(childCode, level + 1, parentName),
     );
   };

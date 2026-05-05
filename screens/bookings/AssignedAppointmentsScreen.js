@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useMemo} from 'react';
 import {Text, TouchableOpacity, View} from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
@@ -120,7 +120,7 @@ function QueueBadge({styles, label}) {
   );
 }
 
-export default function AssignedAppointmentsScreen({
+function AssignedAppointmentsScreen({
   styles,
   isLoadingAssignedAppointments,
   assignedAppointmentsError,
@@ -132,8 +132,16 @@ export default function AssignedAppointmentsScreen({
   emptyText = 'No assigned appointments are available at the moment.',
   showActiveCard = true,
 }) {
-  const activeBooking = showActiveCard ? assignedAppointments[0] || null : null;
-  const queuedBookings = activeBooking ? assignedAppointments.slice(1) : assignedAppointments;
+  const {activeBooking, queuedBookings} = useMemo(
+    () => ({
+      activeBooking: showActiveCard ? assignedAppointments[0] || null : null,
+      queuedBookings:
+        showActiveCard && assignedAppointments[0]
+          ? assignedAppointments.slice(1)
+          : assignedAppointments,
+    }),
+    [assignedAppointments, showActiveCard],
+  );
 
   return (
     <>
@@ -308,3 +316,5 @@ export default function AssignedAppointmentsScreen({
     </>
   );
 }
+
+export default React.memo(AssignedAppointmentsScreen);

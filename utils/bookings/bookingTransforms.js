@@ -245,18 +245,23 @@ export const extractAssignedBookings = responseData => {
   return [];
 };
 
-export const extractAccessToken = responseData =>
-  toDisplayString(
+export const extractAccessToken = responseData => {
+  const rawToken = toDisplayString(
     responseData?.access_token ||
       responseData?.accessToken ||
       responseData?.token ||
+      responseData?.jwt ||
       responseData?.data?.access_token ||
       responseData?.data?.accessToken ||
       responseData?.data?.token ||
+      responseData?.data?.jwt ||
       responseData?.user?.access_token ||
       responseData?.user?.accessToken ||
       responseData?.user?.token,
   );
+
+  return rawToken.replace(/^Bearer\s+/i, '').trim();
+};
 
 const extractTestsList = source => {
   if (Array.isArray(source)) {
@@ -295,6 +300,23 @@ const normalizePatientTests = source => {
         id: `${code || 'test'}-${index}`,
         code: code || 'N/A',
         name: name || 'Unnamed Test',
+        compCatId: toDisplayString(
+          test?.compCatId ||
+            test?.comp_cat_id ||
+            test?.CompCatID ||
+            test?.company_category_id,
+        ),
+        panelCompanyName: toDisplayString(
+          test?.panelCompanyName || test?.panel_company || test?.panel,
+        ),
+        centerId: toDisplayString(test?.centerId || test?.CenterID),
+        atype: toDisplayString(test?.atype || test?.Atype),
+        catalog_key: toDisplayString(test?.catalog_key || test?.catalogKey),
+        gcode: toDisplayString(test?.gcode || test?.GCode || test?.Gcode),
+        scode: toDisplayString(test?.scode || test?.SCode || test?.Scode),
+        test_code: toDisplayString(
+          test?.test_code || test?.testCode || test?.TestCode,
+        ),
       };
     })
     .filter(Boolean);
@@ -459,6 +481,19 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
           toDisplayString(
             patient?.panelCompany || patient?.panel_company || patient?.panel,
           ) || 'N/A',
+        panelCode: toDisplayString(
+          patient?.panelCode || patient?.panel_code || patient?.code,
+        ),
+        panelAbarid: toDisplayString(
+          patient?.panelAbarid || patient?.panel_abarid || patient?.ABARID,
+        ),
+        compCatId: toDisplayString(
+          patient?.compCatId || patient?.comp_cat_id || patient?.CompCatID,
+        ),
+        centerId: toDisplayString(
+          patient?.centerId || patient?.center_id || patient?.CenterID,
+        ),
+        atype: toDisplayString(patient?.atype || patient?.Atype),
         mobileNumber:
           toDisplayString(
             patient?.contact_mobile ||

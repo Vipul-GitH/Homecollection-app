@@ -27,7 +27,71 @@ import HandoverScreen from '../operations/HandoverScreen';
 import {getPatientMutationId} from '../bookings/appointmentDetails/helpers';
 import {BRAND} from '../../styles/appStyles';
 
-export default function HomeScreen({
+const toStableValue = value =>
+  value === null || value === undefined ? '' : String(value).trim();
+
+const getMergedPatientSelectedTests = (patient, selectedTests, panelCompany = null) => {
+  const mergedMap = new Map();
+  const basePanelCompanyName =
+    toStableValue(panelCompany?.name || patient?.panelCompany) || 'Current Panel';
+  const basePanelCompanyId = toStableValue(
+    panelCompany?.compCatId || patient?.compCatId || patient?.comp_cat_id,
+  );
+  const baseCenterId = toStableValue(
+    panelCompany?.centerId || patient?.centerId || patient?.CenterID,
+  );
+  const baseAtype = toStableValue(
+    panelCompany?.atype || patient?.atype || patient?.Atype,
+  );
+  const basePanelCode = toStableValue(
+    panelCompany?.panelCode || panelCompany?.code || patient?.panelCode || patient?.panel_code,
+  );
+  const basePanelAbarid = toStableValue(
+    panelCompany?.panelAbarid ||
+      panelCompany?.ABARID ||
+      patient?.panelAbarid ||
+      patient?.panel_abarid,
+  );
+
+  (Array.isArray(patient?.tests) ? patient.tests : []).forEach(test => {
+    const dedupeKey = toStableValue(test?.code).toUpperCase();
+    if (!dedupeKey) {
+      return;
+    }
+
+    mergedMap.set(dedupeKey, {
+      key: `seed|${test?.code || 'na'}|${test?.name || 'na'}`,
+      panelCompanyName: basePanelCompanyName,
+      panelCompanyId: basePanelCompanyId,
+      centerId: baseCenterId,
+      atype: baseAtype,
+      panelCode: basePanelCode,
+      panelAbarid: basePanelAbarid,
+      booked_code: test?.code || 'N/A',
+      catalog_key: [basePanelCompanyId, '', '', test?.code || ''].join('|'),
+      gcode: test?.gcode || '',
+      scode: test?.scode || '',
+      test_code: test?.test_code || test?.code || '',
+      description: test?.name || 'Unnamed Test',
+      specimenName: test?.specimen_name || test?.specimenName || 'N/A',
+      mrp: Number(test?.mrp || test?.charge || test?.amount || 0) || 0,
+      isChildTest: false,
+      parentDescription: '',
+      dedupe_key: dedupeKey,
+    });
+  });
+
+  (Array.isArray(selectedTests) ? selectedTests : []).forEach(test => {
+    const dedupeKey = toStableValue(
+      test?.dedupe_key || test?.booked_code || test?.testcode1 || test?.test_code,
+    ).toUpperCase();
+    mergedMap.set(dedupeKey || test?.key || `${mergedMap.size}`, test);
+  });
+
+  return Array.from(mergedMap.values());
+};
+
+function HomeScreen({
   styles,
   horizontalPadding,
   loginTopSpacing,
@@ -79,6 +143,7 @@ export default function HomeScreen({
   onPanelCompanySelect,
   onTogglePatientTestSelection,
   onAppointmentDetailStateChange,
+  onLocalDatabaseLoadingChange,
 }) {
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const isBookingDetailScreen =
@@ -111,10 +176,13 @@ export default function HomeScreen({
       ? styles.homeContainerTopSpacingCompact
       : styles.homeContainerTopSpacing;
   const selectedPatientId = getPatientMutationId(selectedSamplePatient);
-  const selectedPatientTests =
+  const selectedPatientTests = getMergedPatientSelectedTests(
+    selectedSamplePatient,
     (selectedPatientId &&
       appointmentDetailState?.patientSelectedTestsMap?.[selectedPatientId]) ||
-    [];
+      [],
+    selectedSamplePanelCompany,
+  );
   const bookingPatientCount = selectedBooking?.patients?.length || 0;
   const bookingAmount = String(selectedBooking?.payment?.amount || '').trim();
   const bookingHeaderAmount =
@@ -203,6 +271,7 @@ export default function HomeScreen({
               onPanelCompanySelect={onPanelCompanySelect}
               onToggleSelectedTest={onTogglePatientTestSelection}
               onRemoveSelectedTest={onRemovePatientSelectedTest}
+              onLocalDatabaseLoadingChange={onLocalDatabaseLoadingChange}
             />
           );
         }
@@ -214,6 +283,7 @@ export default function HomeScreen({
               selectedTests={selectedPatientTests}
               styles={styles}
               onRemoveSelectedTest={onRemovePatientSelectedTest}
+              onLocalDatabaseLoadingChange={onLocalDatabaseLoadingChange}
             />
           );
         }
@@ -239,6 +309,7 @@ export default function HomeScreen({
             onRemovePatientSelectedTest={onRemovePatientSelectedTest}
             appointmentDetailState={appointmentDetailState}
             onAppointmentDetailStateChange={onAppointmentDetailStateChange}
+            onLocalDatabaseLoadingChange={onLocalDatabaseLoadingChange}
           />
         );
       }
@@ -317,6 +388,7 @@ export default function HomeScreen({
         onAssignedCardPress={onAssignedCardPress}
         onStartedCardPress={onStartedCardPress}
         onCompletedCardPress={onCompletedCardPress}
+        onUpcomingBookingPress={onAssignedViewTests}
       />
     );
   };
@@ -494,4 +566,6 @@ export default function HomeScreen({
     </>
   );
 }
+
+export default React.memo(HomeScreen);
 

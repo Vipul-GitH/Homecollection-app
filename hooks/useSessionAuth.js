@@ -4,6 +4,7 @@ import {
   loginUserApi,
 } from '../services/api/authApi';
 import {clearSession, persistSession} from '../services/storage/sessionStorage';
+import {runCatalogSyncOnce} from '../services/sync/catalogSyncService';
 import {logDebug, warnDebug} from '../utils/app/logger';
 
 export const useSessionAuth = () => {
@@ -11,6 +12,7 @@ export const useSessionAuth = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [loginLoadingMessage, setLoginLoadingMessage] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loggedInUser, setLoggedInUser] = useState('');
   const [accessToken, setAccessToken] = useState('');
@@ -62,6 +64,7 @@ export const useSessionAuth = () => {
     try {
       setIsLoggingIn(true);
       setLoginError('');
+      setLoginLoadingMessage('Verifying your credentials securely...');
 
       const {displayName, accessToken: nextAccessToken} = await loginUserApi({
         username: trimmedUsername,
@@ -73,8 +76,6 @@ export const useSessionAuth = () => {
         return false;
       }
 
-      setLoggedInUser(displayName);
-      setAccessToken(nextAccessToken);
       await persistSession({
         accessToken: nextAccessToken,
         loggedInUser: displayName,
@@ -83,6 +84,14 @@ export const useSessionAuth = () => {
         displayName,
         hasAccessToken: Boolean(nextAccessToken),
       });
+      try {
+        setLoginLoadingMessage('Syncing local catalog database...');
+        await runCatalogSyncOnce({accessToken: nextAccessToken});
+      } catch (syncError) {
+        warnDebug('Catalog sync after login failed:', syncError);
+      }
+      setLoggedInUser(displayName);
+      setAccessToken(nextAccessToken);
       setCurrentScreen('home');
       return true;
     } catch (error) {
@@ -121,6 +130,7 @@ export const useSessionAuth = () => {
       return false;
     } finally {
       setIsLoggingIn(false);
+      setLoginLoadingMessage('');
     }
   }, [password, username]);
 
@@ -144,6 +154,7 @@ export const useSessionAuth = () => {
     username,
     password,
     isLoggingIn,
+    loginLoadingMessage,
     loginError,
     loggedInUser,
     accessToken,

@@ -18,6 +18,7 @@ import {
 import {logDebug} from '../../utils/app/logger';
 import {
   getLocalPanelCatalogByCompanyResponse,
+  getLocalMatchedPanelCompaniesResponse,
   getLocalPanelCompaniesResponse,
 } from '../local/panelCatalogLocal';
 
@@ -42,7 +43,9 @@ const stringifyForDebugLog = value => {
 
 const logAppointmentDetailDebug = (label, payload) => {
   // Intentionally scoped to appointment/patient detail debugging.
-  console.log(label, stringifyForDebugLog(payload));
+  if (__DEV__) {
+    console.log(label, stringifyForDebugLog(payload));
+  }
 };
 
 const getApiErrorMessage = (response, responseData, fallbackMessage) => {
@@ -363,13 +366,47 @@ export const fetchPanelTestCatalogApi = async ({accessToken}) => {
   return responseData;
 };
 
+export const fetchMatchedPanelCompaniesForPatientApi = async ({patient}) => {
+  const localResponseData = await getLocalMatchedPanelCompaniesResponse(patient);
+
+  if (localResponseData?.ok && Array.isArray(localResponseData?.items)) {
+    logDebug(
+      '[Matched Panel Companies] Served from local preload catalog',
+      `items=${localResponseData.items.length}`,
+    );
+    return localResponseData;
+  }
+
+  return {ok: false, items: []};
+};
+
 export const fetchPanelCatalogByCompanyApi = async ({
   accessToken,
   compCatId,
+  panelCompany,
 }) => {
-  const localResponseData = await getLocalPanelCatalogByCompanyResponse(compCatId);
+  const localResponseData = await getLocalPanelCatalogByCompanyResponse(
+    panelCompany || compCatId,
+  );
 
   if (localResponseData?.ok && Array.isArray(localResponseData?.groups)) {
+    if (
+      !localResponseData.groups.length &&
+      panelCompany &&
+      panelCompany.compCatId
+    ) {
+      const fallbackLocalResponseData =
+        await getLocalPanelCatalogByCompanyResponse(panelCompany.compCatId);
+
+      if (
+        fallbackLocalResponseData?.ok &&
+        Array.isArray(fallbackLocalResponseData?.groups) &&
+        fallbackLocalResponseData.groups.length
+      ) {
+        return fallbackLocalResponseData;
+      }
+    }
+
     logDebug(
       '[Panel Catalog] Served from local preload catalog',
       `compCatId=${String(compCatId || '')}, groups=${localResponseData.groups.length}`,

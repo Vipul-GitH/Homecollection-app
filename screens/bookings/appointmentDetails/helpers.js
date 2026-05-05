@@ -119,31 +119,120 @@ export const normalizePanelCompanyItems = responseData => {
     return [];
   }
 
-  return responseData.items.map((item, index) => ({
-    id: `${normalizeFormText(item?.CompCatID) || 'na'}-${
-      normalizeFormText(item?.CenterID) || 'na'
-    }-${index}`,
-    name: normalizeFormText(item?.pname) || 'Unnamed Company',
-    details: normalizeFormText(item?.CatDetails),
-    compCatId: normalizeFormText(item?.CompCatID),
-    centerId: normalizeFormText(item?.CenterID),
-    billingChargeMode: normalizeFormText(item?.BillingChargeMode),
-    searchKey: `${normalizeFormText(item?.pname)} ${normalizeFormText(
-      item?.CatDetails,
-    )} ${normalizeFormText(item?.CompCatID)}`.toLowerCase(),
-  }));
+  return responseData.items.map((item, index) => {
+    const syncKey = normalizeFormText(item?.sync_key || item?.syncKey);
+    const [syncCenterId = '', syncAtype = '', syncCode = '', syncAbarid = ''] =
+      syncKey.split('|');
+
+    return {
+      id: `${normalizeFormText(item?.CompCatID) || 'na'}-${
+        normalizeFormText(item?.CenterID) || 'na'
+      }-${index}`,
+      name: normalizeFormText(item?.pname) || 'Unnamed Company',
+      details: normalizeFormText(item?.CatDetails),
+      compCatId: normalizeFormText(item?.CompCatID),
+      centerId: normalizeFormText(item?.CenterID) || syncCenterId,
+      atype: normalizeFormText(item?.Atype) || syncAtype,
+      panelCode: normalizeFormText(item?.code || item?.Code) || syncCode,
+      panelAbarid: normalizeFormText(item?.ABARID || item?.abarid) || syncAbarid,
+      syncKey,
+      billingChargeMode: normalizeFormText(item?.BillingChargeMode),
+      searchKey: `${normalizeFormText(item?.pname)} ${normalizeFormText(
+        item?.CatDetails,
+      )} ${normalizeFormText(item?.CompCatID)} ${syncCode} ${syncAbarid}`.toLowerCase(),
+    };
+  });
 };
 
-export const findMatchingPanelCompanies = (items, panelCompanyValue) => {
+export const findMatchingPanelCompanies = (
+  items,
+  panelCompanyValue,
+  patientContext = null,
+) => {
   const normalizedPanelValue = normalizeFormText(panelCompanyValue).toLowerCase();
 
   if (!normalizedPanelValue) {
     return [];
   }
 
+  const patientPanelCode = normalizeFormText(
+    patientContext?.panelCode || patientContext?.panel_code,
+  );
+  const patientPanelAbarid = normalizeFormText(
+    patientContext?.panelAbarid || patientContext?.panel_abarid,
+  ).toUpperCase();
+  const patientCompCatId = normalizeFormText(
+    patientContext?.compCatId || patientContext?.comp_cat_id,
+  );
+  const patientCenterId = normalizeFormText(
+    patientContext?.centerId || patientContext?.CenterID,
+  );
+  const patientAtype = normalizeFormText(
+    patientContext?.atype || patientContext?.Atype,
+  ).toUpperCase();
+
+  const scoreMatches = matches =>
+    [...matches]
+      .map(item => {
+        let score = 0;
+        const itemName = normalizeFormText(item?.name).toLowerCase();
+        const itemDetails = normalizeFormText(item?.details).toLowerCase();
+
+        if (itemName === normalizedPanelValue) {
+          score += 100;
+        }
+        if (itemDetails === normalizedPanelValue) {
+          score += 80;
+        }
+        if (patientPanelCode && normalizeFormText(item?.panelCode) === patientPanelCode) {
+          score += 70;
+        }
+        if (
+          patientPanelAbarid &&
+          normalizeFormText(item?.panelAbarid).toUpperCase() === patientPanelAbarid
+        ) {
+          score += 90;
+        }
+        if (
+          patientPanelCode &&
+          patientPanelAbarid &&
+          normalizeFormText(item?.panelCode) === patientPanelCode &&
+          normalizeFormText(item?.panelAbarid).toUpperCase() === patientPanelAbarid
+        ) {
+          score += 150;
+        }
+        if (patientCompCatId && normalizeFormText(item?.compCatId) === patientCompCatId) {
+          score += 40;
+        }
+        if (patientCenterId && normalizeFormText(item?.centerId) === patientCenterId) {
+          score += 30;
+        }
+        if (patientAtype && normalizeFormText(item?.atype).toUpperCase() === patientAtype) {
+          score += 20;
+        }
+
+        return {item, score};
+      })
+      .sort((leftItem, rightItem) => {
+        if (rightItem.score !== leftItem.score) {
+          return rightItem.score - leftItem.score;
+        }
+
+        return (
+          Number(rightItem.item?.compCatId || 0) -
+          Number(leftItem.item?.compCatId || 0)
+        );
+      })
+      .map(match => match.item);
+
   const pickBestNamedMatches = matches => {
     if (matches.length <= 1) {
       return matches;
+    }
+
+    const scoredMatches = scoreMatches(matches);
+    if (patientPanelCode || patientPanelAbarid || patientCenterId || patientAtype) {
+      return scoredMatches.slice(0, 1);
     }
 
     const numericPanelToken = normalizedPanelValue.match(/\b\d+\b/)?.[0] || '';
@@ -157,7 +246,7 @@ export const findMatchingPanelCompanies = (items, panelCompanyValue) => {
       }
     }
 
-    return [...matches]
+    return scoredMatches
       .sort(
         (leftItem, rightItem) =>
           Number(rightItem?.compCatId || 0) - Number(leftItem?.compCatId || 0),
@@ -179,7 +268,7 @@ export const findMatchingPanelCompanies = (items, panelCompanyValue) => {
     return pickBestNamedMatches(exactMatches);
   }
 
-  return items.filter(item => {
+  const partialMatches = items.filter(item => {
     const normalizedName = normalizeFormText(item?.name).toLowerCase();
     const normalizedDetails = normalizeFormText(item?.details).toLowerCase();
 
@@ -190,6 +279,8 @@ export const findMatchingPanelCompanies = (items, panelCompanyValue) => {
       normalizedPanelValue.includes(normalizedDetails)
     );
   });
+
+  return scoreMatches(partialMatches);
 };
 
 export const isSamePanelCompany = (leftCompany, rightCompany) => {
@@ -204,6 +295,22 @@ export const isSamePanelCompany = (leftCompany, rightCompany) => {
     return true;
   }
 
+  const leftPanelCode = normalizeFormText(leftCompany?.panelCode);
+  const rightPanelCode = normalizeFormText(rightCompany?.panelCode);
+  const leftPanelAbarid = normalizeFormText(leftCompany?.panelAbarid).toUpperCase();
+  const rightPanelAbarid = normalizeFormText(rightCompany?.panelAbarid).toUpperCase();
+
+  if (
+    leftPanelCode &&
+    rightPanelCode &&
+    leftPanelAbarid &&
+    rightPanelAbarid &&
+    leftPanelCode === rightPanelCode &&
+    leftPanelAbarid === rightPanelAbarid
+  ) {
+    return true;
+  }
+
   return (
     normalizeFormText(leftCompany?.compCatId) ===
       normalizeFormText(rightCompany?.compCatId) &&
@@ -215,8 +322,3 @@ export const isSamePanelCompany = (leftCompany, rightCompany) => {
       normalizeFormText(rightCompany?.details).toLowerCase()
   );
 };
-
-export const waitForMs = milliseconds =>
-  new Promise(resolve => {
-    setTimeout(resolve, milliseconds);
-  });

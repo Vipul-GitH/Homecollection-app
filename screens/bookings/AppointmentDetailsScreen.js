@@ -23,6 +23,9 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import PatientDetailCard from '../../components/bookings/PatientDetailCard';
+import BookingLocationCard from '../../components/bookings/appointmentDetails/BookingLocationCard';
+import RequiredLabel from '../../components/bookings/appointmentDetails/RequiredLabel';
+import TerminalStatusCard from '../../components/bookings/appointmentDetails/TerminalStatusCard';
 import {
   CATALOG_ITEM_PAGE_SIZE,
   CATALOG_TEST_VISIBLE_LIMIT,
@@ -30,7 +33,6 @@ import {
   EDITABLE_GENDER_TITLES,
   GENDER_OPTIONS,
   INITIAL_PATIENT_FORM,
-  MIN_ADD_TEST_LOADING_MS,
   MONTH_LABELS,
   PANEL_COMPANY_DEFAULT_VISIBLE,
   PANEL_COMPANY_SEARCH_VISIBLE_LIMIT,
@@ -40,7 +42,6 @@ import {
 } from './appointmentDetails/constants';
 import {
   calculateAgeFromDob,
-  findMatchingPanelCompanies,
   getCalendarDays,
   getGenderFromTitle,
   getMimeTypeFromFileName,
@@ -52,15 +53,14 @@ import {
   normalizeOptionValue,
   normalizePanelCompanyItems,
   toDateInputValue,
-  waitForMs,
 } from './appointmentDetails/helpers';
 import {BRAND} from '../../styles/appStyles';
 import {warnDebug} from '../../utils/app/logger';
-import {getLocalPanelCompaniesResponse} from '../../services/local/panelCatalogLocal';
+import {
+  getLocalMatchedPanelCompaniesResponse,
+  getLocalPanelCompaniesResponse,
+} from '../../services/local/panelCatalogLocal';
 const {LocalDocumentPickerModule} = NativeModules;
-const PANEL_COMPANIES_COUNTDOWN_SECONDS = Math.ceil(
-  MIN_ADD_TEST_LOADING_MS / 1000,
-);
 const CANCELLATION_REASON_OPTIONS = [
   'Patient requested cancellation',
   'Duplicate / wrong booking created',
@@ -79,6 +79,10 @@ const CANCEL_TIME_SLOT_OPTIONS = [
   '10:30 AM to 11:00 AM',
 ];
 const COMPLETE_PAYMENT_MODE_OPTIONS = ['Cash', 'UPI', 'Online', 'At Lab'];
+const toCurrencyNumber = value => {
+  const normalizedValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
+  return Number.isFinite(normalizedValue) ? normalizedValue : 0;
+};
 
 const getBillingChargeMode = company =>
   normalizeFormText(
@@ -133,6 +137,130 @@ const getPaymentLabelFromBillingMode = mode => {
   }
 
   return labels.length ? labels.join(' / ') : normalizedMode;
+};
+
+const doesSelectedTestBelongToPanelCompany = (test, panelCompany) => {
+  if (!test || !panelCompany) {
+    return false;
+  }
+
+  const testPanelCode = normalizeFormText(test?.panelCode || test?.panel_code);
+  const companyPanelCode = normalizeFormText(panelCompany?.panelCode || panelCompany?.code);
+  const testPanelAbarid = normalizeFormText(
+    test?.panelAbarid || test?.panel_abarid,
+  ).toUpperCase();
+  const companyPanelAbarid = normalizeFormText(
+    panelCompany?.panelAbarid || panelCompany?.ABARID,
+  ).toUpperCase();
+
+  if (
+    testPanelCode &&
+    companyPanelCode &&
+    testPanelAbarid &&
+    companyPanelAbarid &&
+    testPanelCode === companyPanelCode &&
+    testPanelAbarid === companyPanelAbarid
+  ) {
+    return true;
+  }
+
+  const testPanelCompanyName = normalizeFormText(
+    test?.panelCompanyName || test?.panel_company_name,
+  ).toLowerCase();
+  const companyName = normalizeFormText(
+    panelCompany?.name || panelCompany?.panelCompany,
+  ).toLowerCase();
+
+  if (testPanelCompanyName && companyName && testPanelCompanyName === companyName) {
+    return true;
+  }
+
+  const testPanelCompanyDetails = normalizeFormText(
+    test?.panelCompanyDetails || test?.panel_company_details,
+  ).toLowerCase();
+  const companyDetails = normalizeFormText(
+    panelCompany?.details || panelCompany?.CatDetails,
+  ).toLowerCase();
+
+  if (
+    testPanelCompanyDetails &&
+    companyDetails &&
+    testPanelCompanyDetails === companyDetails
+  ) {
+    return true;
+  }
+
+  return (
+    normalizeFormText(test?.panelCompanyId || test?.compCatId) ===
+      normalizeFormText(panelCompany?.compCatId) &&
+    (!normalizeFormText(test?.centerId || test?.CenterID) ||
+      normalizeFormText(test?.centerId || test?.CenterID) ===
+        normalizeFormText(panelCompany?.centerId || panelCompany?.CenterID)) &&
+    (!normalizeFormText(test?.atype || test?.Atype) ||
+      normalizeFormText(test?.atype || test?.Atype).toUpperCase() ===
+        normalizeFormText(panelCompany?.atype || panelCompany?.Atype).toUpperCase())
+  );
+};
+
+const getMergedPatientSelectedTests = (patient, selectedTests, panelCompany = null) => {
+  const mergedMap = new Map();
+  const basePanelCompanyName =
+    normalizeFormText(panelCompany?.name || patient?.panelCompany) || 'Current Panel';
+  const basePanelCompanyId = normalizeFormText(
+    panelCompany?.compCatId || patient?.compCatId || patient?.comp_cat_id,
+  );
+  const baseCenterId = normalizeFormText(
+    panelCompany?.centerId || patient?.centerId || patient?.CenterID,
+  );
+  const baseAtype = normalizeFormText(
+    panelCompany?.atype || patient?.atype || patient?.Atype,
+  );
+  const basePanelCode = normalizeFormText(
+    panelCompany?.panelCode || panelCompany?.code || patient?.panelCode || patient?.panel_code,
+  );
+  const basePanelAbarid = normalizeFormText(
+    panelCompany?.panelAbarid ||
+      panelCompany?.ABARID ||
+      patient?.panelAbarid ||
+      patient?.panel_abarid,
+  );
+
+  (Array.isArray(patient?.tests) ? patient.tests : []).forEach(test => {
+    const dedupeKey = normalizeFormText(test?.code).toUpperCase();
+    if (!dedupeKey) {
+      return;
+    }
+
+    mergedMap.set(dedupeKey, {
+      key: `seed|${test?.code || 'na'}|${test?.name || 'na'}`,
+      panelCompanyName: basePanelCompanyName,
+      panelCompanyId: basePanelCompanyId,
+      centerId: baseCenterId,
+      atype: baseAtype,
+      panelCode: basePanelCode,
+      panelAbarid: basePanelAbarid,
+      booked_code: test?.code || 'N/A',
+      catalog_key: [basePanelCompanyId, '', '', test?.code || ''].join('|'),
+      gcode: test?.gcode || '',
+      scode: test?.scode || '',
+      test_code: test?.test_code || test?.code || '',
+      description: test?.name || 'Unnamed Test',
+      specimenName: test?.specimen_name || test?.specimenName || 'N/A',
+      mrp: toCurrencyNumber(test?.mrp || test?.charge || test?.amount),
+      isChildTest: false,
+      parentDescription: '',
+      dedupe_key: dedupeKey,
+    });
+  });
+
+  (Array.isArray(selectedTests) ? selectedTests : []).forEach(test => {
+    const dedupeKey = normalizeFormText(
+      test?.dedupe_key || test?.booked_code || test?.testcode1 || test?.test_code,
+    ).toUpperCase();
+    mergedMap.set(dedupeKey || test?.key || `${mergedMap.size}`, test);
+  });
+
+  return Array.from(mergedMap.values());
 };
 
 const getBookingStatusCodeFromLabel = status => {
@@ -285,7 +413,7 @@ function SwipeCompleteButton({styles, disabled, isLoading, onComplete}) {
   );
 }
 
-export default function AppointmentDetailsScreen({
+function AppointmentDetailsScreen({
   selectedBooking,
   styles,
   isSmallPhone,
@@ -305,6 +433,7 @@ export default function AppointmentDetailsScreen({
   onRemovePatientSelectedTest,
   appointmentDetailState,
   onAppointmentDetailStateChange,
+  onLocalDatabaseLoadingChange,
 }) {
   const {width} = useWindowDimensions();
   const isNarrowScreen = width < 370;
@@ -337,6 +466,10 @@ export default function AppointmentDetailsScreen({
     () => new Date(),
   );
   const [completeCollectedCash, setCompleteCollectedCash] = useState('');
+  const [completeRemarks, setCompleteRemarks] = useState('');
+  const [isAdditionalDiscountEnabled, setIsAdditionalDiscountEnabled] =
+    useState(false);
+  const [completeAdditionalDiscount, setCompleteAdditionalDiscount] = useState('');
   const [completePaymentMode, setCompletePaymentMode] = useState(
     COMPLETE_PAYMENT_MODE_OPTIONS[0],
   );
@@ -349,26 +482,31 @@ export default function AppointmentDetailsScreen({
   const [panelFlowMode, setPanelFlowMode] = useState('test');
   const [panelCompanySearch, setPanelCompanySearch] = useState('');
   const [panelCompanyItems, setPanelCompanyItems] = useState([]);
-  const [isFetchingPanelCompanies, setIsFetchingPanelCompanies] = useState(false);
-  const [panelCompanyCountdown, setPanelCompanyCountdown] = useState(
-    PANEL_COMPANIES_COUNTDOWN_SECONDS,
-  );
-  const panelCompanyCountdownRef = useRef(null);
   const [selectedPanelPatient, setSelectedPanelPatient] = useState(null);
   const [selectedPanelCompanyId, setSelectedPanelCompanyId] = useState('');
   const [selectedPanelCompanyName, setSelectedPanelCompanyName] = useState('');
   const [selectedPanelCompany, setSelectedPanelCompany] = useState(null);
   const [isPanelCatalogVisible, setIsPanelCatalogVisible] = useState(false);
-  const patientApiPanelCompaniesMap =
-    appointmentDetailState?.patientApiPanelCompaniesMap || {};
-  const patientPanelCompaniesMap =
-    appointmentDetailState?.patientPanelCompaniesMap || {};
-  const activePatientPanelCompanyMap =
-    appointmentDetailState?.activePatientPanelCompanyMap || {};
-  const patientSelectedTestsMap =
-    appointmentDetailState?.patientSelectedTestsMap || {};
-  const patientReportCourierMap =
-    appointmentDetailState?.patientReportCourierMap || {};
+  const patientApiPanelCompaniesMap = useMemo(
+    () => appointmentDetailState?.patientApiPanelCompaniesMap || {},
+    [appointmentDetailState?.patientApiPanelCompaniesMap],
+  );
+  const patientPanelCompaniesMap = useMemo(
+    () => appointmentDetailState?.patientPanelCompaniesMap || {},
+    [appointmentDetailState?.patientPanelCompaniesMap],
+  );
+  const activePatientPanelCompanyMap = useMemo(
+    () => appointmentDetailState?.activePatientPanelCompanyMap || {},
+    [appointmentDetailState?.activePatientPanelCompanyMap],
+  );
+  const patientSelectedTestsMap = useMemo(
+    () => appointmentDetailState?.patientSelectedTestsMap || {},
+    [appointmentDetailState?.patientSelectedTestsMap],
+  );
+  const patientReportCourierMap = useMemo(
+    () => appointmentDetailState?.patientReportCourierMap || {},
+    [appointmentDetailState?.patientReportCourierMap],
+  );
   const setPatientApiPanelCompaniesMap = useCallback(
     updater =>
       onAppointmentDetailStateChange?.(previousState => ({
@@ -413,6 +551,17 @@ export default function AppointmentDetailsScreen({
       })),
     [onAppointmentDetailStateChange],
   );
+  const setPatientSelectedTestsMap = useCallback(
+    updater =>
+      onAppointmentDetailStateChange?.(previousState => ({
+        ...previousState,
+        patientSelectedTestsMap:
+          typeof updater === 'function'
+            ? updater(previousState?.patientSelectedTestsMap || {})
+            : updater,
+      })),
+    [onAppointmentDetailStateChange],
+  );
   const [panelCatalogGroups, setPanelCatalogGroups] = useState([]);
   const [selectedCatalogGroup, setSelectedCatalogGroup] = useState(null);
   const [selectedCatalogSubgroup, setSelectedCatalogSubgroup] = useState(null);
@@ -421,7 +570,13 @@ export default function AppointmentDetailsScreen({
   const [catalogVisibleCount, setCatalogVisibleCount] = useState(
     CATALOG_ITEM_PAGE_SIZE,
   );
-  const paymentModeHydratedBookingRef = useRef('');
+  const patients = useMemo(
+    () =>
+      Array.isArray(selectedBooking?.patients)
+        ? selectedBooking.patients
+        : [],
+    [selectedBooking?.patients],
+  );
 
   useEffect(() => {
     const bookingId = normalizeFormText(selectedBooking?.id);
@@ -433,19 +588,39 @@ export default function AppointmentDetailsScreen({
       return;
     }
 
-    if (paymentModeHydratedBookingRef.current === bookingId) {
+    const hasMissingPanelCompanies = patients.some(patient => {
+      const patientId = getPatientMutationId(patient);
+      return patientId && !(patientApiPanelCompaniesMap[patientId] || []).length;
+    });
+
+    if (!hasMissingPanelCompanies) {
       return;
     }
 
-    paymentModeHydratedBookingRef.current = bookingId;
     let isMounted = true;
 
     const hydratePatientPaymentModes = async () => {
       try {
-        const responseData = await getLocalPanelCompaniesResponse();
-        const items = normalizePanelCompanyItems(responseData);
+        onLocalDatabaseLoadingChange?.(
+          'Loading patient panel companies from local database...',
+        );
+        const nextEntries = [];
 
-        if (!isMounted || !items.length) {
+        for (const patient of patients) {
+          const patientId = getPatientMutationId(patient);
+          if (!patientId || (patientApiPanelCompaniesMap[patientId] || []).length) {
+            continue;
+          }
+
+          const responseData = await getLocalMatchedPanelCompaniesResponse(patient);
+          const matchedCompanies = normalizePanelCompanyItems(responseData);
+
+          if (matchedCompanies.length) {
+            nextEntries.push([patientId, matchedCompanies]);
+          }
+        }
+
+        if (!isMounted || !nextEntries.length) {
           return;
         }
 
@@ -453,18 +628,8 @@ export default function AppointmentDetailsScreen({
           const nextMap = {...previousMap};
           let didChange = false;
 
-          patients.forEach(patient => {
-            const patientId = getPatientMutationId(patient);
-            if (!patientId || (nextMap[patientId] || []).length) {
-              return;
-            }
-
-            const matchedCompanies = findMatchingPanelCompanies(
-              items,
-              patient?.panelCompany,
-            );
-
-            if (matchedCompanies.length) {
+          nextEntries.forEach(([patientId, matchedCompanies]) => {
+            if (!(nextMap[patientId] || []).length) {
               nextMap[patientId] = matchedCompanies;
               didChange = true;
             }
@@ -474,6 +639,10 @@ export default function AppointmentDetailsScreen({
         });
       } catch (error) {
         warnDebug('Unable to hydrate panel company payment modes:', error);
+      } finally {
+        if (isMounted) {
+          onLocalDatabaseLoadingChange?.('');
+        }
       }
     };
 
@@ -481,10 +650,13 @@ export default function AppointmentDetailsScreen({
 
     return () => {
       isMounted = false;
+      onLocalDatabaseLoadingChange?.('');
     };
   }, [
     selectedBooking?.id,
     selectedBooking?.patients,
+    onLocalDatabaseLoadingChange,
+    patientApiPanelCompaniesMap,
     setPatientApiPanelCompaniesMap,
   ]);
   const [patientDocuments, setPatientDocuments] = useState([]);
@@ -558,6 +730,66 @@ export default function AppointmentDetailsScreen({
   })();
   const hasCreditPanelCompany = completeBookingPanelCompanies.some(company =>
     getBillingChargeMode(company).includes('C'),
+  );
+  const completeBillingTests = useMemo(
+    () =>
+      patients.flatMap(patient => {
+        const patientId = getPatientMutationId(patient);
+        const selectedTests = patientId
+          ? getMergedPatientSelectedTests(
+              patient,
+              patientSelectedTestsMap[patientId] || [],
+              null,
+            )
+          : getMergedPatientSelectedTests(patient, []);
+        const sourceTests = selectedTests.length
+          ? selectedTests
+          : Array.isArray(patient?.tests)
+          ? patient.tests
+          : [];
+
+        return sourceTests.map(test => ({
+          key:
+            normalizeFormText(test?.key) ||
+            `${normalizeFormText(test?.booked_code || test?.code)}-${patientId}`,
+          patientName: normalizeFormText(patient?.name),
+          code: normalizeFormText(test?.booked_code || test?.code),
+          description: normalizeFormText(test?.description || test?.name) || 'Unnamed Test',
+          mrp: toCurrencyNumber(test?.mrp || test?.charge || test?.amount),
+        }));
+      }),
+    [patients, patientSelectedTestsMap],
+  );
+  const completeBillingTotal = useMemo(
+    () =>
+      completeBillingTests.reduce(
+        (total, test) => total + toCurrencyNumber(test?.mrp),
+        0,
+      ),
+    [completeBillingTests],
+  );
+  const completeDiscountAmount = useMemo(
+    () =>
+      Math.min(
+        completeBillingTotal,
+        isAdditionalDiscountEnabled
+          ? toCurrencyNumber(completeAdditionalDiscount)
+          : 0,
+      ),
+    [
+      completeAdditionalDiscount,
+      completeBillingTotal,
+      isAdditionalDiscountEnabled,
+    ],
+  );
+  const completeNetAmount = Math.max(
+    completeBillingTotal - completeDiscountAmount,
+    0,
+  );
+  const completeAmountPaid = toCurrencyNumber(completeCollectedCash);
+  const completeBalanceAmount = Math.max(
+    completeNetAmount - completeAmountPaid,
+    0,
   );
   const rawBookingStatusCode = Number(selectedBooking.bookingStatusCode || 0);
   const labelBookingStatusCode = getBookingStatusCodeFromLabel(
@@ -944,6 +1176,9 @@ export default function AppointmentDetailsScreen({
 
   const openCompleteBookingModal = () => {
     setCompleteCollectedCash('');
+    setCompleteRemarks('');
+    setIsAdditionalDiscountEnabled(false);
+    setCompleteAdditionalDiscount('');
     setCompletePaymentMode(COMPLETE_PAYMENT_MODE_OPTIONS[0]);
     setCompleteProofDocuments([]);
     setIsCompleteBookingModalVisible(true);
@@ -1138,6 +1373,7 @@ export default function AppointmentDetailsScreen({
     const catalogResponse = await onPanelCompanySelect({
       patient: selectedPanelPatient,
       compCatId: panelCompany.compCatId,
+      panelCompany,
     });
 
     if (catalogResponse) {
@@ -1184,45 +1420,41 @@ export default function AppointmentDetailsScreen({
     setPanelFlowMode('panel-only');
     setSelectedPanelPatient(patient);
     const selectedPatientId = getPatientMutationId(patient);
-    if (panelCompanyCountdownRef.current) {
-      clearInterval(panelCompanyCountdownRef.current);
-    }
 
-    setIsFetchingPanelCompanies(true);
-    setPanelCompanyCountdown(PANEL_COMPANIES_COUNTDOWN_SECONDS);
-    panelCompanyCountdownRef.current = setInterval(() => {
-      setPanelCompanyCountdown(previousCount =>
-        previousCount > 0 ? previousCount - 1 : 0,
-      );
-    }, 1000);
-
-    let responseData = null;
+    let matchedResponseData = null;
+    let fullListResponseData = null;
 
     try {
-      const [catalogResponse] = await Promise.all([
+      onLocalDatabaseLoadingChange?.(
+        'Loading panel companies from local database...',
+      );
+      [matchedResponseData, fullListResponseData] = await Promise.all([
         onAddTestPatient(patient),
-        waitForMs(MIN_ADD_TEST_LOADING_MS),
+        getLocalPanelCompaniesResponse(),
       ]);
-      responseData = catalogResponse;
+    } catch (error) {
+      warnDebug('Open panel companies error:', error);
+      return;
     } finally {
-      if (panelCompanyCountdownRef.current) {
-        clearInterval(panelCompanyCountdownRef.current);
-      }
-      panelCompanyCountdownRef.current = null;
-      setIsFetchingPanelCompanies(false);
-      setPanelCompanyCountdown(PANEL_COMPANIES_COUNTDOWN_SECONDS);
+      onLocalDatabaseLoadingChange?.('');
     }
 
-    const items = normalizePanelCompanyItems(responseData);
-    const apiMatchedCompanies = findMatchingPanelCompanies(
-      items,
-      patient?.panelCompany,
-    );
+    const apiMatchedCompanies = normalizePanelCompanyItems(matchedResponseData);
+    const allPanelCompanies = normalizePanelCompanyItems(fullListResponseData);
+    const mergedPanelCompanies = [
+      ...apiMatchedCompanies,
+      ...allPanelCompanies.filter(
+        company =>
+          !apiMatchedCompanies.some(matchedCompany =>
+            isSamePanelCompany(matchedCompany, company),
+          ),
+      ),
+    ];
 
-    if (!items.length) {
+    if (!mergedPanelCompanies.length) {
       Alert.alert(
         'No Panel Companies',
-        'Panel company data is empty in the API response.',
+        'Panel company data is empty in the local database.',
       );
       return;
     }
@@ -1234,7 +1466,7 @@ export default function AppointmentDetailsScreen({
       }));
     }
 
-    setPanelCompanyItems(items);
+    setPanelCompanyItems(mergedPanelCompanies);
     setPanelCompanySearch('');
     setSelectedPanelCompanyId('');
     setSelectedPanelCompanyName('');
@@ -1267,11 +1499,7 @@ export default function AppointmentDetailsScreen({
       return [];
     }
 
-    const items = normalizePanelCompanyItems(responseData);
-    const apiMatchedCompanies = findMatchingPanelCompanies(
-      items,
-      patient?.panelCompany,
-    );
+    const apiMatchedCompanies = normalizePanelCompanyItems(responseData);
 
     if (selectedPatientId) {
       setPatientApiPanelCompaniesMap(previousMap => ({
@@ -1343,15 +1571,33 @@ export default function AppointmentDetailsScreen({
 
       return nextMap;
     });
-  };
 
-  useEffect(() => {
-    return () => {
-      if (panelCompanyCountdownRef.current) {
-        clearInterval(panelCompanyCountdownRef.current);
+    setPatientSelectedTestsMap(previousTestsMap => {
+      const previousTests = previousTestsMap[selectedPatientId] || [];
+      const remainingTests = previousTests.filter(
+        test =>
+          !String(test?.key || '').startsWith('seed|') &&
+          !doesSelectedTestBelongToPanelCompany(test, panelCompanyToRemove),
+      );
+
+      if (remainingTests.length === previousTests.length) {
+        return previousTestsMap;
       }
-    };
-  }, []);
+
+      const nextTestsMap = {...previousTestsMap};
+      if (remainingTests.length) {
+        nextTestsMap[selectedPatientId] = remainingTests;
+      } else {
+        delete nextTestsMap[selectedPatientId];
+      }
+
+      return nextTestsMap;
+    });
+
+    if (isSamePanelCompany(selectedPanelCompany, panelCompanyToRemove)) {
+      closePanelCompanyModal();
+    }
+  };
 
   const calendarDays = getCalendarDays(dobCalendarMonth);
   const cancelCalendarDays = getCalendarDays(cancelCalendarMonth);
@@ -1449,7 +1695,7 @@ export default function AppointmentDetailsScreen({
                 <TextInput
                   value={panelCompanySearch}
                   onChangeText={setPanelCompanySearch}
-                  placeholder="Search by company, details, or CompCatID"
+                  placeholder="Search panel company"
                   placeholderTextColor={BRAND.textMuted}
                   style={styles.panelCompanySearchInput}
                 />
@@ -1496,10 +1742,11 @@ export default function AppointmentDetailsScreen({
                                 {item.details}
                               </Text>
                             ) : null}
-                            <Text style={styles.panelCompanyMeta}>
-                              CompCatID: {item.compCatId || 'N/A'} | CenterID:{' '}
-                              {item.centerId || 'N/A'}
-                            </Text>
+                            {item.centerId ? (
+                              <Text style={styles.panelCompanyMeta}>
+                                Center: {item.centerId}
+                              </Text>
+                            ) : null}
                           </View>
                           {item.billingChargeMode ? (
                             <View style={styles.panelCompanyModeChip}>
@@ -1540,36 +1787,6 @@ export default function AppointmentDetailsScreen({
                         </Text>
                         <Text style={styles.selectedPanelCompanyFieldValue}>
                           {selectedPanelCompany.name || 'N/A'}
-                        </Text>
-                      </View>
-                      <View style={styles.selectedPanelCompanyField}>
-                        <Text style={styles.selectedPanelCompanyFieldLabel}>
-                          Billing Category ID
-                        </Text>
-                        <Text style={styles.selectedPanelCompanyFieldValue}>
-                          {selectedPanelCompany.compCatId || 'N/A'}
-                        </Text>
-                      </View>
-                    </View>
-                    <View
-                      style={[
-                        styles.selectedPanelCompanyFieldRow,
-                        isNarrowScreen && styles.selectedPanelCompanyFieldRowStacked,
-                      ]}>
-                      <View style={styles.selectedPanelCompanyField}>
-                        <Text style={styles.selectedPanelCompanyFieldLabel}>
-                          Billing Category
-                        </Text>
-                        <Text style={styles.selectedPanelCompanyFieldValue}>
-                          {selectedPanelCompany.details || 'N/A'}
-                        </Text>
-                      </View>
-                      <View style={styles.selectedPanelCompanyField}>
-                        <Text style={styles.selectedPanelCompanyFieldLabel}>
-                          Charge Mode
-                        </Text>
-                        <Text style={styles.selectedPanelCompanyFieldValue}>
-                          {selectedPanelCompany.billingChargeMode || 'N/A'}
                         </Text>
                       </View>
                     </View>
@@ -1859,35 +2076,8 @@ export default function AppointmentDetailsScreen({
     }
   };
 
-  const RequiredLabel = ({children}) => (
-    <Text style={styles.addPatientFieldLabel}>
-      {children}
-      <Text style={styles.requiredFieldAsterisk}> *</Text>
-    </Text>
-  );
-
   return (
     <>
-      <Modal
-        transparent
-        animationType="fade"
-        visible={isFetchingPanelCompanies}
-        onRequestClose={() => {}}>
-        <View style={styles.loadingOverlay}>
-          <View style={styles.loadingCard}>
-            <View style={styles.loadingSpinnerWrap}>
-              <ActivityIndicator size="large" color={BRAND.primary} />
-            </View>
-            <Text style={[styles.loadingTitle, styles.loadingTitleCompact]}>
-              Loading Panel Companies
-            </Text>
-            <Text style={styles.loadingMessage}>
-              Please wait... opening in {panelCompanyCountdown}s
-            </Text>
-          </View>
-        </View>
-      </Modal>
-
       <Modal
         transparent
         animationType="slide"
@@ -1941,7 +2131,7 @@ export default function AppointmentDetailsScreen({
 
               <View style={styles.cancelFormSection}>
                 <View style={styles.cancelFieldGroup}>
-                  <RequiredLabel>Cancellation Reason</RequiredLabel>
+                  <RequiredLabel styles={styles}>Cancellation Reason</RequiredLabel>
                   <View style={styles.cancelReasonChipRow}>
                     {CANCELLATION_REASON_OPTIONS.map(reason => {
                       const isSelected = cancellationReason === reason;
@@ -2038,7 +2228,7 @@ export default function AppointmentDetailsScreen({
                           isNarrowScreen && styles.addPatientFieldRowStacked,
                         ]}>
                         <View style={styles.addPatientFieldHalf}>
-                          <RequiredLabel>New Visit Date</RequiredLabel>
+                          <RequiredLabel styles={styles}>New Visit Date</RequiredLabel>
                           <TouchableOpacity
                             activeOpacity={0.85}
                             style={styles.cancelSelectButton}
@@ -2059,7 +2249,7 @@ export default function AppointmentDetailsScreen({
                           </TouchableOpacity>
                         </View>
                         <View style={styles.addPatientFieldHalf}>
-                          <RequiredLabel>New Time Slot</RequiredLabel>
+                          <RequiredLabel styles={styles}>New Time Slot</RequiredLabel>
                           <TouchableOpacity
                             activeOpacity={0.85}
                             style={styles.cancelSelectButton}
@@ -2163,7 +2353,7 @@ export default function AppointmentDetailsScreen({
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.addPatientModalContent}>
               <View style={styles.completeFormSection}>
-                <RequiredLabel>Panel Companies</RequiredLabel>
+                <RequiredLabel styles={styles}>Panel Companies</RequiredLabel>
                 {completeBookingPanelCompanies.length ? (
                   <View style={styles.completePanelCompanyBadgeWrap}>
                     {completeBookingPanelCompanies.map(company => {
@@ -2199,7 +2389,81 @@ export default function AppointmentDetailsScreen({
               </View>
 
               <View style={styles.completeFormSection}>
-                <RequiredLabel>Payment Mode</RequiredLabel>
+                <RequiredLabel styles={styles}>Billing Summary</RequiredLabel>
+                <View style={styles.completeBillingSummaryGrid}>
+                  <View style={styles.completeBillingSummaryCard}>
+                    <Text style={styles.completeBillingSummaryLabel}>Total</Text>
+                    <Text style={styles.completeBillingSummaryValue}>
+                      Rs. {completeBillingTotal.toFixed(2)}
+                    </Text>
+                  </View>
+                  <View style={styles.completeBillingSummaryCard}>
+                    <Text style={styles.completeBillingSummaryLabel}>Discount</Text>
+                    <Text style={styles.completeBillingSummaryValue}>
+                      Rs. {completeDiscountAmount.toFixed(2)}
+                    </Text>
+                  </View>
+                  <View style={styles.completeBillingSummaryCard}>
+                    <Text style={styles.completeBillingSummaryLabel}>Amount Paid</Text>
+                    <Text style={styles.completeBillingSummaryValue}>
+                      Rs. {completeAmountPaid.toFixed(2)}
+                    </Text>
+                  </View>
+                  <View style={styles.completeBillingSummaryCard}>
+                    <Text style={styles.completeBillingSummaryLabel}>Balance</Text>
+                    <Text style={styles.completeBillingSummaryValue}>
+                      Rs. {completeBalanceAmount.toFixed(2)}
+                    </Text>
+                  </View>
+                </View>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={[
+                    styles.completeSecondaryButton,
+                    isAdditionalDiscountEnabled &&
+                      styles.completeSecondaryButtonActive,
+                  ]}
+                  onPress={() =>
+                    setIsAdditionalDiscountEnabled(previousValue => !previousValue)
+                  }>
+                  <Ionicons
+                    name="pricetag-outline"
+                    size={16}
+                    style={[
+                      styles.completeSecondaryButtonIcon,
+                      isAdditionalDiscountEnabled &&
+                        styles.completeSecondaryButtonIconActive,
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.completeSecondaryButtonText,
+                      isAdditionalDiscountEnabled &&
+                        styles.completeSecondaryButtonTextActive,
+                    ]}>
+                    Additional Discount
+                  </Text>
+                </TouchableOpacity>
+                {isAdditionalDiscountEnabled ? (
+                  <View style={styles.completeCashInputWrap}>
+                    <Text style={styles.completeCashPrefix}>Rs.</Text>
+                    <TextInput
+                      value={completeAdditionalDiscount}
+                      onChangeText={setCompleteAdditionalDiscount}
+                      keyboardType="numeric"
+                      placeholder="Enter additional discount"
+                      placeholderTextColor="#7B8AA3"
+                      style={styles.completeCashInput}
+                    />
+                  </View>
+                ) : null}
+                <Text style={styles.completeBillingHintText}>
+                  {completeBillingTests.length} tests included in billing summary
+                </Text>
+              </View>
+
+              <View style={styles.completeFormSection}>
+                <RequiredLabel styles={styles}>Payment Mode</RequiredLabel>
                 <View style={styles.cancelSegmentedRow}>
                   {COMPLETE_PAYMENT_MODE_OPTIONS.map(mode => {
                     const isSelected = completePaymentMode === mode;
@@ -2227,23 +2491,36 @@ export default function AppointmentDetailsScreen({
               </View>
 
               <View style={styles.completeFormSection}>
-                <RequiredLabel>Collected Cash</RequiredLabel>
+                <RequiredLabel styles={styles}>Amount Paid</RequiredLabel>
                 <View style={styles.completeCashInputWrap}>
                   <Text style={styles.completeCashPrefix}>Rs.</Text>
                   <TextInput
                     value={completeCollectedCash}
                     onChangeText={setCompleteCollectedCash}
                     keyboardType="numeric"
-                    placeholder="Enter collected cash"
+                    placeholder="Enter amount paid"
                     placeholderTextColor="#7B8AA3"
                     style={styles.completeCashInput}
                   />
                 </View>
               </View>
 
+              <View style={styles.completeFormSection}>
+                <Text style={styles.addPatientFieldLabel}>Remarks</Text>
+                <TextInput
+                  value={completeRemarks}
+                  onChangeText={setCompleteRemarks}
+                  placeholder="Add billing or reporting remarks"
+                  placeholderTextColor="#7B8AA3"
+                  multiline
+                  textAlignVertical="top"
+                  style={styles.completeRemarksInput}
+                />
+              </View>
+
               {shouldShowCompleteProofUpload ? (
                 <View style={styles.completeFormSection}>
-                  <RequiredLabel>Credit Proof / Prescription</RequiredLabel>
+                  <RequiredLabel styles={styles}>Credit Proof / Prescription</RequiredLabel>
                   <TouchableOpacity
                     activeOpacity={0.85}
                     style={styles.completeUploadBox}
@@ -2481,50 +2758,21 @@ export default function AppointmentDetailsScreen({
           </View>
         </View>
 
-        <View style={styles.bookingDetailLocationCard}>
-          <View style={styles.bookingDetailLocationIconWrap}>
-            <Ionicons
-              name="location-outline"
-              size={18}
-              style={styles.bookingDetailLocationIcon}
-            />
-          </View>
-          <View style={styles.bookingDetailLocationContent}>
-            <Text style={styles.bookingDetailLocationTitle}>Visit location</Text>
-            <Text style={styles.bookingDetailAddressText}>
-              {resolvedAddress || 'Address not available'}
-            </Text>
-            {selectedBooking.address.accessNotes &&
-            selectedBooking.address.accessNotes !== 'N/A' ? (
-              <Text style={styles.bookingDetailAddressNote}>
-                Access Notes: {selectedBooking.address.accessNotes}
-              </Text>
-            ) : null}
-          </View>
-        </View>
+        <BookingLocationCard
+          styles={styles}
+          address={resolvedAddress}
+          accessNotes={selectedBooking.address.accessNotes}
+          disabled={!resolvedAddress && (!latitude || !longitude)}
+          onOpenLocation={handleOpenLocation}
+        />
 
         {isTerminalBooking ? (
-          <View
-            style={[
-              styles.detailTerminalStatusCard,
-              isCancelledBooking && styles.detailTerminalStatusCardCancelled,
-            ]}>
-            <Ionicons
-              name={isCompletedBooking ? 'checkmark-circle' : 'close-circle'}
-              size={18}
-              style={[
-                styles.detailTerminalStatusIcon,
-                isCancelledBooking && styles.detailTerminalStatusIconCancelled,
-              ]}
-            />
-            <Text
-              style={[
-                styles.detailTerminalStatusText,
-                isCancelledBooking && styles.detailTerminalStatusTextCancelled,
-              ]}>
-              {terminalBookingMessage}
-            </Text>
-          </View>
+          <TerminalStatusCard
+            styles={styles}
+            isCompleted={isCompletedBooking}
+            isCancelled={isCancelledBooking}
+            message={terminalBookingMessage}
+          />
         ) : null}
       </View>
 
@@ -2588,7 +2836,7 @@ export default function AppointmentDetailsScreen({
           reportCourierValue={
             patientId && patientReportCourierMap[patientId]
               ? patientReportCourierMap[patientId]
-              : patient.reportCourier
+              : ''
           }
           onAddPanelCompany={
             canUseThisPatientActions ? handlePatientAddPanelCompany : undefined
@@ -2601,12 +2849,11 @@ export default function AppointmentDetailsScreen({
             canUseThisPatientActions ? onRemovePatientSelectedTest : undefined
           }
           isAddPanelCompanyDisabled={
-            Boolean(addingTestPatientId) || isFetchingPanelCompanies
+            Boolean(addingTestPatientId)
           }
           isCancelBookingDisabled={Boolean(cancellingPatientId)}
           addPanelCompanyLabel={
-            String(addingTestPatientId) === String(getPatientMutationId(patient)) ||
-            isFetchingPanelCompanies
+            String(addingTestPatientId) === String(getPatientMutationId(patient))
               ? 'Loading...'
               : 'Add Company'
           }
@@ -2781,7 +3028,7 @@ export default function AppointmentDetailsScreen({
                 </>
               ) : (
                 <>
-              <RequiredLabel>Title</RequiredLabel>
+              <RequiredLabel styles={styles}>Title</RequiredLabel>
               <View style={styles.addPatientChipGrid}>
                 {TITLE_OPTIONS.map(title => {
                   const isSelected = patientForm.title === title;
@@ -2807,7 +3054,7 @@ export default function AppointmentDetailsScreen({
               </View>
 
               <View style={styles.addPatientInputGroup}>
-                <RequiredLabel>Full Name</RequiredLabel>
+                <RequiredLabel styles={styles}>Full Name</RequiredLabel>
                 <TextInput
                   value={patientForm.fullName}
                   onChangeText={value => updatePatientFormField('fullName', value)}
@@ -2823,7 +3070,7 @@ export default function AppointmentDetailsScreen({
                   isNarrowScreen && styles.addPatientFieldRowStacked,
                 ]}>
                 <View style={styles.addPatientFieldHalf}>
-                  <RequiredLabel>Gender</RequiredLabel>
+                  <RequiredLabel styles={styles}>Gender</RequiredLabel>
                   {isGenderEditable ? (
                     <View style={styles.addPatientGenderChipRow}>
                       {GENDER_OPTIONS.map(gender => {
@@ -2870,7 +3117,7 @@ export default function AppointmentDetailsScreen({
               </View>
 
               <View style={styles.addPatientInputGroup}>
-                <RequiredLabel>Date of Birth</RequiredLabel>
+                <RequiredLabel styles={styles}>Date of Birth</RequiredLabel>
                 <TouchableOpacity
                   activeOpacity={0.85}
                   style={styles.addPatientDatePickerButton}
@@ -2892,7 +3139,7 @@ export default function AppointmentDetailsScreen({
               </View>
 
               <View style={styles.addPatientInputGroup}>
-                <RequiredLabel>Primary Mobile</RequiredLabel>
+                <RequiredLabel styles={styles}>Primary Mobile</RequiredLabel>
                 <TextInput
                   value={patientForm.primaryMobile}
                   onChangeText={value =>
@@ -3001,7 +3248,7 @@ export default function AppointmentDetailsScreen({
                   />
                 </View>
                 <View style={styles.addPatientFieldHalf}>
-                  <RequiredLabel>Panel</RequiredLabel>
+                  <RequiredLabel styles={styles}>Panel</RequiredLabel>
                   <TextInput
                     value={patientForm.panelCompany}
                     onChangeText={value =>
@@ -3459,3 +3706,6 @@ export default function AppointmentDetailsScreen({
     </>
   );
 }
+
+export default React.memo(AppointmentDetailsScreen);
+

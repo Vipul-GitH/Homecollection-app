@@ -124,7 +124,7 @@ export default function SplashScreen({navigation}: SplashScreenProps) {
         } else {
           navigation?.replace?.('Login');
         }
-      } catch (error) {
+      } catch {
         navigation?.replace?.('Login');
       }
     };

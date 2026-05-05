@@ -1,10 +1,14 @@
 import {
   getDatabasePanelCatalogByCompanyResponse,
+  getDatabaseMatchedPanelCompaniesForPatientResponse,
   getDatabasePanelCompaniesResponse,
 } from './panelCatalogDatabase';
 
 export const getLocalPanelCompaniesResponse = async () =>
   getDatabasePanelCompaniesResponse();
 
-export const getLocalPanelCatalogByCompanyResponse = async compCatId =>
-  getDatabasePanelCatalogByCompanyResponse(compCatId);
+export const getLocalMatchedPanelCompaniesResponse = async patient =>
+  getDatabaseMatchedPanelCompaniesForPatientResponse(patient);
+
+export const getLocalPanelCatalogByCompanyResponse = async panelCompany =>
+  getDatabasePanelCatalogByCompanyResponse(panelCompany);

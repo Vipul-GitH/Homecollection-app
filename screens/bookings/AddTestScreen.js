@@ -17,7 +17,6 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import {
-  findMatchingPanelCompanies,
   normalizePanelCompanyItems,
 } from './appointmentDetails/helpers';
 
@@ -28,9 +27,12 @@ const toStableValue = value =>
 
 const getPanelIdentity = panelCompany =>
   [
+    toStableValue(panelCompany?.panelCode),
+    toStableValue(panelCompany?.panelAbarid).toUpperCase(),
     toStableValue(panelCompany?.id),
     toStableValue(panelCompany?.compCatId),
     toStableValue(panelCompany?.centerId),
+    toStableValue(panelCompany?.atype).toUpperCase(),
     toStableValue(panelCompany?.name).toLowerCase(),
   ].join('|');
 
@@ -98,6 +100,22 @@ const isSamePanelCompany = (leftCompany, rightCompany) => {
     return true;
   }
 
+  const leftPanelCode = toStableValue(leftCompany?.panelCode);
+  const rightPanelCode = toStableValue(rightCompany?.panelCode);
+  const leftPanelAbarid = toStableValue(leftCompany?.panelAbarid).toUpperCase();
+  const rightPanelAbarid = toStableValue(rightCompany?.panelAbarid).toUpperCase();
+
+  if (
+    leftPanelCode &&
+    rightPanelCode &&
+    leftPanelAbarid &&
+    rightPanelAbarid &&
+    leftPanelCode === rightPanelCode &&
+    leftPanelAbarid === rightPanelAbarid
+  ) {
+    return true;
+  }
+
   return (
     toStableValue(leftCompany?.compCatId) ===
       toStableValue(rightCompany?.compCatId) &&
@@ -110,7 +128,7 @@ const isSamePanelCompany = (leftCompany, rightCompany) => {
   );
 };
 
-export default function AddTestScreen({
+function AddTestScreen({
   selectedPatient,
   selectedPanelCompany,
   selectedTests,
@@ -119,6 +137,7 @@ export default function AddTestScreen({
   onPanelCompanySelect,
   onToggleSelectedTest,
   onRemoveSelectedTest,
+  onLocalDatabaseLoadingChange,
 }) {
   const [isLoadingCompanies, setIsLoadingCompanies] = useState(false);
   const [panelCompanies, setPanelCompanies] = useState([]);
@@ -271,7 +290,15 @@ export default function AddTestScreen({
         return;
       }
 
+      if (selectedPanelCompany) {
+        setPanelCompanies([selectedPanelCompany]);
+        return;
+      }
+
       setIsLoadingCompanies(true);
+      onLocalDatabaseLoadingChange?.(
+        'Loading panel companies from local database...',
+      );
 
       try {
         const responseData = await onAddTestPatient(selectedPatient);
@@ -280,27 +307,14 @@ export default function AddTestScreen({
         }
 
         const normalizedItems = normalizePanelCompanyItems(responseData);
-        const matchedCompanies = findMatchingPanelCompanies(
-          normalizedItems,
-          selectedPatient?.panelCompany,
-        );
-
-        if (selectedPanelCompany) {
-          const matchingSelectedCompany =
-            normalizedItems.find(company =>
-              isSamePanelCompany(company, selectedPanelCompany),
-            ) || selectedPanelCompany;
-
-          setPanelCompanies([matchingSelectedCompany]);
-          return;
-        }
 
         setPanelCompanies(
-          matchedCompanies.length ? matchedCompanies : normalizedItems.slice(0, 6),
+          normalizedItems.length ? normalizedItems : [],
         );
       } finally {
         if (isMounted) {
           setIsLoadingCompanies(false);
+          onLocalDatabaseLoadingChange?.('');
         }
       }
     };
@@ -309,8 +323,14 @@ export default function AddTestScreen({
 
     return () => {
       isMounted = false;
+      onLocalDatabaseLoadingChange?.('');
     };
-  }, [onAddTestPatient, selectedPanelCompany, selectedPatient]);
+  }, [
+    onAddTestPatient,
+    onLocalDatabaseLoadingChange,
+    selectedPanelCompany,
+    selectedPatient,
+  ]);
 
   const activeItems = useMemo(() => {
     const normalizedSearch = deferredSearchText.trim().toLowerCase();
@@ -404,9 +424,18 @@ export default function AddTestScreen({
         return;
       }
 
+      if (
+        activePanelCompany &&
+        isSamePanelCompany(activePanelCompany, panelCompany) &&
+        groups.length
+      ) {
+        return;
+      }
+
       const catalogResponse = await onPanelCompanySelect({
         patient: selectedPatient,
         compCatId: panelCompany.compCatId,
+        panelCompany,
       });
 
       const nextGroups = Array.isArray(catalogResponse?.groups)
@@ -429,7 +458,12 @@ export default function AddTestScreen({
       setExpandedTests({});
       setSearchText('');
     },
-    [onPanelCompanySelect, selectedPatient],
+    [
+      activePanelCompany,
+      groups.length,
+      onPanelCompanySelect,
+      selectedPatient,
+    ],
   );
 
   useEffect(() => {
@@ -947,3 +981,5 @@ export default function AddTestScreen({
     </>
   );
 }
+
+export default React.memo(AddTestScreen);

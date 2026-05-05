@@ -5,21 +5,201 @@ const path = require('path');
 
 const TARGET_TABLES = new Set([
   'address',
+  'billingtomodeofreceipt',
   'compcategory',
   'groupmaster',
+  'modeofpayment',
+  'panelrates',
   'subgroup',
   'test',
-  'testspecimen',
-  'panelrates',
+  'testcategory',
   'testprofile',
+  'testprofilebreakuptestsdetails',
+  'testspecimen',
 ]);
 
-const INSERT_RE = /INSERT INTO `([^`]+)` \((.*?)\) VALUES/s;
+const SKIP_TABLES = new Set([
+  'address_allowed_center',
+  'testwarning',
+]);
+
+const SYNC_TABLE_SPECS = {
+  address: {
+    columns: [
+      'sync_key',
+      'CenterID',
+      'Atype',
+      'code',
+      'ABARID',
+      'pname',
+      'desi',
+      'orgname',
+      'address',
+      'address1',
+      'address2',
+      'city',
+      'pin',
+      'area',
+      'ophone',
+      'note',
+      'category',
+      'Aprint',
+      'title',
+      'email',
+      'BillingChargeMode',
+      'updated_at',
+    ],
+    primaryKey: ['CenterID', 'Atype', 'code', 'ABARID'],
+  },
+  billingtomodeofreceipt: {
+    columns: [
+      'BillingToModeOfReceiptID',
+      'ModeID',
+      'CenterID',
+      'Atype',
+      'Code',
+      'DefaultReceiptMode',
+      'updated_at',
+    ],
+    primaryKey: ['BillingToModeOfReceiptID', 'ModeID', 'CenterID', 'Atype', 'Code'],
+  },
+  compcategory: {
+    columns: [
+      'CompCatID',
+      'CatDetails',
+      'createdby',
+      'Modifiedby',
+      'CreatedDatetime',
+      'ModifiedDateTime',
+      'IPAddress_SystemName',
+      'Modified_IPAddress',
+      'Active',
+      'ExpiryDate',
+      'ApplyFromDate',
+      'LinkedCatId',
+      'PartialPaymentfrompatient',
+      'StandardMRP',
+      'TurnOverAmountFrom',
+      'TurnOverAmountTo',
+      'Apply_Date',
+      'Expiry_Date',
+      'updated_at',
+    ],
+    primaryKey: ['CompCatID'],
+  },
+  groupmaster: {
+    columns: ['Gcode', 'Description', 'updated_at'],
+    primaryKey: ['Gcode'],
+  },
+  modeofpayment: {
+    columns: ['ModeID', 'PaymentMode', 'DefaultMode', 'updated_at'],
+    primaryKey: ['ModeID'],
+  },
+  panelrates: {
+    columns: [
+      'CompCatID',
+      'GCode',
+      'SCode',
+      'TestCode',
+      'CTestCode',
+      'CTestName',
+      'Charge',
+      'MRP',
+      'DiscountAllowed',
+      'MaxDiscount',
+      'MaximumpercentageAllowed',
+      'FBillingRDiscountPrecent',
+      'CenterID',
+      'BookedFlag',
+      'updated_at',
+    ],
+    primaryKey: ['CompCatID', 'GCode', 'SCode', 'TestCode', 'CTestCode', 'CenterID'],
+  },
+  subgroup: {
+    columns: ['Gcode', 'Scode', 'Description', 'TestCategoryID', 'SpecimenID', 'updated_at'],
+    primaryKey: ['Gcode', 'Scode'],
+  },
+  test: {
+    columns: [
+      'Gcode',
+      'Scode',
+      'TestCode',
+      'Testcode1',
+      'Description',
+      'Profile',
+      'TestAs',
+      'SpecimenID',
+      'TestCategoryID',
+      'updated_at',
+    ],
+    primaryKey: ['Gcode', 'Scode', 'TestCode'],
+  },
+  testcategory: {
+    columns: ['TestCategoryID', 'TestCategory', 'DiscountPercentage', 'updated_at'],
+    primaryKey: ['TestCategoryID'],
+  },
+  testprofile: {
+    columns: [
+      'ProfileCodeID',
+      'Gcode',
+      'SCode',
+      'ProfileCode',
+      'TestCode',
+      'TestAmount',
+      'IPAddress_SystemName',
+      'Modified_IPAddress',
+      'ProfileCode1',
+      'updated_at',
+    ],
+    primaryKey: ['ProfileCodeID', 'Gcode', 'SCode', 'ProfileCode', 'TestCode'],
+  },
+  testprofilebreakuptestsdetails: {
+    columns: ['Gcode', 'SCode', 'PTCode', 'ProfileTestCode', 'TestCode', 'updated_at'],
+    primaryKey: ['Gcode', 'SCode', 'PTCode', 'ProfileTestCode', 'TestCode'],
+  },
+  testspecimen: {
+    columns: [
+      'SpecimenID',
+      'SpName',
+      'Sampletype',
+      'SPDetails',
+      'ContainerID',
+      'SampleCollection',
+      'SampleRecieve',
+      'StoreSample',
+      'updated_at',
+    ],
+    primaryKey: ['SpecimenID'],
+  },
+};
+
+const INSERT_RE = /INSERT INTO `([^`]+)`(?:\s*\((.*?)\))?\s+VALUES/s;
+const CREATE_TABLE_RE = /CREATE TABLE `([^`]+)` \((.*?)\)\s*ENGINE=/gs;
+
+const NULL_CHAR_RE = new RegExp(String.fromCharCode(0), 'g');
+
+const readSqlFile = sqlPath => {
+  const buffer = fs.readFileSync(sqlPath);
+
+  if (buffer[0] === 0xff && buffer[1] === 0xfe) {
+    return buffer.toString('utf16le', 2);
+  }
+
+  if (buffer[0] === 0xfe && buffer[1] === 0xff) {
+    throw new Error(`Unsupported UTF-16 BE SQL file: ${sqlPath}`);
+  }
+
+  if (buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+    return buffer.toString('utf8', 3);
+  }
+
+  return buffer.toString('utf8');
+};
 
 const cleanText = value =>
   value === null || value === undefined
     ? ''
-    : String(value).replace(/\u0000/g, '').trim();
+    : String(value).replace(NULL_CHAR_RE, '').trim();
 
 const toInt = value => {
   const parsed = Number(cleanText(value));
@@ -150,30 +330,146 @@ const sqlValue = value => {
   return `'${String(value).replace(/'/g, "''")}'`;
 };
 
-const writeInsert = (stream, table, columns, values) => {
+const quoteIdent = value => `"${String(value).replace(/"/g, '""')}"`;
+
+const toMysqlDateTime = date => {
+  const pad = value => String(value).padStart(2, '0');
+
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join('-') + ` ${[
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join(':')}`;
+};
+
+const writeInsert = (stream, table, columns, values, conflict = 'IGNORE') => {
   stream.write(
-    `INSERT OR IGNORE INTO ${table} (${columns.join(', ')}) VALUES (${values
+    `INSERT OR ${conflict} INTO ${quoteIdent(table)} (${columns
+      .map(quoteIdent)
+      .join(', ')}) VALUES (${values
       .map(sqlValue)
       .join(', ')});\n`,
   );
 };
 
-const parseInsertBlock = block => {
+const buildAddressSyncKeyFromValues = ({centerId, atype, code, abarid, pname, category}) => {
+  if (code && abarid) {
+    return [centerId, atype, code, abarid].join('|');
+  }
+
+  return [centerId, atype, pname, category].join('|');
+};
+
+const buildAddressSyncKeyFromRow = (rowIndex, row) =>
+  buildAddressSyncKeyFromValues({
+    centerId: cleanText(row[rowIndex.CenterID]),
+    atype: cleanText(row[rowIndex.Atype]),
+    code: cleanText(row[rowIndex.code]),
+    abarid: cleanText(row[rowIndex.ABARID]),
+    pname: cleanText(row[rowIndex.pname]),
+    category: cleanText(row[rowIndex.category]),
+  });
+
+const COLUMN_ALIASES = {
+  address: {
+    ophone: ['Omobile'],
+  },
+};
+
+const getRowValue = (tableName, rowIndex, row, column) => {
+  const directIndex = rowIndex[column];
+  if (directIndex !== undefined) {
+    return cleanText(row[directIndex]);
+  }
+
+  const alias = COLUMN_ALIASES[tableName]?.[column]?.find(name => rowIndex[name] !== undefined);
+  return alias === undefined ? null : cleanText(row[rowIndex[alias]]);
+};
+
+const writeRawSyncInsert = (stream, tableName, rowIndex, row, seedTs) => {
+  const spec = SYNC_TABLE_SPECS[tableName];
+
+  if (!spec) {
+    return;
+  }
+
+  const values = spec.columns.map(column => {
+    if (column === 'updated_at') {
+      return seedTs;
+    }
+
+    if (tableName === 'address' && column === 'sync_key') {
+      return buildAddressSyncKeyFromRow(rowIndex, row);
+    }
+
+    return getRowValue(tableName, rowIndex, row, column);
+  });
+
+  writeInsert(stream, tableName, spec.columns, values, 'REPLACE');
+};
+
+const parseCreateTableColumns = sqlPath => {
+  const content = readSqlFile(sqlPath);
+  const columnsByTable = new Map();
+  let match;
+
+  while ((match = CREATE_TABLE_RE.exec(content)) !== null) {
+    const [, tableName, body] = match;
+    const columns = body
+      .split(/\r?\n/)
+      .map(line => line.trim().match(/^`([^`]+)`\s+/)?.[1])
+      .filter(Boolean);
+
+    columnsByTable.set(tableName, columns);
+  }
+
+  return columnsByTable;
+};
+
+const parseInsertBlock = (block, columnsByTable) => {
   const match = block.match(INSERT_RE);
   if (!match) {
     return null;
   }
 
+  const tableName = match[1];
+  const columns = match[2]
+    ? match[2].split(',').map(column => column.trim().replace(/`/g, ''))
+    : columnsByTable.get(tableName);
+
+  if (!columns?.length) {
+    return null;
+  }
+
   const valuesSql = block.slice(match.index + match[0].length).trim().replace(/;$/, '');
   return {
-    tableName: match[1],
-    columns: match[2].split(',').map(column => column.trim().replace(/`/g, '')),
+    tableName,
+    columns,
     rows: parseRows(valuesSql),
   };
 };
 
+const findSqlStatementEnd = (content, startIndex) => {
+  const crlfEnd = content.indexOf(';\r\n', startIndex);
+  const lfEnd = content.indexOf(';\n', startIndex);
+
+  if (crlfEnd === -1) {
+    return lfEnd;
+  }
+
+  if (lfEnd === -1) {
+    return crlfEnd;
+  }
+
+  return Math.min(crlfEnd, lfEnd);
+};
+
 const iterInsertBlocks = function* (sqlPath) {
-  const content = fs.readFileSync(sqlPath, 'utf8');
+  const content = readSqlFile(sqlPath);
   let offset = 0;
 
   while (offset < content.length) {
@@ -195,20 +491,52 @@ const iterInsertBlocks = function* (sqlPath) {
     }
 
     const tableName = match[1];
-    const statementEnd = content.indexOf(';\n', headerEnd);
+    const statementEnd = findSqlStatementEnd(content, headerEnd);
     if (statementEnd === -1) {
       return;
     }
 
-    if (TARGET_TABLES.has(tableName)) {
+    if (!SKIP_TABLES.has(tableName) && TARGET_TABLES.has(tableName)) {
       yield content.slice(insertIndex, statementEnd + 1);
     }
 
-    offset = statementEnd + 2;
+    offset = statementEnd + 1;
   }
 };
 
-const schemaSql = version => `
+const rawSyncSchemaSql = () =>
+  Object.entries(SYNC_TABLE_SPECS)
+    .map(([tableName, spec]) => {
+      const columns = spec.columns
+        .map(column => `${quoteIdent(column)} TEXT`)
+        .join(',\n  ');
+      const primaryKey = spec.primaryKey.map(quoteIdent).join(', ');
+
+      return `
+DROP TABLE IF EXISTS ${quoteIdent(tableName)};
+CREATE TABLE ${quoteIdent(tableName)} (
+  ${columns},
+  PRIMARY KEY (${primaryKey})
+);
+`;
+    })
+    .join('\n');
+
+const writeSyncMetaBaseline = (stream, seedTs) => {
+  Object.keys(SYNC_TABLE_SPECS).forEach(tableName => {
+    stream.write(`
+INSERT OR REPLACE INTO sync_meta (table_name, last_synced_at)
+SELECT ${sqlValue(tableName)},
+       COALESCE(NULLIF(MAX(updated_at), ''), ${sqlValue(seedTs)})
+FROM ${quoteIdent(tableName)}
+WHERE TRIM(updated_at) != '';
+INSERT OR IGNORE INTO sync_meta (table_name, last_synced_at)
+VALUES (${sqlValue(tableName)}, ${sqlValue(seedTs)});
+`);
+  });
+};
+
+const schemaSql = (version, seedTs) => `
 PRAGMA journal_mode = OFF;
 PRAGMA synchronous = OFF;
 PRAGMA foreign_keys = OFF;
@@ -223,11 +551,22 @@ DROP TABLE IF EXISTS tests;
 DROP TABLE IF EXISTS test_specimens;
 DROP TABLE IF EXISTS panel_rates;
 DROP TABLE IF EXISTS test_profiles;
+DROP TABLE IF EXISTS sync_meta;
+DROP TABLE IF EXISTS sync_status;
 
 CREATE TABLE catalog_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE sync_meta (table_name TEXT PRIMARY KEY, last_synced_at TEXT NOT NULL);
+CREATE TABLE sync_status (
+  table_name TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  message TEXT,
+  updated_at TEXT NOT NULL
+);
+${rawSyncSchemaSql()}
 CREATE TABLE panel_categories (comp_cat_id INTEGER PRIMARY KEY, cat_details TEXT);
 CREATE TABLE panel_companies (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sync_key TEXT,
   pname TEXT,
   comp_cat_id INTEGER NOT NULL,
   cat_details TEXT,
@@ -278,6 +617,12 @@ INSERT OR REPLACE INTO catalog_meta (key, value) VALUES ('version', ${sqlValue(v
 const indexesSql = `
 CREATE INDEX idx_panel_companies_comp_cat_id ON panel_companies(comp_cat_id);
 CREATE INDEX idx_panel_companies_search_key ON panel_companies(search_key);
+CREATE UNIQUE INDEX idx_address_sync_key
+  ON address(sync_key)
+  WHERE sync_key IS NOT NULL AND sync_key != '';
+CREATE UNIQUE INDEX idx_panel_companies_sync_key
+  ON panel_companies(sync_key)
+  WHERE sync_key IS NOT NULL AND sync_key != '';
 CREATE INDEX idx_panel_rates_company_group_subgroup
   ON panel_rates(comp_cat_id, gcode, scode, booked_flag);
 CREATE INDEX idx_panel_rates_company_test
@@ -294,7 +639,7 @@ const getArg = (name, fallback = '') => {
   return index >= 0 ? process.argv[index + 1] || fallback : fallback;
 };
 
-const buildDatabase = ({input, output, version, sqlite3Path}) => {
+const buildDatabase = ({input, output, version, sqlite3Path, seedTs}) => {
   const outputDir = path.dirname(output);
   fs.mkdirSync(outputDir, {recursive: true});
 
@@ -307,11 +652,12 @@ const buildDatabase = ({input, output, version, sqlite3Path}) => {
   const compCategories = new Map();
   const addressRows = [];
   const counts = {};
+  const columnsByTable = parseCreateTableColumns(input);
 
-  stream.write(schemaSql(version));
+  stream.write(schemaSql(version, seedTs));
 
   for (const block of iterInsertBlocks(input)) {
-    const parsed = parseInsertBlock(block);
+    const parsed = parseInsertBlock(block, columnsByTable);
     if (!parsed) {
       continue;
     }
@@ -319,6 +665,7 @@ const buildDatabase = ({input, output, version, sqlite3Path}) => {
     const {tableName, columns, rows} = parsed;
     const index = Object.fromEntries(columns.map((column, columnIndex) => [column, columnIndex]));
     counts[tableName] = (counts[tableName] || 0) + rows.length;
+    rows.forEach(row => writeRawSyncInsert(stream, tableName, index, row, seedTs));
 
     if (tableName === 'compcategory') {
       rows.forEach(row => {
@@ -334,10 +681,14 @@ const buildDatabase = ({input, output, version, sqlite3Path}) => {
       rows.forEach(row => {
         addressRows.push({
           centerId: toInt(row[index.CenterID]),
+          centerIdText: cleanText(row[index.CenterID]),
+          atype: cleanText(row[index.Atype]),
+          code: cleanText(row[index.code]),
+          abarid: cleanText(row[index.ABARID]),
           pname: cleanText(row[index.pname]),
           compCatId: toInt(row[index.category]),
+          category: cleanText(row[index.category]),
           billingChargeMode: cleanText(row[index.BillingChargeMode]),
-          atype: cleanText(row[index.Atype]),
         });
       });
     } else if (tableName === 'groupmaster') {
@@ -427,8 +778,25 @@ const buildDatabase = ({input, output, version, sqlite3Path}) => {
     writeInsert(
       stream,
       'panel_companies',
-      ['pname', 'comp_cat_id', 'cat_details', 'billing_charge_mode', 'center_id', 'atype', 'search_key'],
       [
+        'sync_key',
+        'pname',
+        'comp_cat_id',
+        'cat_details',
+        'billing_charge_mode',
+        'center_id',
+        'atype',
+        'search_key',
+      ],
+      [
+        buildAddressSyncKeyFromValues({
+          centerId: address.centerIdText,
+          atype: address.atype,
+          code: address.code,
+          abarid: address.abarid,
+          pname: address.pname,
+          category: address.category,
+        }),
         address.pname,
         address.compCatId,
         catDetails,
@@ -447,6 +815,7 @@ const buildDatabase = ({input, output, version, sqlite3Path}) => {
     ]);
   });
 
+  writeSyncMetaBaseline(stream, seedTs);
   stream.write(indexesSql);
   stream.end();
 
@@ -481,13 +850,22 @@ const input = getArg('--input');
 const output = getArg('--output');
 const version = getArg('--version', 'bhasin_7001_v1');
 const sqlite3Path = getArg('--sqlite3', 'sqlite3');
+const seedTs = getArg(
+  '--seed-ts',
+  fs.existsSync(input) ? toMysqlDateTime(fs.statSync(input).mtime) : '',
+);
 
 if (!input || !output) {
-  console.error('Usage: node scripts/build-catalog-db.js --input dump.sql --output catalog_preload.db [--sqlite3 sqlite3.exe]');
+  console.error('Usage: node scripts/build-catalog-db.js --input dump.sql --output catalog_preload.db --seed-ts "2026-05-04 12:56:05" [--sqlite3 sqlite3.exe]');
   process.exit(1);
 }
 
-buildDatabase({input, output, version, sqlite3Path}).catch(error => {
+if (!seedTs) {
+  console.error('Missing --seed-ts. Provide the dump creation timestamp as YYYY-MM-DD HH:MM:SS.');
+  process.exit(1);
+}
+
+buildDatabase({input, output, version, sqlite3Path, seedTs}).catch(error => {
   console.error(error.message || error);
   process.exit(1);
 });

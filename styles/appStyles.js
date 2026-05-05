@@ -97,10 +97,10 @@ const appStyles = StyleSheet.create({
     fontWeight: '800',
     color: BRAND.text,
     marginBottom: 14,
-    letterSpacing: -0.8,
+    letterSpacing: 0,
   },
   subtitle: {fontSize: 15, lineHeight: 24, color: BRAND.textMuted},
-  titleCompact: {fontSize: 30, lineHeight: 36},
+  titleCompact: {fontSize: 26, lineHeight: 32},
   card: {
     backgroundColor: BRAND.surface,
     borderRadius: 30,
@@ -291,13 +291,13 @@ const appStyles = StyleSheet.create({
   },
   homeContainer: {flex: 1, backgroundColor: 'transparent', paddingBottom: 16},
   homeContainerTopSpacing: {
-    paddingTop: 40,
+    paddingTop: 30,
   },
   homeContainerTopSpacingCompact: {
-    paddingTop: 28,
+    paddingTop: 18,
   },
   homeContainerCompactPadding: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 10,
   },
   homeContainerRegularPadding: {
     paddingHorizontal: 20,
@@ -306,7 +306,7 @@ const appStyles = StyleSheet.create({
     paddingHorizontal: 28,
   },
   detailScreenContainer: {
-    paddingHorizontal: 12,
+    paddingHorizontal: 8,
   },
   locationBlockedContainer: {
     flex: 1,
@@ -359,6 +359,7 @@ const appStyles = StyleSheet.create({
     minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'nowrap',
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
@@ -431,10 +432,10 @@ const appStyles = StyleSheet.create({
   appHeaderBookingActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 4,
   },
   appHeaderBookingActionButton: {
-    width: 28,
+    width: 30,
     height: 32,
     alignItems: 'center',
     justifyContent: 'center',
@@ -461,7 +462,7 @@ const appStyles = StyleSheet.create({
     lineHeight: 27,
     fontWeight: '800',
     color: BRAND.text,
-    letterSpacing: -0.6,
+    letterSpacing: 0,
   },
   appHeaderSubtitle: {
     fontSize: 14,
@@ -493,7 +494,7 @@ const appStyles = StyleSheet.create({
     color: BRAND.primary,
     lineHeight: 24,
   },
-  homeScrollContent: {flexGrow: 1, paddingBottom: 24},
+  homeScrollContent: {flexGrow: 1, paddingBottom: 96},
   homeScrollContentKeyboardOpen: {paddingBottom: 120},
   homeContentShell: {width: '100%', alignSelf: 'center'},
   homeContentShellWide: {
@@ -518,10 +519,12 @@ const appStyles = StyleSheet.create({
   },
   homeHeaderTopRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 10,
   },
-  homeHeaderText: {flexShrink: 1, paddingRight: 14},
+  homeHeaderText: {flex: 1, minWidth: 0, paddingRight: 8},
   profileChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -592,7 +595,7 @@ const appStyles = StyleSheet.create({
     shadowRadius: 14,
     elevation: 3,
   },
-  logoutButtonCompact: {alignSelf: 'flex-start', marginTop: 14},
+  logoutButtonCompact: {alignSelf: 'flex-start', marginTop: 0},
   logoutIcon: {
     color: BRAND.primary,
   },
@@ -715,7 +718,7 @@ const appStyles = StyleSheet.create({
   },
   contentSurface: {
     backgroundColor: '#FCFDFF',
-    borderRadius: 32,
+    borderRadius: 18,
     paddingHorizontal: 14,
     paddingTop: 18,
     paddingBottom: 8,
@@ -803,7 +806,7 @@ const appStyles = StyleSheet.create({
     fontWeight: '800',
     color: '#ffffff',
     marginBottom: 10,
-    letterSpacing: -0.7,
+    letterSpacing: 0,
   },
   heroText: {fontSize: 15, lineHeight: 24, color: '#f2f5fa'},
   sectionCard: {
@@ -821,9 +824,9 @@ const appStyles = StyleSheet.create({
   },
   appointmentCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    padding: 20,
-    marginBottom: 16,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
     borderWidth: 1,
     borderColor: '#D8E3F5',
     shadowColor: BRAND.shadow,
@@ -834,9 +837,9 @@ const appStyles = StyleSheet.create({
   },
   bookingCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    padding: 20,
-    marginBottom: 16,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
     borderWidth: 1,
     borderColor: '#D8E3F5',
     shadowColor: BRAND.shadow,
@@ -915,8 +918,8 @@ const appStyles = StyleSheet.create({
     color: BRAND.surface,
   },
   bookingPrimaryText: {
-    fontSize: 18,
-    lineHeight: 24,
+    fontSize: 16,
+    lineHeight: 22,
     fontWeight: '700',
     color: BRAND.text,
     marginBottom: 12,
@@ -1341,6 +1344,7 @@ const appStyles = StyleSheet.create({
   },
   bookingDetailQuickActionRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
     padding: 12,
     borderBottomWidth: 1,
@@ -1351,6 +1355,7 @@ const appStyles = StyleSheet.create({
   },
   bookingDetailQuickAction: {
     flex: 1,
+    flexBasis: 140,
     minHeight: 52,
     borderRadius: 11,
     flexDirection: 'row',
@@ -1479,6 +1484,7 @@ const appStyles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 11,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
@@ -1520,12 +1526,14 @@ const appStyles = StyleSheet.create({
   bookingPatientsSummaryRow: {
     minHeight: 48,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     paddingHorizontal: 14,
     backgroundColor: '#FFFFFF',
   },
   bookingPatientsSummaryItem: {
     flex: 1,
+    minWidth: 86,
   },
   bookingPatientsSummaryLabel: {
     fontSize: 11,
@@ -1546,7 +1554,7 @@ const appStyles = StyleSheet.create({
   },
   panelCatalogBodyFull: {
     flex: 1,
-    minHeight: 520,
+    minHeight: 320,
   },
   bookingDetailHeaderRow: {
     flexDirection: 'row',
@@ -1605,6 +1613,7 @@ const appStyles = StyleSheet.create({
   },
   bookingDetailLocationCard: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'flex-start',
     gap: 10,
     marginHorizontal: 12,
@@ -2548,7 +2557,7 @@ const appStyles = StyleSheet.create({
   },
   patientDetailCard: {
     backgroundColor: BRAND.surface,
-    borderRadius: 16,
+    borderRadius: 14,
     padding: 0,
     marginBottom: 14,
     borderWidth: 1,
@@ -2647,6 +2656,11 @@ const appStyles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 10,
   },
+  patientCompanyHeaderRowStacked: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 4,
+  },
   patientCompanySectionLabel: {
     fontSize: 12,
     fontWeight: '700',
@@ -2672,8 +2686,12 @@ const appStyles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
   },
+  patientCompanyChipWrapFull: {
+    width: '100%',
+  },
   patientCompanyChip: {
-    maxWidth: 240,
+    flexShrink: 1,
+    maxWidth: '100%',
     borderRadius: 10,
     paddingHorizontal: 9,
     paddingVertical: 7,
@@ -2684,6 +2702,9 @@ const appStyles = StyleSheet.create({
     backgroundColor: '#F5F8FF',
     borderWidth: 1,
     borderColor: '#CDDDF2',
+  },
+  patientCompanyChipFull: {
+    flex: 1,
   },
   patientCompanyChipActive: {
     backgroundColor: BRAND.primary,
@@ -2875,8 +2896,9 @@ const appStyles = StyleSheet.create({
     borderBottomColor: '#E5E7EB',
   },
   patientDetailMetaItem: {
-    flexGrow: 0,
+    flexGrow: 1,
     flexShrink: 1,
+    flexBasis: '30%',
     maxWidth: '48%',
     minHeight: 28,
     flexDirection: 'row',
@@ -2888,6 +2910,10 @@ const appStyles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#E3EAF2',
+  },
+  patientDetailMetaItemStacked: {
+    flexBasis: '100%',
+    maxWidth: '100%',
   },
   patientDetailMetaLabel: {
     fontSize: 10,
@@ -3176,14 +3202,15 @@ const appStyles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(7, 18, 32, 0.58)',
     justifyContent: 'center',
-    paddingHorizontal: 18,
+    paddingHorizontal: 10,
   },
   patientDocumentViewerBackdrop: {
     ...StyleSheet.absoluteFillObject,
   },
   patientDocumentViewerCard: {
-    borderRadius: 24,
-    padding: 18,
+    width: '100%',
+    borderRadius: 16,
+    padding: 12,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: BRAND.border,
@@ -3193,11 +3220,12 @@ const appStyles = StyleSheet.create({
     shadowRadius: 22,
     elevation: 8,
     gap: 16,
+    maxHeight: '94%',
   },
   patientDocumentViewerHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     gap: 12,
   },
   patientDocumentViewerEyebrow: {
@@ -3227,8 +3255,8 @@ const appStyles = StyleSheet.create({
     color: BRAND.primaryStrong,
   },
   patientDocumentViewerImageWrap: {
-    minHeight: 280,
-    borderRadius: 18,
+    minHeight: 300,
+    borderRadius: 12,
     overflow: 'hidden',
     backgroundColor: '#F4F7FF',
     borderWidth: 1,
@@ -3239,18 +3267,55 @@ const appStyles = StyleSheet.create({
   },
   patientDocumentViewerGestureViewport: {
     width: '100%',
-    height: 300,
+    height: 360,
     alignItems: 'center',
     justifyContent: 'center',
   },
   patientDocumentViewerImage: {
     width: '100%',
-    height: 300,
+    height: 360,
+  },
+  patientDocumentViewerTestsSection: {
+    gap: 8,
+  },
+  patientDocumentViewerTestsLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: BRAND.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  patientDocumentViewerTestsScroll: {
+    maxHeight: 112,
+  },
+  patientDocumentViewerTestsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingRight: 4,
+    paddingBottom: 2,
+  },
+  patientDocumentViewerTestChip: {
+    maxWidth: '100%',
+    borderRadius: 9,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    backgroundColor: '#F7FAFF',
+    borderWidth: 1,
+    borderColor: '#D7E3F6',
+  },
+  patientDocumentViewerTestChipText: {
+    maxWidth: 220,
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '700',
+    color: BRAND.primaryStrong,
   },
   patientDocumentViewerFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
     gap: 12,
   },
   patientDocumentViewerNavButton: {
@@ -3413,6 +3478,83 @@ const appStyles = StyleSheet.create({
     paddingVertical: 0,
     fontSize: 14,
     fontWeight: '800',
+    color: BRAND.text,
+  },
+  completeBillingSummaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  completeBillingSummaryCard: {
+    width: '48%',
+    minHeight: 66,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: BRAND.borderStrong,
+  },
+  completeBillingSummaryLabel: {
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '800',
+    color: BRAND.textMuted,
+    textTransform: 'uppercase',
+  },
+  completeBillingSummaryValue: {
+    marginTop: 6,
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: '900',
+    color: BRAND.text,
+  },
+  completeSecondaryButton: {
+    minHeight: 42,
+    borderRadius: 11,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: BRAND.borderStrong,
+  },
+  completeSecondaryButtonActive: {
+    backgroundColor: '#EAF1FF',
+    borderColor: '#C8D9F0',
+  },
+  completeSecondaryButtonIcon: {
+    color: BRAND.primaryStrong,
+  },
+  completeSecondaryButtonIconActive: {
+    color: BRAND.primaryStrong,
+  },
+  completeSecondaryButtonText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: BRAND.primaryStrong,
+  },
+  completeSecondaryButtonTextActive: {
+    color: BRAND.primaryStrong,
+  },
+  completeBillingHintText: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: BRAND.textMuted,
+  },
+  completeRemarksInput: {
+    minHeight: 92,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: BRAND.borderStrong,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
     color: BRAND.text,
   },
   completeUploadBox: {
@@ -4120,7 +4262,7 @@ const appStyles = StyleSheet.create({
     maxHeight: '90%',
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
-    paddingHorizontal: 22,
+    paddingHorizontal: 16,
     paddingTop: 22,
     paddingBottom: 18,
     backgroundColor: BRAND.surface,
@@ -4176,11 +4318,11 @@ const appStyles = StyleSheet.create({
     marginBottom: 5,
   },
   addPatientModalTitle: {
-    fontSize: 26,
-    lineHeight: 31,
+    fontSize: 22,
+    lineHeight: 27,
     fontWeight: '800',
     color: BRAND.text,
-    letterSpacing: -0.6,
+    letterSpacing: 0,
   },
   addPatientFormModalTitle: {
     fontSize: 17,
@@ -4336,7 +4478,7 @@ const appStyles = StyleSheet.create({
   },
   panelCompanyList: {
     flex: 1,
-    minHeight: 420,
+    minHeight: 280,
   },
   panelCatalogHeaderFixed: {
     paddingBottom: 8,
@@ -4357,6 +4499,7 @@ const appStyles = StyleSheet.create({
   },
   selectedPanelCompanyFieldRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
   },
   selectedPanelCompanyFieldRowStacked: {
@@ -4365,6 +4508,7 @@ const appStyles = StyleSheet.create({
   },
   selectedPanelCompanyField: {
     flex: 1,
+    minWidth: 120,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#D2DFF3',
@@ -4397,6 +4541,7 @@ const appStyles = StyleSheet.create({
     borderColor: '#D5E1F4',
     backgroundColor: '#F8FAFF',
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 10,
@@ -4432,6 +4577,7 @@ const appStyles = StyleSheet.create({
     fontWeight: '700',
   },
   panelCompanyModeChip: {
+    alignSelf: 'flex-start',
     minHeight: 28,
     borderRadius: 999,
     paddingHorizontal: 10,
@@ -4976,9 +5122,9 @@ const appStyles = StyleSheet.create({
     borderTopRightRadius: 18,
     borderBottomLeftRadius: 22,
     borderBottomRightRadius: 22,
-    paddingTop: 8,
-    paddingBottom: 7,
-    paddingHorizontal: 10,
+    paddingTop: 6,
+    paddingBottom: 6,
+    paddingHorizontal: 6,
     borderWidth: 1,
     borderColor: '#D1D5DB',
     shadowColor: '#64748B',
@@ -4992,9 +5138,9 @@ const appStyles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 48,
+    minHeight: 44,
     borderRadius: 8,
-    paddingHorizontal: 4,
+    paddingHorizontal: 2,
     paddingVertical: 2,
   },
   tabButtonActive: {
@@ -5025,8 +5171,8 @@ const appStyles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   tabIconImage: {
-    width: 26,
-    height: 26,
+    width: 22,
+    height: 22,
   },
   tabIconImageActive: {
     tintColor: '#ffffff',
@@ -5035,7 +5181,7 @@ const appStyles = StyleSheet.create({
   tabIconTextActive: {color: BRAND.primary},
   tabLabel: {
     maxWidth: '100%',
-    fontSize: 10,
+    fontSize: 9,
     lineHeight: 12,
     fontWeight: '800',
     color: '#111827',

@@ -8,6 +8,8 @@ import {
 } from '../../utils/bookings/sampleTubeMapping';
 
 const {CatalogDatabaseModule} = NativeModules;
+const sampleTubeMappingCache = new Map();
+const sampleTubeMappingRequests = new Map();
 
 const toStableValue = value =>
   value === null || value === undefined ? '' : String(value).trim();
@@ -66,6 +68,17 @@ const parseCatalogKey = catalogKey => {
   return {compCatId, gcode, scode, bookedCode};
 };
 
+const parseFullCatalogCode = code => {
+  const match = toStableValue(code)
+    .toUpperCase()
+    .match(/^(G[^S]+)(S[^T]+)T.+$/);
+
+  return {
+    gcode: match?.[1] || '',
+    scode: match?.[2] || '',
+  };
+};
+
 const getResolvedRootCode = test => {
   const rawCode = getTestCode(test);
   const catalogContext = parseCatalogKey(test?.catalog_key);
@@ -78,11 +91,24 @@ const getResolvedRootCode = test => {
   return catalogCode || rawCode;
 };
 
-export default function SampleCollectionScreen({
+const getSampleTubeMappingCacheKey = rootTests =>
+  JSON.stringify(
+    rootTests.map(test => ({
+      code: test.code,
+      compCatId: test.compCatId,
+      centerId: test.centerId,
+      atype: test.atype,
+      gcode: test.gcode,
+      scode: test.scode,
+    })),
+  );
+
+function SampleCollectionScreen({
   selectedPatient,
   selectedTests,
   styles,
   onCollectSample,
+  onLocalDatabaseLoadingChange,
 }) {
   const [expandedSpecimens, setExpandedSpecimens] = useState({});
   const [selectedSpecimens, setSelectedSpecimens] = useState({});
@@ -165,43 +191,84 @@ export default function SampleCollectionScreen({
     const rootTests = normalizedSelectedTests
       .map(test => {
         const catalogContext = parseCatalogKey(test?.catalog_key);
+        const codeContext = parseFullCatalogCode(getResolvedRootCode(test));
         return {
           code: getResolvedRootCode(test),
           catalogKey: test?.catalog_key || '',
-          gcode: test?.gcode || catalogContext.gcode || '',
-          scode: test?.scode || catalogContext.scode || '',
+          compCatId:
+            test?.panelCompanyId || test?.compCatId || catalogContext.compCatId || '',
+          centerId: test?.centerId || test?.CenterID || '',
+          atype: test?.atype || test?.Atype || '',
+          panelCode: test?.panelCode || test?.panel_code || '',
+          panelAbarid: test?.panelAbarid || test?.panel_abarid || '',
+          gcode: test?.gcode || catalogContext.gcode || codeContext.gcode || '',
+          scode: test?.scode || catalogContext.scode || codeContext.scode || '',
           testCode: test?.test_code || '',
         };
       })
       .filter(test => test.code && test.code !== 'N/A');
 
     if (!rootTests.length || !CatalogDatabaseModule?.getSampleTubeMappingForTestCodes) {
+      onLocalDatabaseLoadingChange?.('');
       setSampleTubeMaps(fallbackMaps);
       return () => {
         isMounted = false;
       };
     }
 
-    CatalogDatabaseModule.getSampleTubeMappingForTestCodes(JSON.stringify(rootTests))
+    const cacheKey = getSampleTubeMappingCacheKey(rootTests);
+    const cachedMaps = sampleTubeMappingCache.get(cacheKey);
+
+    if (cachedMaps) {
+      onLocalDatabaseLoadingChange?.('');
+      setSampleTubeMaps(mergeSampleTubeMaps(fallbackMaps, cachedMaps));
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    setSampleTubeMaps(fallbackMaps);
+    onLocalDatabaseLoadingChange?.(
+      'Fetching sample tube mapping from local database...',
+    );
+
+    const mappingRequest =
+      sampleTubeMappingRequests.get(cacheKey) ||
+      CatalogDatabaseModule.getSampleTubeMappingForTestCodes(JSON.stringify(rootTests))
+        .then(response => {
+          const parsedResponse =
+            typeof response === 'string' ? JSON.parse(response) : response;
+          sampleTubeMappingCache.set(cacheKey, parsedResponse);
+          sampleTubeMappingRequests.delete(cacheKey);
+          return parsedResponse;
+        })
+        .catch(error => {
+          sampleTubeMappingRequests.delete(cacheKey);
+          throw error;
+        });
+
+    sampleTubeMappingRequests.set(cacheKey, mappingRequest);
+
+    mappingRequest
       .then(response => {
         if (!isMounted) {
           return;
         }
-
-        const parsedResponse =
-          typeof response === 'string' ? JSON.parse(response) : response;
-        setSampleTubeMaps(mergeSampleTubeMaps(fallbackMaps, parsedResponse));
+        setSampleTubeMaps(mergeSampleTubeMaps(fallbackMaps, response));
+        onLocalDatabaseLoadingChange?.('');
       })
       .catch(() => {
         if (isMounted) {
           setSampleTubeMaps(fallbackMaps);
+          onLocalDatabaseLoadingChange?.('');
         }
       });
 
     return () => {
       isMounted = false;
+      onLocalDatabaseLoadingChange?.('');
     };
-  }, [normalizedSelectedTests]);
+  }, [normalizedSelectedTests, onLocalDatabaseLoadingChange]);
 
   useEffect(() => {
     setSelectedSpecimens(previousState => {
@@ -234,8 +301,11 @@ export default function SampleCollectionScreen({
     }));
   };
 
+  const isSpecimenItemSelected = item =>
+    item.tests.some(test => Boolean(selectedSpecimenTests[test.key]));
+
   const toggleSpecimenSelection = item => {
-    const nextSelected = !selectedSpecimens[item.specimenName];
+    const nextSelected = !isSpecimenItemSelected(item);
     setSelectedSpecimens(previousState => ({
       ...previousState,
       [item.specimenName]: nextSelected,
@@ -249,24 +319,69 @@ export default function SampleCollectionScreen({
     });
   };
 
-  const toggleSpecimenTestSelection = (item, testKey) => {
-    setSelectedSpecimens(previousState => ({
-      ...previousState,
-      [item.specimenName]: false,
-    }));
-    setSelectedSpecimenTests(previousState => ({
-      ...previousState,
-      [testKey]: !previousState[testKey],
-    }));
-  };
+  const getRootKeyFromTestKey = testKey => toStableValue(testKey).split('|')[0];
+  const getTestAndDescendantKeys = selectedTest => {
+    const rootKey = getRootKeyFromTestKey(selectedTest.key);
+    const allTests = selectedSpecimenSummary.flatMap(item => item.tests);
+    const keys = new Set([selectedTest.key]);
 
-  const getSelectedSpecimenTestCount = item => {
-    if (selectedSpecimens[item.specimenName]) {
-      return item.count;
+    if (!rootKey) {
+      return Array.from(keys);
     }
 
-    return item.tests.filter(test => selectedSpecimenTests[test.key]).length;
+    if (Number(selectedTest.level || 0) === 0) {
+      allTests.forEach(test => {
+        if (getRootKeyFromTestKey(test.key) === rootKey) {
+          keys.add(test.key);
+        }
+      });
+      return Array.from(keys);
+    }
+
+    const pendingParentNames = [selectedTest.description];
+    while (pendingParentNames.length) {
+      const parentName = pendingParentNames.shift();
+
+      allTests.forEach(test => {
+        if (
+          getRootKeyFromTestKey(test.key) === rootKey &&
+          test.parentDescription === parentName &&
+          !keys.has(test.key)
+        ) {
+          keys.add(test.key);
+          pendingParentNames.push(test.description);
+        }
+      });
+    }
+
+    return Array.from(keys);
   };
+
+  const toggleSpecimenTestSelection = selectedTest => {
+    setSelectedSpecimenTests(previousState => ({
+      ...previousState,
+      ...getTestAndDescendantKeys(selectedTest).reduce(
+        (nextState, testKey) => {
+          nextState[testKey] = !previousState[selectedTest.key];
+          return nextState;
+        },
+        {},
+      ),
+    }));
+  };
+
+  const isSpecimenTestSelected = test => {
+    if (selectedSpecimenTests[test.key]) {
+      return true;
+    }
+
+    return getTestAndDescendantKeys(test).some(
+      testKey => testKey !== test.key && selectedSpecimenTests[testKey],
+    );
+  };
+
+  const getSelectedSpecimenTestCount = item =>
+    item.tests.filter(test => selectedSpecimenTests[test.key]).length;
   const selectedSampleTestCount = selectedSpecimenSummary.reduce(
     (total, item) => total + getSelectedSpecimenTestCount(item),
     0,
@@ -348,9 +463,7 @@ export default function SampleCollectionScreen({
             <View style={styles.sampleCollectionSelectedList}>
               {selectedSpecimenSummary.map(item => {
                 const isExpanded = Boolean(expandedSpecimens[item.specimenName]);
-                const isSpecimenSelected = Boolean(
-                  selectedSpecimens[item.specimenName],
-                );
+                const isSpecimenSelected = isSpecimenItemSelected(item);
                 const selectedCount = getSelectedSpecimenTestCount(item);
 
                 return (
@@ -414,9 +527,7 @@ export default function SampleCollectionScreen({
                     {isExpanded ? (
                       <View style={styles.sampleCollectionSpecimenTestsList}>
                         {item.tests.map(test => {
-                          const isTestSelected =
-                            isSpecimenSelected ||
-                            Boolean(selectedSpecimenTests[test.key]);
+                          const isTestSelected = isSpecimenTestSelected(test);
 
                           return (
                             <View
@@ -430,7 +541,7 @@ export default function SampleCollectionScreen({
                                 activeOpacity={0.85}
                                 style={styles.sampleCollectionTestCheckButton}
                                 onPress={() =>
-                                  toggleSpecimenTestSelection(item, test.key)
+                                  toggleSpecimenTestSelection(test)
                                 }>
                                 <View
                                   style={[
@@ -510,3 +621,5 @@ export default function SampleCollectionScreen({
     </>
   );
 }
+
+export default React.memo(SampleCollectionScreen);

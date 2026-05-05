@@ -3,6 +3,12 @@ import {secureFetch} from './secureFetch';
 import {extractAccessToken} from '../../utils/bookings/bookingTransforms';
 import {logDebug} from '../../utils/app/logger';
 
+const logAuthDebug = (...args) => {
+  if (__DEV__) {
+    console.log(...args);
+  }
+};
+
 const buildDiagnosticTargetUrls = () => {
   try {
     const loginUrl = new URL(LOGIN_API_URL);
@@ -100,12 +106,58 @@ export const diagnoseLoginConnectivity = async () => {
 const parseLoginResponse = async response => {
   try {
     const responseData = await response.json();
+    logAuthDebug(
+      '[Login] API response',
+      JSON.stringify(maskLoginResponseSecrets(responseData), null, 2),
+    );
     logDebug('[Login] Response body', JSON.stringify(responseData, null, 2));
     return responseData;
   } catch (parseError) {
+    logAuthDebug('[Login] API response is not valid JSON');
     logDebug('[Login] Response body is not valid JSON');
     return null;
   }
+};
+
+const maskTokenValue = value => {
+  if (typeof value !== 'string' || !value.trim()) {
+    return value;
+  }
+
+  const trimmedValue = value.trim();
+
+  if (trimmedValue.length <= 12) {
+    return '***';
+  }
+
+  return `${trimmedValue.slice(0, 6)}...${trimmedValue.slice(-4)}`;
+};
+
+const maskLoginResponseSecrets = value => {
+  if (Array.isArray(value)) {
+    return value.map(maskLoginResponseSecrets);
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entryValue]) => {
+      const normalizedKey = key.toLowerCase();
+      const shouldMask =
+        normalizedKey.includes('token') ||
+        normalizedKey.includes('jwt') ||
+        normalizedKey.includes('secret');
+
+      return [
+        key,
+        shouldMask
+          ? maskTokenValue(entryValue)
+          : maskLoginResponseSecrets(entryValue),
+      ];
+    }),
+  );
 };
 
 export const loginUserApi = async ({username, password}) => {
@@ -149,6 +201,10 @@ export const loginUserApi = async ({username, password}) => {
     }
 
     const displayName =
+      responseData?.data?.user?.username ||
+      responseData?.data?.user?.name ||
+      responseData?.data?.username ||
+      responseData?.data?.name ||
       responseData?.user?.username ||
       responseData?.user?.name ||
       responseData?.username ||

@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
-import {Alert, AppState} from 'react-native';
+import {Alert} from 'react-native';
 import {
   addAssignedBookingPatientApi,
   cancelAssignedBookingPatientApi,
@@ -7,12 +7,11 @@ import {
   fetchAssignedBookingHistoryApi,
   fetchAssignedBookingsApi,
   fetchPanelCatalogByCompanyApi,
-  fetchPanelTestCatalogApi,
+  fetchMatchedPanelCompaniesForPatientApi,
   updateAssignedBookingPatientApi,
   updateAssignedBookingStatusApi,
 } from '../services/api/bookingApi';
 import {
-  clearOfflineBookingStorage,
   clearOfflineBookingViewCache,
   getCachedAssignedBookings,
   getCachedBookingDetail,
@@ -153,9 +152,20 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
   const [isUpdatingPatient, setIsUpdatingPatient] = useState(false);
   const [cancellingPatientId, setCancellingPatientId] = useState('');
   const [addingTestPatientId, setAddingTestPatientId] = useState('');
-  const [isPreloadingPanelTests, setIsPreloadingPanelTests] = useState(false);
-  const [panelTestCatalogCache, setPanelTestCatalogCache] = useState(null);
-  const panelTestCatalogPreloadPromiseRef = useRef(null);
+  const panelCompanyCatalogCacheRef = useRef(new Map());
+
+  const getPanelCompanyCatalogCacheKey = useCallback(
+    ({compCatId, panelCompany}) =>
+      [
+        toDisplayValue(panelCompany?.panelCode || panelCompany?.code),
+        toDisplayValue(panelCompany?.panelAbarid || panelCompany?.ABARID).toUpperCase(),
+        toDisplayValue(panelCompany?.centerId || panelCompany?.CenterID),
+        toDisplayValue(panelCompany?.atype || panelCompany?.Atype).toUpperCase(),
+        toDisplayValue(compCatId || panelCompany?.compCatId),
+        toDisplayValue(panelCompany?.name).toLowerCase(),
+      ].join('|'),
+    [],
+  );
 
   useEffect(() => {
     const loadCachedAssignedAppointments = async () => {
@@ -399,74 +409,16 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     syncPendingOfflineWork().catch(error => {
       warnDebug('Pending offline sync error:', error);
     });
-
-    const appStateSubscription = AppState.addEventListener('change', nextState => {
-      if (nextState === 'active') {
-        syncPendingOfflineWork().catch(error => {
-          warnDebug('Pending offline sync error:', error);
-        });
-      }
-    });
-
-    return () => {
-      appStateSubscription.remove();
-    };
+    return undefined;
   }, [accessToken, syncPendingOfflineWork]);
-
-  const preloadPanelTestCatalog = useCallback(
-    async ({forceRefresh = false} = {}) => {
-      if (!accessToken) {
-        return null;
-      }
-
-      if (!forceRefresh && panelTestCatalogCache) {
-        return panelTestCatalogCache;
-      }
-
-      if (!forceRefresh && panelTestCatalogPreloadPromiseRef.current) {
-        return panelTestCatalogPreloadPromiseRef.current;
-      }
-
-      const preloadPromise = (async () => {
-        try {
-          setIsPreloadingPanelTests(true);
-          const responseData = await fetchPanelTestCatalogApi({accessToken});
-          setPanelTestCatalogCache(responseData);
-          return responseData;
-        } catch (error) {
-          return null;
-        } finally {
-          setIsPreloadingPanelTests(false);
-          panelTestCatalogPreloadPromiseRef.current = null;
-        }
-      })();
-
-      panelTestCatalogPreloadPromiseRef.current = preloadPromise;
-      return preloadPromise;
-    },
-    [accessToken, panelTestCatalogCache],
-  );
 
   useEffect(() => {
     if (accessToken) {
       return;
     }
 
-    setPanelTestCatalogCache(null);
-    setIsPreloadingPanelTests(false);
-    panelTestCatalogPreloadPromiseRef.current = null;
+    panelCompanyCatalogCacheRef.current.clear();
   }, [accessToken]);
-
-  useEffect(() => {
-    if (!accessToken) {
-      return;
-    }
-
-    // Preload in background after login so Add Test feels faster.
-    preloadPanelTestCatalog().catch(error => {
-      warnDebug('Panel catalog background preload error:', error);
-    });
-  }, [accessToken, preloadPanelTestCatalog]);
 
   const fetchAssignedAppointments = useCallback(async () => {
     try {
@@ -962,8 +914,9 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
 
       try {
         setAddingTestPatientId(String(bookingPatientId));
-        const responseData =
-          panelTestCatalogCache || (await preloadPanelTestCatalog());
+        const responseData = await fetchMatchedPanelCompaniesForPatientApi({
+          patient,
+        });
         return responseData;
       } catch (error) {
         Alert.alert(
@@ -975,14 +928,16 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         setAddingTestPatientId('');
       }
     },
-    [accessToken, panelTestCatalogCache, preloadPanelTestCatalog],
+    [accessToken],
   );
 
   const fetchPanelCatalogForCompany = useCallback(
-    async ({booking, patient, compCatId}) => {
+    async ({booking, patient, compCatId, panelCompany}) => {
       const bookingId = booking?.id;
       const bookingPatientId = getPatientMutationId(patient);
-      const normalizedCompCatId = toDisplayValue(compCatId);
+      const normalizedCompCatId = toDisplayValue(
+        compCatId || panelCompany?.compCatId,
+      );
 
       if (!bookingId || !bookingPatientId) {
         Alert.alert(
@@ -1008,12 +963,23 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         return null;
       }
 
+      const cacheKey = getPanelCompanyCatalogCacheKey({
+        compCatId: normalizedCompCatId,
+        panelCompany,
+      });
+      const cachedResponse = panelCompanyCatalogCacheRef.current.get(cacheKey);
+      if (cachedResponse) {
+        return cachedResponse;
+      }
+
       try {
         setAddingTestPatientId(String(bookingPatientId));
         const responseData = await fetchPanelCatalogByCompanyApi({
           accessToken,
           compCatId: normalizedCompCatId,
+          panelCompany,
         });
+        panelCompanyCatalogCacheRef.current.set(cacheKey, responseData);
         return responseData;
       } catch (error) {
         Alert.alert(
@@ -1025,7 +991,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         setAddingTestPatientId('');
       }
     },
-    [accessToken],
+    [accessToken, getPanelCompanyCatalogCacheKey],
   );
 
   const clearAssignedState = useCallback(async () => {
@@ -1039,8 +1005,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     setIsUpdatingPatient(false);
     setCancellingPatientId('');
     setAddingTestPatientId('');
-    setIsPreloadingPanelTests(false);
-    setPanelTestCatalogCache(null);
+    panelCompanyCatalogCacheRef.current.clear();
 
     try {
       await clearOfflineBookingViewCache();
@@ -1062,7 +1027,6 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     isUpdatingPatient,
     cancellingPatientId,
     addingTestPatientId,
-    isPreloadingPanelTests,
     setAssignedAppointments,
     setAssignedAppointmentsError,
     setCompletedAppointmentsError,
@@ -1075,7 +1039,6 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     cancelAssignedBookingPatient,
     addTestForPatient,
     fetchPanelCatalogForCompany,
-    preloadPanelTestCatalog,
     clearAssignedState,
   };
 };

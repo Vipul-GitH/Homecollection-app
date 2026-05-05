@@ -121,6 +121,7 @@ function App() {
           onTogglePatientTestSelection={actions.handleTogglePatientTestSelection}
           onRemovePatientSelectedTest={actions.handleRemovePatientSelectedTest}
           onAppointmentDetailStateChange={actions.setAppointmentDetailState}
+          onLocalDatabaseLoadingChange={actions.setLocalDatabaseLoadingMessage}
         />
         <LogoutConfirmModal
           styles={appStyles}
@@ -145,6 +146,7 @@ function App() {
         password={session.password}
         loginError={session.loginError}
         isLoggingIn={session.isLoggingIn}
+        loginLoadingMessage={session.loginLoadingMessage}
         locationStatus={location.locationStatus}
         onUsernameChange={session.handleUsernameChange}
         onPasswordChange={session.handlePasswordChange}
