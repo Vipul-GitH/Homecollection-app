@@ -33,6 +33,7 @@ import {
   getStatusFromAction,
   isLikelyOfflineError,
 } from '../utils/app/runtimeHelpers';
+import {filterBookingsForToday} from '../utils/bookings/bookingDateFilters';
 import {logDebug, warnDebug} from '../utils/app/logger';
 import {showPlatformMessage} from '../utils/ui/notifications';
 
@@ -76,6 +77,27 @@ const buildLocalPatientFromPayload = ({
     toDisplayValue(patient?.panel_company) ||
     existingPatient?.panelCompany ||
     'N/A',
+  selectedCompCatIds:
+    toDisplayValue(patient?.selected_comp_cat_ids) ||
+    existingPatient?.selectedCompCatIds ||
+    '',
+  selectedChargeModes:
+    toDisplayValue(patient?.selected_charge_modes) ||
+    existingPatient?.selectedChargeModes ||
+    '',
+  selectedPanelCompanies:
+    toDisplayValue(patient?.selected_panel_companies) ||
+    existingPatient?.selectedPanelCompanies ||
+    '',
+  compCatId:
+    toDisplayValue(patient?.selected_comp_cat_ids)
+      .split(',')
+      .map(value => value.trim())
+      .find(Boolean) ||
+    toDisplayValue(patient?.comp_cat_id || patient?.compCatId) ||
+    existingPatient?.compCatId ||
+    existingPatient?.comp_cat_id ||
+    '',
   mobileNumber:
     toDisplayValue(patient?.contact_mobile || patient?.primary_mobile) ||
     existingPatient?.mobileNumber ||
@@ -172,8 +194,10 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       try {
         const cachedBookings = await getCachedAssignedBookings();
 
-        if (cachedBookings.length) {
-          setAssignedAppointments(cachedBookings);
+        const todayBookings = filterBookingsForToday(cachedBookings);
+
+        if (todayBookings.length) {
+          setAssignedAppointments(todayBookings);
         }
       } catch (error) {
         warnDebug('Assigned appointments cache restore error:', error);
@@ -288,6 +312,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
           action: pendingAction.action,
           appointmentId: pendingAction.appointmentId,
           sourceType: pendingAction.sourceType,
+          statusPayload: pendingAction.statusPayload,
         });
 
         await removePendingBookingAction(pendingAction.id);
@@ -429,9 +454,10 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         accessToken,
         loggedInUser,
       });
-      setAssignedAppointments(normalizedBookings);
-      await persistAssignedBookings(normalizedBookings);
-      warmAssignedBookingDetailsCache(normalizedBookings).catch(error => {
+      const todayBookings = filterBookingsForToday(normalizedBookings);
+      setAssignedAppointments(todayBookings);
+      await persistAssignedBookings(todayBookings);
+      warmAssignedBookingDetailsCache(todayBookings).catch(error => {
         warnDebug('Assigned booking detail background cache error:', error);
       });
     } catch (error) {
@@ -443,8 +469,10 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
 
       const cachedBookings = await getCachedAssignedBookings();
 
-      if (cachedBookings.length) {
-        setAssignedAppointments(cachedBookings);
+      const todayBookings = filterBookingsForToday(cachedBookings);
+
+      if (todayBookings.length) {
+        setAssignedAppointments(todayBookings);
         setAssignedAppointmentsError('');
         showPlatformMessage(
           'Offline Mode',
@@ -474,8 +502,9 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       const normalizedBookings = await fetchAssignedBookingHistoryApi({
         accessToken,
       });
-      setCompletedAppointments(normalizedBookings);
-      await persistCompletedBookings(normalizedBookings);
+      const todayBookings = filterBookingsForToday(normalizedBookings);
+      setCompletedAppointments(todayBookings);
+      await persistCompletedBookings(todayBookings);
     } catch (error) {
       logDebug('[Assigned History] Network or fetch error', {
         message: error?.message,
@@ -485,8 +514,10 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
 
       const cachedBookings = await getCachedCompletedBookings();
 
-      if (cachedBookings.length) {
-        setCompletedAppointments(cachedBookings);
+      const todayBookings = filterBookingsForToday(cachedBookings);
+
+      if (todayBookings.length) {
+        setCompletedAppointments(todayBookings);
         setCompletedAppointmentsError('');
         showPlatformMessage(
           'Offline Mode',
@@ -551,7 +582,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
   );
 
   const submitBookingAction = useCallback(
-    async ({booking, action, onLocalBookingUpdate}) => {
+    async ({booking, action, statusPayload = {}, onLocalBookingUpdate}) => {
       const bookingId = booking?.id;
 
       if (!bookingId) {
@@ -596,6 +627,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
           action,
           appointmentId,
           sourceType,
+          statusPayload,
         });
         await applyBookingStatusLocally(bookingId, action);
         onLocalBookingUpdate({
@@ -622,6 +654,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
             action,
             appointmentId,
             sourceType,
+            statusPayload,
           });
           await applyBookingStatusLocally(bookingId, action);
           onLocalBookingUpdate({

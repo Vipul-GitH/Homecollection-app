@@ -111,7 +111,7 @@ function SampleCollectionScreen({
   onLocalDatabaseLoadingChange,
 }) {
   const [expandedSpecimens, setExpandedSpecimens] = useState({});
-  const [selectedSpecimens, setSelectedSpecimens] = useState({});
+  const [, setSelectedSpecimens] = useState({});
   const [selectedSpecimenTests, setSelectedSpecimenTests] = useState({});
   const [sampleTubeMaps, setSampleTubeMaps] = useState(() =>
     buildSampleTubeMapsFromTests([]),
@@ -154,14 +154,12 @@ function SampleCollectionScreen({
         accumulator[specimenName] = {
           specimenName,
           count: 0,
-          childCount: 0,
           tests: [],
         };
       }
 
-      accumulator[specimenName].count += 1;
-      if (test.isChildTest || test.level > 0) {
-        accumulator[specimenName].childCount += 1;
+      if (!test.isProfileContext) {
+        accumulator[specimenName].count += 1;
       }
       accumulator[specimenName].tests.push(test);
       return accumulator;
@@ -302,7 +300,9 @@ function SampleCollectionScreen({
   };
 
   const isSpecimenItemSelected = item =>
-    item.tests.some(test => Boolean(selectedSpecimenTests[test.key]));
+    item.tests.some(
+      test => !test.isProfileContext && Boolean(selectedSpecimenTests[test.key]),
+    );
 
   const toggleSpecimenSelection = item => {
     const nextSelected = !isSpecimenItemSelected(item);
@@ -381,7 +381,8 @@ function SampleCollectionScreen({
   };
 
   const getSelectedSpecimenTestCount = item =>
-    item.tests.filter(test => selectedSpecimenTests[test.key]).length;
+    item.tests.filter(test => !test.isProfileContext && selectedSpecimenTests[test.key])
+      .length;
   const selectedSampleTestCount = selectedSpecimenSummary.reduce(
     (total, item) => total + getSelectedSpecimenTestCount(item),
     0,
@@ -504,11 +505,6 @@ function SampleCollectionScreen({
                           </Text>
                           <Text style={styles.sampleCollectionSpecimenMeta}>
                             {selectedCount}/{item.count} tests selected
-                            {item.childCount
-                              ? ` | ${item.childCount} child test${
-                                  item.childCount > 1 ? 's' : ''
-                                }`
-                              : ''}
                           </Text>
                         </View>
                         <View style={styles.sampleCollectionSpecimenCountBadge}>
@@ -528,14 +524,31 @@ function SampleCollectionScreen({
                       <View style={styles.sampleCollectionSpecimenTestsList}>
                         {item.tests.map(test => {
                           const isTestSelected = isSpecimenTestSelected(test);
+                          const parentChain = Array.isArray(test.parentDescriptions)
+                            ? test.parentDescriptions.filter(Boolean)
+                            : test.parentDescription
+                            ? [test.parentDescription]
+                            : [];
+                          const hierarchyLevel = Math.min(
+                            Number(test.level || 0),
+                            3,
+                          );
 
                           return (
                             <View
                               key={test.key}
                               style={[
                                 styles.sampleCollectionSelectedCard,
+                                test.isProfileContext &&
+                                  styles.sampleCollectionSelectedParentCard,
                                 test.level > 0 &&
                                   styles.sampleCollectionSelectedChildCard,
+                                hierarchyLevel === 1 &&
+                                  styles.sampleCollectionSelectedLevelOne,
+                                hierarchyLevel === 2 &&
+                                  styles.sampleCollectionSelectedLevelTwo,
+                                hierarchyLevel >= 3 &&
+                                  styles.sampleCollectionSelectedLevelThree,
                               ]}>
                               <TouchableOpacity
                                 activeOpacity={0.85}
@@ -559,25 +572,28 @@ function SampleCollectionScreen({
                                 </View>
                               </TouchableOpacity>
                               <View style={styles.sampleCollectionSelectedTextWrap}>
-                                {test.level > 0 ? (
+                                {test.isProfileContext ? (
                                   <Text
                                     style={styles.sampleCollectionSelectedHierarchy}>
-                                    Child test
-                                    {test.level > 1 ? ` level ${test.level}` : ''}
+                                    Parent level {Number(test.level || 0) + 1}
+                                  </Text>
+                                ) : parentChain.length ? (
+                                  <Text
+                                    style={[
+                                      styles.sampleCollectionSelectedHierarchy,
+                                      styles.sampleCollectionSelectedLeafBadge,
+                                    ]}>
+                                    Test
                                   </Text>
                                 ) : null}
                                 <Text style={styles.sampleCollectionSelectedTitle}>
                                   {test.description}
                                 </Text>
-                                <Text style={styles.sampleCollectionSelectedMeta}>
-                                  {test.booked_code}
-                                  {test.level > 0 && test.parentDescription
-                                    ? ` | Child of ${test.parentDescription}`
-                                    : ''}
-                                </Text>
-                                <Text style={styles.sampleCollectionSelectedMeta}>
-                                  {test.panelCompanyName}
-                                </Text>
+                                {parentChain.length ? (
+                                  <Text style={styles.sampleCollectionSelectedMeta}>
+                                    test in {parentChain.join(' > ')}
+                                  </Text>
+                                ) : null}
                               </View>
                             </View>
                           );

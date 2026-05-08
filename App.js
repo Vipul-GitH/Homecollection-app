@@ -97,6 +97,7 @@ function App() {
           onAssignedCardPress={actions.handleAssignedCardPress}
           onStartedCardPress={actions.handleStartedCardPress}
           onCompletedCardPress={actions.handleCompletedCardPress}
+          onCollectSample={actions.handleCollectSample}
           onAssignedRetry={bookings.fetchAssignedAppointments}
           onCompletedRetry={bookings.fetchCompletedAppointments}
           onAssignedViewTests={actions.handleAssignedViewDetails}

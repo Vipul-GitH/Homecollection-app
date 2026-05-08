@@ -40,6 +40,10 @@ const getStatusTone = status => {
   return 'default';
 };
 
+const isStartedBooking = booking =>
+  Number(booking?.bookingStatusCode) === 2 ||
+  String(booking?.status || '').trim().toLowerCase().includes('start');
+
 const getQueueBadgeStyle = (styles, status) => {
   const tone = getStatusTone(status);
 
@@ -133,13 +137,20 @@ function AssignedAppointmentsScreen({
   showActiveCard = true,
 }) {
   const {activeBooking, queuedBookings} = useMemo(
-    () => ({
-      activeBooking: showActiveCard ? assignedAppointments[0] || null : null,
-      queuedBookings:
-        showActiveCard && assignedAppointments[0]
-          ? assignedAppointments.slice(1)
+    () => {
+      const activeStartedBooking = showActiveCard
+        ? assignedAppointments.find(isStartedBooking) || null
+        : null;
+
+      return {
+        activeBooking: activeStartedBooking,
+        queuedBookings: activeStartedBooking
+          ? assignedAppointments.filter(
+              booking => String(booking.id) !== String(activeStartedBooking.id),
+            )
           : assignedAppointments,
-    }),
+      };
+    },
     [assignedAppointments, showActiveCard],
   );
 

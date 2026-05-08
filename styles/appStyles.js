@@ -1425,46 +1425,6 @@ const appStyles = StyleSheet.create({
     fontWeight: '900',
     color: '#1D4ED8',
   },
-  bookingDetailProgressCard: {
-    marginHorizontal: 12,
-    marginTop: 12,
-    marginBottom: 10,
-    gap: 7,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: '#F5F2EA',
-    borderWidth: 1,
-    borderColor: '#ECE6D8',
-  },
-  bookingDetailProgressRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  bookingDetailProgressLabel: {
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '800',
-    color: '#1F2937',
-  },
-  bookingDetailProgressValue: {
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '900',
-    color: '#111827',
-  },
-  bookingDetailProgressTrack: {
-    height: 4,
-    borderRadius: 999,
-    overflow: 'hidden',
-    backgroundColor: '#E4DED1',
-  },
-  bookingDetailProgressFill: {
-    height: '100%',
-    borderRadius: 999,
-    backgroundColor: '#1557B7',
-  },
   bookingPatientsShell: {
     marginTop: 2,
     marginBottom: 14,
@@ -2107,16 +2067,35 @@ const appStyles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    borderRadius: 16,
+    borderRadius: 8,
     padding: 14,
     backgroundColor: '#F8FAFF',
     borderWidth: 1,
     borderColor: '#D9E4F6',
   },
+  sampleCollectionSelectedParentCard: {
+    backgroundColor: '#F4F0FF',
+    borderColor: '#C7B8F3',
+  },
   sampleCollectionSelectedChildCard: {
     marginLeft: 12,
     backgroundColor: '#FFFFFF',
     borderColor: '#E2E8F0',
+  },
+  sampleCollectionSelectedLevelOne: {
+    marginLeft: 14,
+    borderLeftWidth: 4,
+    borderLeftColor: '#6D5BD0',
+  },
+  sampleCollectionSelectedLevelTwo: {
+    marginLeft: 26,
+    borderLeftWidth: 4,
+    borderLeftColor: '#0F9F8A',
+  },
+  sampleCollectionSelectedLevelThree: {
+    marginLeft: 38,
+    borderLeftWidth: 4,
+    borderLeftColor: '#D97706',
   },
   sampleCollectionSelectedTextWrap: {
     flex: 1,
@@ -2133,6 +2112,10 @@ const appStyles = StyleSheet.create({
     lineHeight: 12,
     fontWeight: '900',
     color: BRAND.primaryStrong,
+  },
+  sampleCollectionSelectedLeafBadge: {
+    backgroundColor: '#E8F7F4',
+    color: '#0F766E',
   },
   sampleCollectionSelectedTitle: {
     fontSize: 14,
@@ -2788,6 +2771,64 @@ const appStyles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  patientHeaderActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  patientGenderBadge: {
+    minWidth: 52,
+    height: 36,
+    borderRadius: 18,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.26)',
+  },
+  patientGenderBadgeMale: {
+    backgroundColor: '#DBEAFE',
+    borderColor: '#93C5FD',
+  },
+  patientGenderBadgeFemale: {
+    backgroundColor: '#FCE7F3',
+    borderColor: '#F9A8D4',
+  },
+  patientGenderBadgeOther: {
+    backgroundColor: '#EDE9FE',
+    borderColor: '#C4B5FD',
+  },
+  patientGenderBadgeIcon: {
+    color: '#FFFFFF',
+  },
+  patientGenderBadgeIconMale: {
+    color: '#1D4ED8',
+  },
+  patientGenderBadgeIconFemale: {
+    color: '#BE185D',
+  },
+  patientGenderBadgeIconOther: {
+    color: '#6D28D9',
+  },
+  patientGenderBadgeText: {
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '900',
+    color: '#FFFFFF',
+  },
+  patientGenderBadgeTextMale: {
+    color: '#1E3A8A',
+  },
+  patientGenderBadgeTextFemale: {
+    color: '#9D174D',
+  },
+  patientGenderBadgeTextOther: {
+    color: '#4C1D95',
+  },
   patientEditButton: {
     width: 36,
     height: 36,
@@ -2963,6 +3004,54 @@ const appStyles = StyleSheet.create({
   },
   patientReportCourierButtonTextActive: {
     color: '#FFFFFF',
+  },
+  patientTestBookingStatusControl: {
+    flex: 1,
+    marginLeft: 16,
+  },
+  patientTestBookingStatusControlStacked: {
+    width: '100%',
+    marginLeft: 0,
+  },
+  patientTestBookingStatusOption: {
+    minHeight: 38,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#F8FAFF',
+    borderWidth: 1,
+    borderColor: '#D9E4F6',
+  },
+  patientTestBookingStatusOptionActive: {
+    backgroundColor: '#E7EFFF',
+    borderColor: BRAND.primary,
+  },
+  patientTestBookingStatusIcon: {
+    color: BRAND.textMuted,
+  },
+  patientTestBookingStatusIconActive: {
+    color: BRAND.primaryStrong,
+  },
+  patientTestBookingStatusText: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '800',
+    color: BRAND.textMuted,
+  },
+  patientTestBookingStatusTextActive: {
+    color: BRAND.primaryStrong,
+  },
+  patientTestBookingStatusChevron: {
+    color: BRAND.primaryStrong,
+  },
+  patientTestBookingStatusOptionList: {
+    gap: 8,
+    marginTop: 8,
   },
   patientDetailLabel: {
     fontSize: 13,
@@ -3479,6 +3568,32 @@ const appStyles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     color: BRAND.text,
+  },
+  completeAdditionalDiscountRow: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  completeAdditionalDiscountInputWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  completeAdditionalDiscountApplyButton: {
+    minWidth: 72,
+    minHeight: 48,
+    borderRadius: 11,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: BRAND.primary,
+    borderWidth: 1,
+    borderColor: BRAND.primaryStrong,
+  },
+  completeAdditionalDiscountApplyButtonText: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#FFFFFF',
   },
   completeBillingSummaryGrid: {
     flexDirection: 'row',
@@ -4372,20 +4487,27 @@ const appStyles = StyleSheet.create({
   addPatientModalContent: {
     paddingBottom: 18,
   },
+  addPatientModalScroll: {
+    flexGrow: 0,
+    flexShrink: 1,
+  },
   addPatientFormModalContent: {
     padding: 10,
     paddingBottom: 12,
   },
+  linkedPatientScrollContent: {
+    paddingBottom: 8,
+  },
   linkedPatientList: {
-    gap: 12,
-    marginBottom: 16,
+    gap: 10,
   },
   linkedPatientCard: {
-    borderRadius: 18,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#D5E1F4',
     backgroundColor: '#F8FAFF',
-    padding: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     gap: 6,
   },
   linkedPatientCardActive: {
@@ -4429,12 +4551,26 @@ const appStyles = StyleSheet.create({
   linkedPatientSelectChipTextActive: {
     color: '#FFFFFF',
   },
+  linkedPatientActionFooter: {
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 14,
+    backgroundColor: '#F7F6F0',
+    borderTopWidth: 1,
+    borderTopColor: '#D9DEE7',
+  },
+  linkedPatientPrimaryButton: {
+    minHeight: 50,
+    borderRadius: 12,
+  },
   linkedPatientSecondaryButton: {
-    minHeight: 52,
-    borderRadius: 18,
+    minHeight: 48,
+    borderRadius: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 14,
     backgroundColor: '#F5F8FF',
     borderWidth: 1,
     borderColor: '#CDDDF2',

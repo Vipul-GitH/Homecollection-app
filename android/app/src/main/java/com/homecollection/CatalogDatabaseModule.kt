@@ -18,8 +18,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
   override fun getName(): String = "CatalogDatabaseModule"
 
   private val assetName = "catalog_preload.db"
-  private val databaseVersion = "bhasin_7001_v14"
-  private val seedSyncedAt = "2026-05-05 17:48:25"
+  private val databaseVersion = "bhasin_7001_v18"
+  private val seedSyncedAt = "2026-05-06 17:04:27"
   private val maxProfileTreeDepth = 8
   private val maxProfileChildrenPerNode = 150
   private val skippedSyncTables = setOf("address_allowed_center", "testwarning")
@@ -115,13 +115,14 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         "CTestCode",
         "CTestName",
         "Charge",
-        "MRP",
+        "BookedFlag",
         "DiscountAllowed",
         "MaxDiscount",
+        "percentageonstandard",
         "MaximumpercentageAllowed",
-        "FBillingRDiscountPrecent",
         "CenterID",
-        "BookedFlag",
+        "MRP",
+        "PanelRateID",
         "updated_at",
       ),
       listOf("CompCatID", "GCode", "SCode", "TestCode", "CTestCode", "CenterID"),
@@ -316,6 +317,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       )
     }
 
+    ensurePanelRatesDiscountPercentSchema(db)
     ensureAddressSyncKeySchema(db)
     ensurePerformanceIndexes(db)
 
@@ -340,6 +342,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     db.execSQL(
       "CREATE INDEX IF NOT EXISTS idx_test_profiles_parent ON test_profiles(gcode, scode, profile_code)",
     )
+  }
+
+  private fun ensurePanelRatesDiscountPercentSchema(db: SQLiteDatabase) {
+    ensureColumn(db, "panel_rates", "base_discount_percent", "REAL")
+    ensureColumn(db, "panel_rates", "max_allowed_discount_percent", "REAL")
   }
 
   private fun ensureAddressSyncKeySchema(db: SQLiteDatabase) {
@@ -498,27 +505,22 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       val compCatId = patient.optString("compCatId", "")
         .ifBlank { patient.optString("comp_cat_id", "") }
         .trim()
+      val selectedCompCatIds = patient.optString("selectedCompCatIds", "")
+        .ifBlank { patient.optString("selected_comp_cat_ids", "") }
+        .trim()
       val centerId = patient.optString("centerId", "")
         .ifBlank { patient.optString("CenterID", "") }
         .trim()
       val atype = patient.optString("atype", "")
         .ifBlank { patient.optString("Atype", "") }
         .trim()
-      val panelCode = patient.optString("panelCode", "")
-        .ifBlank { patient.optString("panel_code", "") }
-        .trim()
-      val panelAbarid = patient.optString("panelAbarid", "")
-        .ifBlank { patient.optString("panel_abarid", "") }
-        .trim()
-
       val items = findMatchedPanelCompanies(
         db,
         panelCompanyName,
         compCatId,
+        selectedCompCatIds,
         centerId,
         atype,
-        panelCode,
-        panelAbarid,
       )
 
       promise.resolve(JSONObject().put("ok", true).put("items", items).toString())
@@ -621,6 +623,213 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     } catch (error: Exception) {
       promise.reject("CATALOG_DB_ERROR", error.message, error)
     }
+  }
+
+  @ReactMethod
+  fun getBookingTestPrices(testRequestsJson: String, promise: Promise) {
+    try {
+      val db = openDatabase()
+      val requests = JSONArray(testRequestsJson.ifBlank { "[]" })
+      val patients = JSONArray()
+
+      for (patientIndex in 0 until requests.length()) {
+        val request = requests.optJSONObject(patientIndex) ?: continue
+        val tests = request.optJSONArray("tests") ?: JSONArray()
+        val resolvedTests = JSONArray()
+
+        for (testIndex in 0 until tests.length()) {
+          val test = tests.optJSONObject(testIndex) ?: continue
+          val code = rowString(test, "code").ifBlank { rowString(test, "booked_code") }
+          if (code.isBlank()) {
+            continue
+          }
+
+          val resolvedRate = resolveBookingTestPrice(db, request, test, code)
+          resolvedTests.put(
+            JSONObject()
+              .put("code", code)
+              .put("booked_code", resolvedRate.optString("booked_code", code))
+              .put("description", resolvedRate.optString("description", rowString(test, "description")))
+              .put("charge", resolvedRate.optDouble("charge", 0.0))
+              .put("mrp", resolvedRate.optDouble("mrp", 0.0))
+              .put("max_discount", resolvedRate.optDouble("max_discount", 0.0))
+              .put("max_allowed_discount", resolvedRate.optDouble("max_allowed_discount", 0.0)),
+          )
+        }
+
+        patients.put(
+          JSONObject()
+            .put("patient_id", request.optString("patient_id"))
+            .put("tests", resolvedTests),
+        )
+      }
+
+      promise.resolve(JSONObject().put("ok", true).put("patients", patients).toString())
+    } catch (error: Exception) {
+      promise.reject("BOOKING_TEST_PRICE_ERROR", error)
+    }
+  }
+
+  private fun resolveBookingTestPrice(
+    db: SQLiteDatabase,
+    request: JSONObject,
+    test: JSONObject,
+    code: String,
+  ): JSONObject {
+    val compCatId = rowString(test, "comp_cat_id").ifBlank { rowString(request, "comp_cat_id") }
+    val centerId = rowString(test, "center_id").ifBlank { rowString(request, "center_id") }
+    val normalizedCode = code.trim().uppercase()
+    val (gcode, scode, shortTestCode) = parseFullCatalogCodeParts(normalizedCode)
+
+    if (compCatId.isNotBlank()) {
+      val rawArgs = mutableListOf(compCatId)
+      if (centerId.isNotBlank()) {
+        rawArgs.add(centerId)
+      }
+      val centerClause = if (centerId.isNotBlank()) "AND CAST(pr.CenterID AS TEXT) = ?" else ""
+      val rawCodeClause =
+        if (gcode.isNotBlank() && scode.isNotBlank() && shortTestCode.isNotBlank()) {
+          rawArgs.add(gcode)
+          rawArgs.add(scode)
+          rawArgs.add(shortTestCode)
+          rawArgs.add(normalizedCode)
+          """
+          AND UPPER(TRIM(pr.GCode)) = ?
+          AND UPPER(TRIM(pr.SCode)) = ?
+          AND (
+            UPPER(TRIM(pr.TestCode)) = ?
+            OR UPPER(TRIM(pr.CTestCode)) = ?
+          )
+          """.trimIndent()
+        } else {
+          rawArgs.add(normalizedCode)
+          rawArgs.add(normalizedCode)
+          """
+          AND (
+            UPPER(TRIM(pr.TestCode)) = ?
+            OR UPPER(TRIM(pr.CTestCode)) = ?
+          )
+          """.trimIndent()
+        }
+
+      db.rawQuery(
+        """
+        SELECT
+          COALESCE(NULLIF(pr.CTestCode, ''), NULLIF(pr.TestCode, '')) AS booked_code,
+          COALESCE(NULLIF(t1.description, ''), NULLIF(t2.description, ''), NULLIF(pr.CTestName, ''), NULLIF(pr.TestCode, '')) AS description,
+          CAST(pr.Charge AS REAL) AS charge,
+          CAST(pr.MRP AS REAL) AS mrp,
+          CASE
+            WHEN NULLIF(pr.percentageonstandard, '') IS NOT NULL
+              THEN CAST(pr.MRP AS REAL) * CAST(pr.percentageonstandard AS REAL) / 100.0
+            ELSE CAST(IFNULL(NULLIF(pr.MaxDiscount, ''), '0') AS REAL)
+          END AS max_discount,
+          CAST(pr.MRP AS REAL) * CAST(IFNULL(NULLIF(pr.MaximumpercentageAllowed, ''), '0') AS REAL) / 100.0 AS max_allowed_discount
+        FROM panelrates pr
+        LEFT JOIN tests t1
+          ON UPPER(TRIM(t1.test_code)) = UPPER(TRIM(pr.TestCode))
+        LEFT JOIN tests t2
+          ON UPPER(TRIM(t2.testcode1)) = UPPER(TRIM(pr.CTestCode))
+        WHERE CAST(pr.CompCatID AS TEXT) = ?
+          $centerClause
+          $rawCodeClause
+          AND CAST(pr.BookedFlag AS TEXT) = '1'
+        ORDER BY CAST(pr.MRP AS REAL) DESC
+        LIMIT 1
+        """.trimIndent(),
+        rawArgs.toTypedArray(),
+      ).use { cursor ->
+        if (cursor.moveToFirst()) {
+          return JSONObject()
+            .put("booked_code", cursor.stringValue("booked_code"))
+            .put("description", cursor.stringValue("description"))
+            .put("charge", cursor.doubleValue("charge"))
+            .put("mrp", cursor.doubleValue("mrp"))
+            .put("max_discount", cursor.doubleValue("max_discount"))
+            .put("max_allowed_discount", cursor.doubleValue("max_allowed_discount"))
+        }
+      }
+
+      val projectedArgs = mutableListOf(compCatId)
+      val projectedCodeClause =
+        if (gcode.isNotBlank() && scode.isNotBlank() && shortTestCode.isNotBlank()) {
+          projectedArgs.add(gcode)
+          projectedArgs.add(scode)
+          projectedArgs.add(shortTestCode)
+          projectedArgs.add(normalizedCode)
+          """
+          AND pr.gcode = ?
+          AND pr.scode = ?
+          AND (
+            UPPER(TRIM(pr.test_code)) = ?
+            OR UPPER(TRIM(pr.ctest_code)) = ?
+          )
+          """.trimIndent()
+        } else {
+          projectedArgs.add(normalizedCode)
+          projectedArgs.add(normalizedCode)
+          projectedArgs.add(normalizedCode)
+          projectedArgs.add(normalizedCode)
+          """
+          AND (
+            UPPER(TRIM(pr.test_code)) = ?
+            OR UPPER(TRIM(pr.ctest_code)) = ?
+            OR UPPER(TRIM(t1.testcode1)) = ?
+            OR UPPER(TRIM(t2.testcode1)) = ?
+          )
+          """.trimIndent()
+        }
+
+      db.rawQuery(
+        """
+        SELECT
+          COALESCE(
+            NULLIF(t1.testcode1, ''),
+            NULLIF(t1.test_code, ''),
+            NULLIF(t2.testcode1, ''),
+            NULLIF(t2.test_code, ''),
+            NULLIF(pr.ctest_code, ''),
+            NULLIF(pr.test_code, '')
+          ) AS booked_code,
+          COALESCE(
+            NULLIF(t1.description, ''),
+            NULLIF(t2.description, ''),
+            NULLIF(pr.ctest_name, ''),
+            NULLIF(pr.test_code, '')
+          ) AS description,
+          pr.charge AS charge,
+          pr.mrp AS mrp,
+          (pr.mrp * IFNULL(pr.base_discount_percent, 0) / 100.0) AS max_discount,
+          (pr.mrp * IFNULL(pr.max_allowed_discount_percent, 0) / 100.0) AS max_allowed_discount
+        FROM panel_rates pr
+        LEFT JOIN tests t1
+          ON t1.gcode = pr.gcode
+         AND t1.scode = pr.scode
+         AND t1.test_code = pr.test_code
+        LEFT JOIN tests t2
+          ON t2.testcode1 = pr.ctest_code
+         AND TRIM(pr.ctest_code) != ''
+        WHERE pr.comp_cat_id = ?
+          $projectedCodeClause
+          AND pr.booked_flag = 1
+        ORDER BY pr.mrp DESC
+        LIMIT 1
+        """.trimIndent(),
+        projectedArgs.toTypedArray(),
+      ).use { cursor ->
+        if (cursor.moveToFirst()) {
+          return JSONObject()
+            .put("booked_code", cursor.stringValue("booked_code"))
+            .put("description", cursor.stringValue("description"))
+            .put("charge", cursor.doubleValue("charge"))
+            .put("mrp", cursor.doubleValue("mrp"))
+            .put("max_discount", cursor.doubleValue("max_discount"))
+            .put("max_allowed_discount", cursor.doubleValue("max_allowed_discount"))
+        }
+      }
+    }
+
+    return JSONObject().put("booked_code", code)
   }
 
   @ReactMethod(isBlockingSynchronousMethod = true)
@@ -832,6 +1041,16 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     return Pair(
       match?.groupValues?.getOrNull(1)?.uppercase() ?: "",
       match?.groupValues?.getOrNull(2)?.uppercase() ?: "",
+    )
+  }
+
+  private fun parseFullCatalogCodeParts(code: String): Triple<String, String, String> {
+    val match = Regex("^(G[^S]+)(S[^T]+)(T.+)$", RegexOption.IGNORE_CASE)
+      .find(code.trim())
+    return Triple(
+      match?.groupValues?.getOrNull(1)?.uppercase() ?: "",
+      match?.groupValues?.getOrNull(2)?.uppercase() ?: "",
+      match?.groupValues?.getOrNull(3)?.uppercase() ?: "",
     )
   }
 
@@ -1275,21 +1494,48 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     db: SQLiteDatabase,
     panelCompanyName: String,
     compCatId: String,
+    selectedCompCatIds: String,
     centerId: String,
     atype: String,
-    panelCode: String,
-    panelAbarid: String,
   ): JSONArray {
     val normalizedPanelName = panelCompanyName.trim().lowercase()
+    val selectedIds = selectedCompCatIds
+      .split(",")
+      .map { it.trim() }
+      .filter { it.isNotBlank() }
+      .distinct()
     val normalizedCompCatId = compCatId.trim()
     val normalizedCenterId = centerId.trim()
     val normalizedAtype = atype.trim().uppercase()
-    val normalizedPanelCode = panelCode.trim()
-    val normalizedPanelAbarid = panelAbarid.trim().uppercase()
     val whereParts = mutableListOf<String>()
     val args = mutableListOf<String>()
     val exactMatches = mutableListOf<PanelCompanyCandidate>()
     val partialMatches = mutableListOf<PanelCompanyCandidate>()
+
+    if (selectedIds.isNotEmpty()) {
+      val selectedItems = mutableMapOf<String, JSONObject>()
+
+      db.rawQuery(
+        """
+        SELECT id, sync_key, center_id, atype, pname, comp_cat_id, cat_details, billing_charge_mode
+        FROM panel_companies
+        WHERE CAST(comp_cat_id AS TEXT) IN (${selectedIds.joinToString(",") { "?" }})
+        ORDER BY pname COLLATE NOCASE, comp_cat_id
+        """.trimIndent(),
+        selectedIds.toTypedArray(),
+      ).use { cursor ->
+        while (cursor.moveToNext()) {
+          val item = buildPanelCompanyJson(cursor)
+          selectedItems[item.optString("CompCatID", "").trim()] = item
+        }
+      }
+
+      return JSONArray().apply {
+        selectedIds.forEach { selectedId ->
+          selectedItems[selectedId]?.let { put(it) }
+        }
+      }
+    }
 
     if (normalizedPanelName.isNotBlank()) {
       whereParts.add("LOWER(TRIM(pname)) = ?")
@@ -1317,10 +1563,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       whereParts.add("UPPER(TRIM(atype)) = ?")
       args.add(normalizedAtype)
     }
-    if (normalizedPanelCode.isNotBlank() && normalizedPanelAbarid.isNotBlank()) {
-      whereParts.add("sync_key LIKE ?")
-      args.add("%|$normalizedPanelCode|$normalizedPanelAbarid")
-    }
 
     if (whereParts.isEmpty()) {
       return JSONArray()
@@ -1336,11 +1578,9 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       args.toTypedArray(),
     ).use { cursor ->
       while (cursor.moveToNext()) {
-        val item = buildPanelCompanyJson(cursor, normalizedPanelCode, normalizedPanelAbarid)
+        val item = buildPanelCompanyJson(cursor)
         val itemName = item.optString("pname", "").trim().lowercase()
         val itemDetails = item.optString("CatDetails", "").trim().lowercase()
-        val itemPanelCode = item.optString("code", "").trim()
-        val itemPanelAbarid = item.optString("ABARID", "").trim().uppercase()
         val itemCompCatId = item.optString("CompCatID", "").trim()
         val itemCenterId = item.optString("CenterID", "").trim()
         val itemAtype = item.optString("Atype", "").trim().uppercase()
@@ -1351,20 +1591,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         }
         if (itemDetails == normalizedPanelName) {
           score += 80
-        }
-        if (normalizedPanelCode.isNotBlank() && itemPanelCode == normalizedPanelCode) {
-          score += 70
-        }
-        if (normalizedPanelAbarid.isNotBlank() && itemPanelAbarid == normalizedPanelAbarid) {
-          score += 90
-        }
-        if (
-          normalizedPanelCode.isNotBlank() &&
-            normalizedPanelAbarid.isNotBlank() &&
-            itemPanelCode == normalizedPanelCode &&
-            itemPanelAbarid == normalizedPanelAbarid
-        ) {
-          score += 150
         }
         if (normalizedCompCatId.isNotBlank() && itemCompCatId == normalizedCompCatId) {
           score += 40
@@ -1401,7 +1627,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
 
     val narrowed = if (
       exactMatches.isNotEmpty() &&
-      (normalizedPanelCode.isNotBlank() || normalizedPanelAbarid.isNotBlank() || normalizedCenterId.isNotBlank() || normalizedAtype.isNotBlank())
+      (normalizedCenterId.isNotBlank() || normalizedAtype.isNotBlank())
     ) {
       sorted.take(1)
     } else {
@@ -1417,16 +1643,15 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     if (
       normalizedCompCatId.isNotBlank() ||
         normalizedCenterId.isNotBlank() ||
-        normalizedAtype.isNotBlank() ||
-        (normalizedPanelCode.isNotBlank() && normalizedPanelAbarid.isNotBlank())
+        normalizedAtype.isNotBlank()
     ) {
       val resolvedIdentity = resolvePanelCompanyIdentity(
         db,
         normalizedCompCatId,
         normalizedCenterId,
         normalizedAtype,
-        normalizedPanelCode,
-        normalizedPanelAbarid,
+        "",
+        "",
       )
       if (
         resolvedIdentity.optString("name", "").isNotBlank() ||
@@ -1619,6 +1844,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         MAX(charge) AS charge,
         MAX(mrp) AS mrp,
         MAX(max_discount) AS max_discount,
+        MAX(max_allowed_discount) AS max_allowed_discount,
         MIN(specimen_name) AS specimen_name,
         COUNT(*) AS duplicate_count,
         GROUP_CONCAT(source_row_id) AS source_row_ids
@@ -1655,7 +1881,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           COALESCE(t1.profile, t2.profile, 0) AS profile,
           pr.charge,
           pr.mrp,
-          pr.max_discount,
+          (pr.mrp * IFNULL(pr.base_discount_percent, 0) / 100.0) AS max_discount,
+          (pr.mrp * IFNULL(pr.max_allowed_discount_percent, 0) / 100.0) AS max_allowed_discount,
           COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name
         FROM panel_rates pr
         LEFT JOIN tests t1
@@ -1697,6 +1924,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("charge", testCursor.doubleValue("charge"))
             .put("mrp", testCursor.doubleValue("mrp"))
             .put("max_discount", testCursor.doubleValue("max_discount"))
+            .put("max_allowed_discount", testCursor.doubleValue("max_allowed_discount"))
             .put("specimen_name", testCursor.stringValue("specimen_name"))
             .put("duplicate_count", testCursor.intValue("duplicate_count"))
             .put("source_row_ids", testCursor.stringValue("source_row_ids"))
@@ -1728,6 +1956,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         MAX(charge) AS charge,
         MAX(mrp) AS mrp,
         MAX(max_discount) AS max_discount,
+        MAX(max_allowed_discount) AS max_allowed_discount,
         MIN(specimen_name) AS specimen_name,
         COUNT(*) AS duplicate_count,
         GROUP_CONCAT(source_row_id) AS source_row_ids
@@ -1760,7 +1989,12 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           COALESCE(t1.profile, t2.profile, 0) AS profile,
           CAST(pr.Charge AS REAL) AS charge,
           CAST(pr.MRP AS REAL) AS mrp,
-          CAST(pr.MaxDiscount AS REAL) AS max_discount,
+          CASE
+            WHEN NULLIF(pr.percentageonstandard, '') IS NOT NULL
+              THEN CAST(pr.MRP AS REAL) * CAST(pr.percentageonstandard AS REAL) / 100.0
+            ELSE CAST(IFNULL(NULLIF(pr.MaxDiscount, ''), '0') AS REAL)
+          END AS max_discount,
+          CAST(pr.MRP AS REAL) * CAST(IFNULL(NULLIF(pr.MaximumpercentageAllowed, ''), '0') AS REAL) / 100.0 AS max_allowed_discount,
           COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name
         FROM panelrates pr
         LEFT JOIN tests t1
@@ -1802,6 +2036,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("charge", testCursor.doubleValue("charge"))
             .put("mrp", testCursor.doubleValue("mrp"))
             .put("max_discount", testCursor.doubleValue("max_discount"))
+            .put("max_allowed_discount", testCursor.doubleValue("max_allowed_discount"))
             .put("specimen_name", testCursor.stringValue("specimen_name"))
             .put("duplicate_count", testCursor.intValue("duplicate_count"))
             .put("source_row_ids", testCursor.stringValue("source_row_ids"))
@@ -2314,6 +2549,9 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         "charge" to rowNumber(row, "Charge"),
         "mrp" to rowNumber(row, "MRP"),
         "max_discount" to rowNumber(row, "MaxDiscount"),
+        "base_discount_percent" to
+          rowNumber(row, "percentageonstandard"),
+        "max_allowed_discount_percent" to rowNumber(row, "MaximumpercentageAllowed"),
         "booked_flag" to rowInt(row, "BookedFlag"),
       ),
     )

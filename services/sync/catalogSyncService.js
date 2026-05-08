@@ -17,17 +17,9 @@ const RETRY_BACKOFF_MS = [1000, 2000, 4000];
 
 export let isCatalogSyncRunning = false;
 
-const logSyncDebug = (...args) => {
-  if (__DEV__) {
-    console.log(...args);
-  }
-};
+const logSyncDebug = () => {};
 
-const warnSyncDebug = (...args) => {
-  if (__DEV__) {
-    console.warn(...args);
-  }
-};
+const warnSyncDebug = () => {};
 
 const wait = ms =>
   new Promise(resolve => {

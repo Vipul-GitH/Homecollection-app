@@ -33,8 +33,6 @@ function PanelCompanyChips({
         {panelCompanies.map(company => {
           const isActive =
             String(activePanelCompanyId) === String(company.chipId || company.id);
-          const isAppChip = company.chipSource === 'APP';
-
           return (
             <View
               key={company.chipId || company.id}
@@ -98,7 +96,7 @@ function PanelCompanyChips({
                   ]}
                 />
               </TouchableOpacity>
-              {isAppChip && onRemovePanelCompany ? (
+              {onRemovePanelCompany ? (
                 <TouchableOpacity
                   activeOpacity={0.85}
                   style={styles.patientPanelRemoveButton}

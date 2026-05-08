@@ -144,6 +144,45 @@ export const normalizePanelCompanyItems = responseData => {
   });
 };
 
+export const buildApiPanelCompaniesFromPatient = patient => {
+  const compCatIds = normalizeFormText(
+    patient?.selectedCompCatIds || patient?.selected_comp_cat_ids,
+  )
+    .split(',')
+    .map(value => value.trim());
+  const names = normalizeFormText(
+    patient?.selectedPanelCompanies || patient?.selected_panel_companies,
+  ).split(',');
+  const chargeModes = normalizeFormText(
+    patient?.selectedChargeModes || patient?.selected_charge_modes,
+  ).split(',');
+
+  return compCatIds
+    .map((compCatId, index) => {
+      if (!compCatId) {
+        return null;
+      }
+
+      const name =
+        normalizeFormText(names[index]) ||
+        normalizeFormText(patient?.panelCompany || patient?.panel_company) ||
+        `Panel ${compCatId}`;
+      const billingChargeMode = normalizeFormText(chargeModes[index]);
+
+      return {
+        id: `api-${compCatId}-${index}`,
+        chipId: `api-${compCatId}-${index}`,
+        chipSource: 'API',
+        name,
+        compCatId,
+        billingChargeMode,
+        paymentLabel: billingChargeMode,
+        searchKey: `${name} ${compCatId}`.toLowerCase(),
+      };
+    })
+    .filter(Boolean);
+};
+
 export const findMatchingPanelCompanies = (
   items,
   panelCompanyValue,
@@ -155,12 +194,12 @@ export const findMatchingPanelCompanies = (
     return [];
   }
 
-  const patientPanelCode = normalizeFormText(
-    patientContext?.panelCode || patientContext?.panel_code,
-  );
-  const patientPanelAbarid = normalizeFormText(
-    patientContext?.panelAbarid || patientContext?.panel_abarid,
-  ).toUpperCase();
+  const selectedCompCatIds = normalizeFormText(
+    patientContext?.selectedCompCatIds || patientContext?.selected_comp_cat_ids,
+  )
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
   const patientCompCatId = normalizeFormText(
     patientContext?.compCatId || patientContext?.comp_cat_id,
   );
@@ -183,23 +222,6 @@ export const findMatchingPanelCompanies = (
         }
         if (itemDetails === normalizedPanelValue) {
           score += 80;
-        }
-        if (patientPanelCode && normalizeFormText(item?.panelCode) === patientPanelCode) {
-          score += 70;
-        }
-        if (
-          patientPanelAbarid &&
-          normalizeFormText(item?.panelAbarid).toUpperCase() === patientPanelAbarid
-        ) {
-          score += 90;
-        }
-        if (
-          patientPanelCode &&
-          patientPanelAbarid &&
-          normalizeFormText(item?.panelCode) === patientPanelCode &&
-          normalizeFormText(item?.panelAbarid).toUpperCase() === patientPanelAbarid
-        ) {
-          score += 150;
         }
         if (patientCompCatId && normalizeFormText(item?.compCatId) === patientCompCatId) {
           score += 40;
@@ -225,13 +247,23 @@ export const findMatchingPanelCompanies = (
       })
       .map(match => match.item);
 
+  if (selectedCompCatIds.length) {
+    const itemByCompCatId = new Map(
+      items.map(item => [normalizeFormText(item?.compCatId), item]),
+    );
+
+    return selectedCompCatIds
+      .map(compCatId => itemByCompCatId.get(compCatId))
+      .filter(Boolean);
+  }
+
   const pickBestNamedMatches = matches => {
     if (matches.length <= 1) {
       return matches;
     }
 
     const scoredMatches = scoreMatches(matches);
-    if (patientPanelCode || patientPanelAbarid || patientCenterId || patientAtype) {
+    if (patientCenterId || patientAtype) {
       return scoredMatches.slice(0, 1);
     }
 
@@ -295,25 +327,20 @@ export const isSamePanelCompany = (leftCompany, rightCompany) => {
     return true;
   }
 
-  const leftPanelCode = normalizeFormText(leftCompany?.panelCode);
-  const rightPanelCode = normalizeFormText(rightCompany?.panelCode);
-  const leftPanelAbarid = normalizeFormText(leftCompany?.panelAbarid).toUpperCase();
-  const rightPanelAbarid = normalizeFormText(rightCompany?.panelAbarid).toUpperCase();
+  const leftCompCatId = normalizeFormText(leftCompany?.compCatId);
+  const rightCompCatId = normalizeFormText(rightCompany?.compCatId);
 
   if (
-    leftPanelCode &&
-    rightPanelCode &&
-    leftPanelAbarid &&
-    rightPanelAbarid &&
-    leftPanelCode === rightPanelCode &&
-    leftPanelAbarid === rightPanelAbarid
+    leftCompCatId &&
+    rightCompCatId &&
+    leftCompCatId !== '0' &&
+    rightCompCatId !== '0' &&
+    leftCompCatId === rightCompCatId
   ) {
     return true;
   }
 
   return (
-    normalizeFormText(leftCompany?.compCatId) ===
-      normalizeFormText(rightCompany?.compCatId) &&
     normalizeFormText(leftCompany?.centerId) ===
       normalizeFormText(rightCompany?.centerId) &&
     normalizeFormText(leftCompany?.name).toLowerCase() ===

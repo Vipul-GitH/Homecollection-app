@@ -104,13 +104,14 @@ const SYNC_TABLE_SPECS = {
       'CTestCode',
       'CTestName',
       'Charge',
-      'MRP',
+      'BookedFlag',
       'DiscountAllowed',
       'MaxDiscount',
+      'percentageonstandard',
       'MaximumpercentageAllowed',
-      'FBillingRDiscountPrecent',
       'CenterID',
-      'BookedFlag',
+      'MRP',
+      'PanelRateID',
       'updated_at',
     ],
     primaryKey: ['CompCatID', 'GCode', 'SCode', 'TestCode', 'CTestCode', 'CenterID'],
@@ -378,6 +379,9 @@ const COLUMN_ALIASES = {
   address: {
     ophone: ['Omobile'],
   },
+  panelrates: {
+    PercentageOnStandard: ['percentageonstandard'],
+  },
 };
 
 const getRowValue = (tableName, rowIndex, row, column) => {
@@ -603,6 +607,8 @@ CREATE TABLE panel_rates (
   charge REAL,
   mrp REAL,
   max_discount REAL,
+  base_discount_percent REAL,
+  max_allowed_discount_percent REAL,
   booked_flag INTEGER
 );
 CREATE TABLE test_profiles (
@@ -732,6 +738,10 @@ const buildDatabase = ({input, output, version, sqlite3Path, seedTs}) => {
       });
     } else if (tableName === 'panelrates') {
       rows.forEach(row => {
+        const percentageOnStandard =
+          toFloat(row[index.PercentageOnStandard]) ||
+          toFloat(row[index.percentageonstandard]);
+
         writeInsert(
           stream,
           'panel_rates',
@@ -745,6 +755,8 @@ const buildDatabase = ({input, output, version, sqlite3Path, seedTs}) => {
             'charge',
             'mrp',
             'max_discount',
+            'base_discount_percent',
+            'max_allowed_discount_percent',
             'booked_flag',
           ],
           [
@@ -757,6 +769,9 @@ const buildDatabase = ({input, output, version, sqlite3Path, seedTs}) => {
             toFloat(row[index.Charge]),
             toFloat(row[index.MRP]),
             toFloat(row[index.MaxDiscount]),
+            toFloat(row[index.FBillingRDiscountPrecent]) ||
+              percentageOnStandard,
+            toFloat(row[index.MaximumpercentageAllowed]),
             toInt(row[index.BookedFlag]),
           ],
         );

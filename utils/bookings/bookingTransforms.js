@@ -14,6 +14,15 @@ const toDisplayString = value => {
   return '';
 };
 
+const toNumberValue = value => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  const normalizedValue = Number(String(value ?? '').replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(normalizedValue) ? normalizedValue : 0;
+};
+
 const firstNonEmptyValue = (...values) => {
   for (const value of values) {
     const normalizedValue = toDisplayString(value);
@@ -309,6 +318,10 @@ const normalizePatientTests = source => {
         panelCompanyName: toDisplayString(
           test?.panelCompanyName || test?.panel_company || test?.panel,
         ),
+        cat_details: toDisplayString(test?.cat_details || test?.catDetails),
+        selected_charge_mode: toDisplayString(
+          test?.selected_charge_mode || test?.selectedChargeMode,
+        ),
         centerId: toDisplayString(test?.centerId || test?.CenterID),
         atype: toDisplayString(test?.atype || test?.Atype),
         catalog_key: toDisplayString(test?.catalog_key || test?.catalogKey),
@@ -317,10 +330,55 @@ const normalizePatientTests = source => {
         test_code: toDisplayString(
           test?.test_code || test?.testCode || test?.TestCode,
         ),
+        mrp: toNumberValue(test?.mrp || test?.MRP || test?.amount),
+        charge: toNumberValue(test?.charge || test?.Charge || test?.mrp || test?.MRP),
+        max_discount: toNumberValue(
+          test?.max_discount || test?.maxDiscount || test?.MaxDiscount,
+        ),
+        max_allowed_discount: toNumberValue(
+          test?.max_allowed_discount ||
+            test?.maxAllowedDiscount ||
+            test?.MaximumpercentageAllowed ||
+            test?.maximumpercentage_allowed,
+        ),
       };
     })
     .filter(Boolean);
 };
+
+const normalizeLinkedPatients = source =>
+  (Array.isArray(source) ? source : [])
+    .map((patient, index) => ({
+      id:
+        toDisplayString(patient?.id || patient?.patient_id || patient?.patientId) ||
+        `linked-${index}`,
+      patientId: toDisplayString(patient?.id || patient?.patient_id || patient?.patientId),
+      patientCode: toDisplayString(patient?.patient_code || patient?.patientCode),
+      title: toDisplayString(patient?.title) || 'Mr',
+      name:
+        toDisplayString(
+          patient?.full_name ||
+            patient?.name ||
+            [patient?.first_name, patient?.last_name].filter(Boolean).join(' '),
+        ) || `Linked Patient ${index + 1}`,
+      gender: toDisplayString(patient?.gender) || 'N/A',
+      age: toDisplayString(patient?.age_years || patient?.age) || 'N/A',
+      dob: toDisplayString(patient?.date_of_birth || patient?.dob) || 'N/A',
+      mobileNumber:
+        toDisplayString(
+          patient?.contact_mobile ||
+            patient?.mobileNumber ||
+            patient?.mobile_number ||
+            patient?.phone,
+        ) || 'N/A',
+      alternateMobileNumber:
+        toDisplayString(patient?.alternate_mobile || patient?.alternateMobile) ||
+        '',
+      panelCompany:
+        toDisplayString(patient?.panel_company || patient?.panelCompany) || 'N/A',
+      tag: toDisplayString(patient?.tag) || 'N/A',
+    }))
+    .filter(Boolean);
 
 const normalizeYesNoValue = value => {
   if (typeof value === 'boolean') {
@@ -336,9 +394,39 @@ const normalizeYesNoValue = value => {
   return 'No';
 };
 
+const normalizeUrlList = value => {
+  if (Array.isArray(value)) {
+    return value.map(item => toDisplayString(item)).filter(Boolean);
+  }
+
+  const normalizedValue = toDisplayString(value);
+
+  if (!normalizedValue) {
+    return [];
+  }
+
+  try {
+    const parsedValue = JSON.parse(normalizedValue);
+    if (Array.isArray(parsedValue)) {
+      return parsedValue.map(item => toDisplayString(item)).filter(Boolean);
+    }
+  } catch (error) {
+    // Fall back to separator parsing below.
+  }
+
+  return normalizedValue
+    .split(/[,\n|]+/)
+    .map(item => item.trim())
+    .filter(Boolean);
+};
+
 export const normalizeAssignedBooking = (booking, index) => {
-  const preferredVisitDate = toDisplayString(
-    booking?.preferred_visit_date || booking?.preferredVisitDate,
+  const preferredVisitDate = firstNonEmptyValue(
+    booking?.preferred_visit_date,
+    booking?.preferredVisitDate,
+    booking?.visitDate,
+    booking?.visit_date,
+    booking?.appointment_date,
   );
   const preferredTimeSlot = toDisplayString(
     booking?.preferred_time_slot || booking?.preferredTimeSlot,
@@ -372,6 +460,7 @@ export const normalizeAssignedBooking = (booking, index) => {
     patients: [],
     patientCount: Number.isNaN(patientCount) || patientCount < 1 ? 1 : patientCount,
     preferredVisitDate: preferredVisitDate || 'Date not available',
+    visitDate: preferredVisitDate || 'Date not available',
     bookingStatusCode,
     status: getBookingStatusLabel(bookingStatusCode, booking?.status),
     timeSlot: preferredTimeSlot || 'Time not available',
@@ -451,6 +540,15 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
   );
   const patients = (patientsSource.length ? patientsSource : fallbackPatients).map(
     (patient, index) => {
+      const selectedCompCatIds = toDisplayString(
+        patient?.selected_comp_cat_ids || patient?.selectedCompCatIds,
+      );
+      const primarySelectedCompCatId =
+        selectedCompCatIds
+          .split(',')
+          .map(value => value.trim())
+          .find(Boolean) || '';
+
       const bookingPatientId = toDisplayString(
         patient?.booking_patient_id ||
           patient?.bookingPatientId ||
@@ -488,7 +586,17 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
           patient?.panelAbarid || patient?.panel_abarid || patient?.ABARID,
         ),
         compCatId: toDisplayString(
-          patient?.compCatId || patient?.comp_cat_id || patient?.CompCatID,
+          primarySelectedCompCatId ||
+            patient?.compCatId ||
+            patient?.comp_cat_id ||
+            patient?.CompCatID,
+        ),
+        selectedCompCatIds,
+        selectedChargeModes: toDisplayString(
+          patient?.selected_charge_modes || patient?.selectedChargeModes,
+        ),
+        selectedPanelCompanies: toDisplayString(
+          patient?.selected_panel_companies || patient?.selectedPanelCompanies,
         ),
         centerId: toDisplayString(
           patient?.centerId || patient?.center_id || patient?.CenterID,
@@ -554,6 +662,12 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
         documents: extractTestsList(
           patient?.documents || patient?.document_list || patient?.docs,
         ),
+        prescriptionUrls: normalizeUrlList(
+          patient?.prescription_urls ||
+            patient?.prescriptionUrls ||
+            patient?.prescription_url ||
+            patient?.prescriptionUrl,
+        ),
       };
     },
   );
@@ -610,6 +724,32 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
         booking?.status || fallbackBooking?.status,
       ),
     bookingStatusCode,
+    amountFields: {
+      subtotal: toNumberValue(
+        booking?.F_Apt_Am ||
+          booking?.f_apt_am ||
+          booking?.subtotal ||
+          booking?.sub_total,
+      ),
+      baseDiscount: toNumberValue(
+        booking?.F_dis ||
+          booking?.f_dis ||
+          booking?.base_discount ||
+          booking?.baseDiscount,
+      ),
+      additionalDiscount: toNumberValue(
+        booking?.Ad_Dis ||
+          booking?.ad_dis ||
+          booking?.additional_discount ||
+          booking?.additionalDiscount,
+      ),
+      totalAmount: toNumberValue(
+        booking?.total_amount ||
+          booking?.totalAmount ||
+          booking?.final_amount ||
+          booking?.finalAmount,
+      ),
+    },
     patientCount:
       Number.isNaN(patientCount) || patientCount < 1
         ? patients.length
@@ -730,5 +870,10 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
             documents: [],
           },
         ],
+    linkedPatients: normalizeLinkedPatients(
+      booking?.linked_patients ||
+        booking?.linkedPatients ||
+        fallbackBooking?.linkedPatients,
+    ),
   };
 };

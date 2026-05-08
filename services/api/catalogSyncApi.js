@@ -2,11 +2,7 @@ import {getCatalogSyncTableApiUrl} from '../../constants/config/api';
 import {secureFetch} from './secureFetch';
 import {shouldSkipCatalogSyncTable} from '../local/catalogSyncLocal';
 
-const logSyncApiDebug = (...args) => {
-  if (__DEV__) {
-    console.log(...args);
-  }
-};
+const logSyncApiDebug = () => {};
 
 const getRowsFromResponse = responseData => {
   if (Array.isArray(responseData)) {

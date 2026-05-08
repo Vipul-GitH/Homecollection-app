@@ -48,6 +48,112 @@ const logAppointmentDetailDebug = (label, payload) => {
   }
 };
 
+const logCompleteBookingDebug = (label, payload) => {
+  if (__DEV__) {
+    console.log(label, stringifyForDebugLog(payload));
+  }
+};
+
+const isPatientBookingMappingError = message =>
+  /patient\s+.+\s+is\s+not\s+mapped\s+to\s+booking\s+/i.test(
+    String(message || ''),
+  );
+
+const buildMasterPatientDocumentMap = (bookingDetail, patientDocumentsMap) => {
+  const mappedDocuments = {};
+  const patients = Array.isArray(bookingDetail?.patients) ? bookingDetail.patients : [];
+
+  Object.entries(patientDocumentsMap || {}).forEach(([sourcePatientId, documents]) => {
+    if (!sourcePatientId) {
+      return;
+    }
+
+    const matchedPatient = patients.find(patient =>
+      [
+        patient?.bookingPatientId,
+        patient?.booking_patient_id,
+        patient?.patientId,
+        patient?.patient_id,
+        patient?.id,
+      ]
+        .map(value => String(value || '').trim())
+        .filter(Boolean)
+        .includes(String(sourcePatientId).trim()),
+    );
+    const masterPatientId = String(
+      matchedPatient?.patientId || matchedPatient?.patient_id || '',
+    ).trim();
+
+    if (!masterPatientId) {
+      return;
+    }
+
+    mappedDocuments[masterPatientId] = Array.isArray(documents) ? documents : [];
+  });
+
+  return mappedDocuments;
+};
+
+const postCompleteBookingStatus = async ({
+  accessToken,
+  bookingId,
+  payload,
+  patientDocumentsMap,
+}) => {
+  const formData = new FormData();
+  formData.append('payload', JSON.stringify(payload));
+
+  Object.entries(patientDocumentsMap).forEach(([patientId, documents]) => {
+    (Array.isArray(documents) ? documents : []).forEach(document => {
+      if (!document?.uri || !patientId) {
+        return;
+      }
+
+      formData.append(`patient_documents_${patientId}`, {
+        uri: document.uri,
+        name: document.name || `patient-document-${Date.now()}`,
+        type: document.type || 'application/octet-stream',
+      });
+    });
+  });
+
+  logCompleteBookingDebug('[Complete Booking API Request]', {
+    bookingId,
+    method: 'POST',
+    url: getAssignedBookingStatusApiUrl(bookingId),
+    payload,
+    patientDocumentFields: Object.entries(patientDocumentsMap).flatMap(
+      ([patientId, documents]) =>
+        (Array.isArray(documents) ? documents : [])
+          .filter(document => Boolean(document?.uri) && Boolean(patientId))
+          .map(document => ({
+            field: `patient_documents_${patientId}`,
+            name: document.name || '',
+            type: document.type || '',
+            uri: document.uri,
+          })),
+    ),
+  });
+
+  const response = await fetch(getAssignedBookingStatusApiUrl(bookingId), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: formData,
+  });
+
+  const responseData = await parseJsonResponse(response, '[Booking Status]');
+  logCompleteBookingDebug('[Complete Booking API Response]', {
+    bookingId,
+    status: response.status,
+    ok: response.ok,
+    response: responseData,
+  });
+
+  return {response, responseData};
+};
+
 const getApiErrorMessage = (response, responseData, fallbackMessage) => {
   if (response.status === 0) {
     return 'Network request failed';
@@ -117,28 +223,22 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
   const bookingId = booking?.id;
   const appointmentId = booking?.appointmentId || booking?.appointment_id;
   const sourceType = booking?.sourceType || booking?.source_type;
-
-  const response = await secureFetch(
-    getAssignedBookingDetailApiUrl(bookingId, appointmentId, sourceType),
-    {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-    },
+  const apiUrl = getAssignedBookingDetailApiUrl(
+    bookingId,
+    appointmentId,
+    sourceType,
   );
 
-  const responseData = await parseJsonResponse(response, '[Assigned Detail]');
-  logAppointmentDetailDebug('[Appointment Details API Response]', {
-    request: {
-      bookingId,
-      appointmentId,
-      sourceType,
-      url: getAssignedBookingDetailApiUrl(bookingId, appointmentId, sourceType),
+  const response = await secureFetch(apiUrl, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json',
     },
-    response: responseData,
   });
+
+  const responseData = await parseJsonResponse(response, '[Assigned Detail]');
+  logAppointmentDetailDebug('[Appointment Details API Response]', responseData);
   const errorMessage = getApiErrorMessage(
     response,
     responseData,
@@ -151,14 +251,7 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
 
   const bookingDetail =
     responseData?.data || responseData?.booking || responseData?.result || responseData;
-  const normalizedBookingDetail = normalizeAssignedBookingDetail(bookingDetail, booking);
-  logAppointmentDetailDebug('[Patient Details Normalized]', {
-    bookingId: normalizedBookingDetail?.id,
-    appointmentId: normalizedBookingDetail?.appointmentId,
-    patients: normalizedBookingDetail?.patients || [],
-  });
-
-  return normalizedBookingDetail;
+  return normalizeAssignedBookingDetail(bookingDetail, booking);
 };
 
 export const updateAssignedBookingStatusApi = async ({
@@ -167,12 +260,87 @@ export const updateAssignedBookingStatusApi = async ({
   action,
   appointmentId,
   sourceType,
+  statusPayload = {},
 }) => {
   const normalizedSourceType = String(sourceType || '')
     .trim()
     .toUpperCase();
   const normalizedAppointmentId = String(appointmentId || '').trim();
-  const payload = {action};
+  const {
+    patient_documents_map: patientDocumentsMapFromSnakeCase,
+    patientDocumentsMap: patientDocumentsMapFromCamelCase,
+    ...statusPayloadFields
+  } = statusPayload || {};
+  const patientDocumentsMap =
+    patientDocumentsMapFromSnakeCase || patientDocumentsMapFromCamelCase || {};
+  const payload = {
+    ...statusPayloadFields,
+    action: action === 'completed' ? 'complete' : action,
+  };
+
+  if (payload.action === 'complete') {
+    const numericAppointmentId = Number(normalizedAppointmentId);
+    payload.appointment_id =
+      normalizedSourceType === 'APPOINTMENT' && normalizedAppointmentId
+        ? Number.isFinite(numericAppointmentId)
+          ? numericAppointmentId
+          : normalizedAppointmentId
+        : null;
+    const routingBooking = {
+      id: bookingId,
+      appointmentId: normalizedAppointmentId,
+      sourceType: normalizedSourceType,
+    };
+    const latestBookingDetail = await fetchAssignedBookingDetailApi({
+      accessToken,
+      booking: routingBooking,
+    });
+    let resolvedPatientDocumentsMap = buildMasterPatientDocumentMap(
+      latestBookingDetail,
+      patientDocumentsMap,
+    );
+
+    let {response, responseData} = await postCompleteBookingStatus({
+      accessToken,
+      bookingId,
+      payload,
+      patientDocumentsMap: resolvedPatientDocumentsMap,
+    });
+    let errorMessage = getApiErrorMessage(
+      response,
+      responseData,
+      'Unable to update booking status right now.',
+    );
+
+    if (errorMessage && isPatientBookingMappingError(errorMessage)) {
+      const refreshedBookingDetail = await fetchAssignedBookingDetailApi({
+        accessToken,
+        booking: routingBooking,
+      });
+      resolvedPatientDocumentsMap = buildMasterPatientDocumentMap(
+        refreshedBookingDetail,
+        patientDocumentsMap,
+      );
+
+      ({response, responseData} = await postCompleteBookingStatus({
+        accessToken,
+        bookingId,
+        payload,
+        patientDocumentsMap: resolvedPatientDocumentsMap,
+      }));
+      errorMessage = getApiErrorMessage(
+        response,
+        responseData,
+        'Unable to update booking status right now.',
+      );
+    }
+
+    if (errorMessage) {
+      throw new Error(errorMessage);
+    }
+
+    return responseData;
+  }
 
   if (normalizedSourceType === 'APPOINTMENT' && normalizedAppointmentId) {
     const numericAppointmentId = Number(normalizedAppointmentId);
@@ -303,17 +471,54 @@ export const updateAssignedBookingPatientApi = async ({
   patientId,
   patient,
 }) => {
-  const response = await secureFetch(
-    getAssignedBookingPatientApiUrl(bookingId, patientId),
-    {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify(patient),
-    },
+  const formData = new FormData();
+
+  formData.append('title', String(patient?.title || ''));
+  formData.append('full_name', String(patient?.full_name || ''));
+  formData.append('gender', String(patient?.gender || ''));
+  formData.append('date_of_birth', String(patient?.date_of_birth || ''));
+  formData.append('age_years', String(patient?.age_years || ''));
+  formData.append(
+    'primary_mobile',
+    String(patient?.primary_mobile || patient?.contact_mobile || ''),
   );
+  formData.append(
+    'contact_mobile',
+    String(patient?.contact_mobile || patient?.primary_mobile || ''),
+  );
+  formData.append(
+    'alternate_mobile',
+    String(patient?.alternate_mobile || ''),
+  );
+  formData.append('email', String(patient?.email || ''));
+  formData.append('labmate_pid', String(patient?.labmate_pid || ''));
+  formData.append('panel_company', String(patient?.panel_company || ''));
+  formData.append('tag', String(patient?.tag || ''));
+
+  const documents = Array.isArray(patient?.patient_documents)
+    ? patient.patient_documents
+    : [];
+  documents.forEach(document => {
+    if (!document?.uri) {
+      return;
+    }
+
+    formData.append('patient_documents', {
+      uri: document.uri,
+      name: document.name || `patient-document-${Date.now()}`,
+      type: document.type || 'application/octet-stream',
+    });
+  });
+
+  // SecureApiModule currently accepts string bodies only, so multipart upload
+  // must use native fetch for this endpoint.
+  const response = await fetch(getAssignedBookingPatientApiUrl(bookingId, patientId), {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: formData,
+  });
 
   const responseData = await parseJsonResponse(response, '[Update Patient]');
   const errorMessage = getApiErrorMessage(

@@ -10,7 +10,7 @@ export const MY_ASSIGNED_BOOKINGS_HISTORY_API_URL =
 export const PANEL_TEST_CATALOG_API_URL =
   'https://labmate.bhasinpathlabs.com:2010/hhome-collection/panel-companies';
 
-export const CATALOG_SEED_TS = '2026-05-05 16:52:46';
+export const CATALOG_SEED_TS = '2026-05-06 17:04:27';
 
 export const CATALOG_SYNC_API_BASE_URL =
   'https://labmate.bhasinpathlabs.com:2010/api/v1/sync';

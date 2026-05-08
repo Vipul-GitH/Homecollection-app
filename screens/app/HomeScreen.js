@@ -119,6 +119,7 @@ function HomeScreen({
   onAssignedCardPress,
   onStartedCardPress,
   onCompletedCardPress,
+  onCollectSample,
   onAssignedRetry,
   onCompletedRetry,
   onAssignedViewTests,
@@ -176,13 +177,21 @@ function HomeScreen({
       ? styles.homeContainerTopSpacingCompact
       : styles.homeContainerTopSpacing;
   const selectedPatientId = getPatientMutationId(selectedSamplePatient);
-  const selectedPatientTests = getMergedPatientSelectedTests(
-    selectedSamplePatient,
-    (selectedPatientId &&
-      appointmentDetailState?.patientSelectedTestsMap?.[selectedPatientId]) ||
-      [],
-    selectedSamplePanelCompany,
-  );
+  const selectedPatientTestsMap =
+    appointmentDetailState?.patientSelectedTestsMap || {};
+  const hasSelectedPatientTestsOverride =
+    selectedPatientId &&
+    Object.prototype.hasOwnProperty.call(
+      selectedPatientTestsMap,
+      selectedPatientId,
+    );
+  const selectedPatientTests = hasSelectedPatientTestsOverride
+    ? selectedPatientTestsMap[selectedPatientId] || []
+    : getMergedPatientSelectedTests(
+        selectedSamplePatient,
+        [],
+        selectedSamplePanelCompany,
+      );
   const bookingPatientCount = selectedBooking?.patients?.length || 0;
   const bookingAmount = String(selectedBooking?.payment?.amount || '').trim();
   const bookingHeaderAmount =
@@ -282,6 +291,7 @@ function HomeScreen({
               selectedPatient={selectedSamplePatient}
               selectedTests={selectedPatientTests}
               styles={styles}
+              onCollectSample={onCollectSample}
               onRemoveSelectedTest={onRemovePatientSelectedTest}
               onLocalDatabaseLoadingChange={onLocalDatabaseLoadingChange}
             />

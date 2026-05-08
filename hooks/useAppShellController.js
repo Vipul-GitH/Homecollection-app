@@ -4,7 +4,10 @@ import {bottomTabs} from '../constants/navigation/tabs';
 import {
   getPatientMutationId,
 } from '../screens/bookings/appointmentDetails/helpers';
-import {getLocalMatchedPanelCompaniesResponse} from '../services/local/panelCatalogLocal';
+import {
+  getLocalBookingTestPricesResponse,
+  getLocalMatchedPanelCompaniesResponse,
+} from '../services/local/panelCatalogLocal';
 import {getSpecimenNameForTestCode} from '../services/local/panelCatalogSpecimenLookup';
 import {
   getCachedAppointmentDetailState,
@@ -43,50 +46,114 @@ const parseCatalogKey = catalogKey => {
   return {compCatId, gcode, scode, bookedCode};
 };
 
+const splitCsvField = value =>
+  toStableValue(value)
+    .split(',')
+    .map(item => item.trim());
+
+const buildApiPanelCompaniesFromPatient = patient => {
+  const compCatIds = splitCsvField(
+    patient?.selectedCompCatIds || patient?.selected_comp_cat_ids,
+  );
+  const names = splitCsvField(
+    patient?.selectedPanelCompanies || patient?.selected_panel_companies,
+  );
+  const chargeModes = splitCsvField(
+    patient?.selectedChargeModes || patient?.selected_charge_modes,
+  );
+
+  return compCatIds
+    .map((compCatId, index) => {
+      if (!compCatId) {
+        return null;
+      }
+
+      return {
+        id: `api-${compCatId}-${index}`,
+        name:
+          names[index] ||
+          toStableValue(patient?.panelCompany || patient?.panel_company) ||
+          `Panel ${compCatId}`,
+        compCatId,
+        billingChargeMode: chargeModes[index] || '',
+        chargeMode: chargeModes[index] || '',
+      };
+    })
+    .filter(Boolean);
+};
+
+const getPrimaryApiPanelCompany = patient =>
+  buildApiPanelCompaniesFromPatient(patient)[0] || null;
+
 const buildSeededPatientTests = (patient, panelCompany = null) =>
-  (Array.isArray(patient?.tests) ? patient.tests : []).map(test => ({
-    key: `seed|${test?.code || 'na'}|${test?.name || 'na'}`,
-    panelCompanyName:
-      panelCompany?.name || test?.panelCompanyName || patient?.panelCompany || 'Current Panel',
-    panelCompanyId:
-      panelCompany?.compCatId ||
-      test?.compCatId ||
-      test?.comp_cat_id ||
-      patient?.compCatId ||
-      patient?.comp_cat_id ||
-      '',
-    centerId: panelCompany?.centerId || test?.centerId || test?.CenterID || '',
-    atype: panelCompany?.atype || test?.atype || test?.Atype || '',
-    panelCode:
-      panelCompany?.panelCode || test?.panelCode || patient?.panelCode || '',
-    panelAbarid:
-      panelCompany?.panelAbarid || test?.panelAbarid || patient?.panelAbarid || '',
-    booked_code: test?.code || 'N/A',
-    catalog_key:
-      test?.catalog_key ||
-      [
-        panelCompany?.compCatId ||
-          test?.compCatId ||
-          test?.comp_cat_id ||
-          patient?.compCatId ||
-          patient?.comp_cat_id ||
+  (Array.isArray(patient?.tests) ? patient.tests : []).map(test => {
+    const resolvedPanelCompany = panelCompany || getPrimaryApiPanelCompany(patient);
+
+    return {
+      key: `seed|${test?.code || test?.booked_code || 'na'}|${
+        test?.name || test?.test_name || 'na'
+      }`,
+      panelCompanyName:
+        resolvedPanelCompany?.name ||
+        test?.panelCompanyName ||
+        patient?.panelCompany ||
+        'Current Panel',
+      cat_details: test?.cat_details || test?.catDetails || '',
+      selected_charge_mode:
+        test?.selected_charge_mode ||
+        test?.selectedChargeMode ||
+        resolvedPanelCompany?.billingChargeMode ||
+        resolvedPanelCompany?.chargeMode ||
+        '',
+      panelCompanyId:
+        resolvedPanelCompany?.compCatId ||
+        test?.compCatId ||
+        test?.comp_cat_id ||
+        patient?.compCatId ||
+        patient?.comp_cat_id ||
+        '',
+      centerId:
+        resolvedPanelCompany?.centerId || test?.centerId || test?.CenterID || '',
+      atype: resolvedPanelCompany?.atype || test?.atype || test?.Atype || '',
+      panelCode:
+        resolvedPanelCompany?.panelCode || test?.panelCode || patient?.panelCode || '',
+      panelAbarid:
+        resolvedPanelCompany?.panelAbarid ||
+        test?.panelAbarid ||
+        patient?.panelAbarid ||
+        '',
+      booked_code: test?.code || test?.booked_code || 'N/A',
+      catalog_key:
+        test?.catalog_key ||
+        [
+          resolvedPanelCompany?.compCatId ||
+            test?.compCatId ||
+            test?.comp_cat_id ||
+            patient?.compCatId ||
+            patient?.comp_cat_id ||
+            '',
           '',
-        '',
-        '',
-        test?.code || '',
-      ].join('|'),
-    gcode: test?.gcode || '',
-    scode: test?.scode || '',
-    test_code: test?.test_code || '',
-    description: test?.name || 'Unnamed Test',
-    specimenName:
-      test?.specimen_name ||
-      test?.specimenName ||
-      getSpecimenNameForTestCode(test?.code) ||
-      'N/A',
-    mrp: Number(test?.mrp || test?.charge || test?.amount || 0) || 0,
-    isChildTest: false,
-  }));
+          '',
+          test?.code || test?.booked_code || '',
+        ].join('|'),
+      gcode: test?.gcode || '',
+      scode: test?.scode || '',
+      test_code: test?.test_code || test?.code || test?.booked_code || '',
+      description: test?.name || test?.test_name || 'Unnamed Test',
+      specimenName:
+        test?.specimen_name ||
+        test?.specimenName ||
+        getSpecimenNameForTestCode(test?.code || test?.booked_code) ||
+        'N/A',
+      mrp: Number(test?.mrp || test?.charge || test?.amount || 0) || 0,
+      charge: Number(test?.charge || test?.mrp || test?.amount || 0) || 0,
+      max_discount: Number(test?.max_discount || test?.maxDiscount || 0) || 0,
+      max_allowed_discount:
+        Number(test?.max_allowed_discount || test?.maxAllowedDiscount || 0) || 0,
+      isChildTest: false,
+      isAppAdded: false,
+    };
+  });
 
 const withPanelContextForTests = (tests, patient, panelCompany = null) =>
   (Array.isArray(tests) ? tests : []).map(test => {
@@ -113,6 +180,9 @@ const withPanelContextForTests = (tests, patient, panelCompany = null) =>
         panelCompany?.name ||
         patient?.panelCompany ||
         'Current Panel',
+      cat_details: test?.cat_details || test?.catDetails || '',
+      selected_charge_mode:
+        test?.selected_charge_mode || test?.selectedChargeMode || '',
       panelCompanyId,
       centerId,
       atype,
@@ -123,10 +193,45 @@ const withPanelContextForTests = (tests, patient, panelCompany = null) =>
         [panelCompanyId, test?.gcode || '', test?.scode || '', test?.booked_code || test?.code || '']
           .join('|'),
       mrp: Number(test?.mrp || test?.charge || test?.amount || 0) || 0,
+      charge: Number(test?.charge || test?.mrp || test?.amount || 0) || 0,
+      max_discount: Number(test?.max_discount || test?.maxDiscount || 0) || 0,
+      max_allowed_discount:
+        Number(test?.max_allowed_discount || test?.maxAllowedDiscount || 0) || 0,
     };
   });
 
 const resolvePanelCompanyFromPatientName = async patient => {
+  const apiPanelCompany = getPrimaryApiPanelCompany(patient);
+
+  if (apiPanelCompany) {
+    try {
+      const response = await getLocalMatchedPanelCompaniesResponse(patient);
+      const matchedCompanies = Array.isArray(response?.items) ? response.items : [];
+      const localMatch = matchedCompanies.find(
+        item => toStableValue(item?.CompCatID) === apiPanelCompany.compCatId,
+      );
+
+      if (localMatch) {
+        return {
+          id: apiPanelCompany.id,
+          syncKey: toStableValue(localMatch?.sync_key || localMatch?.syncKey),
+          centerId: toStableValue(localMatch?.CenterID),
+          atype: toStableValue(localMatch?.Atype),
+          name: apiPanelCompany.name,
+          compCatId: apiPanelCompany.compCatId,
+          details: toStableValue(localMatch?.CatDetails),
+          billingChargeMode: apiPanelCompany.billingChargeMode,
+          panelCode: toStableValue(localMatch?.code || localMatch?.Code),
+          panelAbarid: toStableValue(localMatch?.ABARID || localMatch?.abarid),
+        };
+      }
+    } catch {
+      // API panel identity is enough; local catalog details are a best-effort add-on.
+    }
+
+    return apiPanelCompany;
+  }
+
   try {
     const response = await getLocalMatchedPanelCompaniesResponse(patient);
     const matchedCompanies = Array.isArray(response?.items) ? response.items : [];
@@ -186,7 +291,125 @@ const buildEmptyAppointmentDetailState = () => ({
   activePatientPanelCompanyMap: {},
   patientSelectedTestsMap: {},
   patientReportCourierMap: {},
+  patientSampleCollectionMap: {},
+  patientTestBookingStatusMap: {},
 });
+
+const buildAppointmentDetailStateFromBooking = booking => {
+  const state = buildEmptyAppointmentDetailState();
+  (Array.isArray(booking?.patients) ? booking.patients : []).forEach(patient => {
+    const patientId = getPatientMutationId(patient);
+    if (!patientId) {
+      return;
+    }
+
+    state.patientSelectedTestsMap[patientId] = buildSeededPatientTests(patient);
+  });
+
+  return state;
+};
+
+const buildBookingTestPriceRequests = booking =>
+  (Array.isArray(booking?.patients) ? booking.patients : [])
+    .map(patient => {
+      const patientId = getPatientMutationId(patient);
+      const tests = Array.isArray(patient?.tests) ? patient.tests : [];
+
+      return {
+        patient_id: patientId,
+        panel_company: toStableValue(patient?.panelCompany),
+        comp_cat_id: toStableValue(patient?.compCatId || patient?.comp_cat_id),
+        center_id: toStableValue(patient?.centerId || patient?.CenterID),
+        atype: toStableValue(patient?.atype || patient?.Atype),
+        panel_code: toStableValue(patient?.panelCode || patient?.panel_code),
+        panel_abarid: toStableValue(patient?.panelAbarid || patient?.panel_abarid),
+        tests: tests.map(test => ({
+          code: toStableValue(test?.code || test?.booked_code),
+          description: toStableValue(
+            test?.name || test?.test_name || test?.description,
+          ),
+          comp_cat_id: toStableValue(
+            test?.compCatId ||
+              test?.comp_cat_id ||
+              test?.panelCompanyId ||
+              test?.panel_company_id,
+          ),
+          center_id: toStableValue(test?.centerId || test?.CenterID),
+          atype: toStableValue(test?.atype || test?.Atype),
+          panel_code: toStableValue(test?.panelCode || test?.panel_code),
+          panel_abarid: toStableValue(test?.panelAbarid || test?.panel_abarid),
+        })),
+      };
+    })
+    .filter(request => request.patient_id && request.tests.length);
+
+const mergeBookingTestsWithLocalPrices = (booking, priceResponse) => {
+  const patientPriceMap = new Map();
+  (Array.isArray(priceResponse?.patients) ? priceResponse.patients : []).forEach(
+    patientPrices => {
+      const testMap = new Map();
+      (Array.isArray(patientPrices?.tests) ? patientPrices.tests : []).forEach(
+        testPrice => {
+          const code = toStableValue(
+            testPrice?.code || testPrice?.booked_code,
+          ).toUpperCase();
+          if (code) {
+            testMap.set(code, testPrice);
+          }
+        },
+      );
+      patientPriceMap.set(toStableValue(patientPrices?.patient_id), testMap);
+    },
+  );
+
+  return {
+    ...booking,
+    patients: (Array.isArray(booking?.patients) ? booking.patients : []).map(
+      patient => {
+        const patientId = getPatientMutationId(patient);
+        const testPriceMap = patientPriceMap.get(patientId) || new Map();
+
+        return {
+          ...patient,
+          tests: (Array.isArray(patient?.tests) ? patient.tests : []).map(test => {
+            const code = toStableValue(test?.code || test?.booked_code);
+            const price = testPriceMap.get(code.toUpperCase()) || {};
+            const hasResolvedPrice =
+              toStableValue(price?.booked_code || price?.code) &&
+              [
+                price?.mrp,
+                price?.charge,
+                price?.max_discount,
+                price?.max_allowed_discount,
+              ].some(value => Number(value || 0) > 0);
+            return {
+              ...test,
+              name: test?.name || test?.test_name || price?.description,
+              mrp:
+                Number(hasResolvedPrice ? price?.mrp : test?.mrp || 0) || 0,
+              charge:
+                Number(
+                  hasResolvedPrice
+                    ? price?.charge ?? price?.mrp
+                    : test?.charge || test?.mrp || 0,
+                ) || 0,
+              max_discount:
+                Number(
+                  hasResolvedPrice ? price?.max_discount : test?.max_discount || 0,
+                ) || 0,
+              max_allowed_discount:
+                Number(
+                  hasResolvedPrice
+                    ? price?.max_allowed_discount
+                    : test?.max_allowed_discount || 0,
+                ) || 0,
+            };
+          }),
+        };
+      },
+    ),
+  };
+};
 
 const getTerminalBookingStatus = booking => {
   const statusCode = Number(booking?.bookingStatusCode || 0);
@@ -370,6 +593,14 @@ export const useAppShellController = () => {
           patientReportCourierMap: {
             ...(previousState?.patientReportCourierMap || {}),
             ...(cachedState?.patientReportCourierMap || {}),
+          },
+          patientSampleCollectionMap: {
+            ...(previousState?.patientSampleCollectionMap || {}),
+            ...(cachedState?.patientSampleCollectionMap || {}),
+          },
+          patientTestBookingStatusMap: {
+            ...(previousState?.patientTestBookingStatusMap || {}),
+            ...(cachedState?.patientTestBookingStatusMap || {}),
           },
         }));
       } catch (error) {
@@ -564,7 +795,31 @@ export const useAppShellController = () => {
         setSelectedBookingScreen('details');
         setSelectedSamplePatient(null);
         setSelectedSamplePanelCompany(null);
-        setAppointmentDetailState(buildEmptyAppointmentDetailState());
+        setAppointmentDetailState(buildAppointmentDetailStateFromBooking(finalBooking));
+
+        getLocalBookingTestPricesResponse(
+          buildBookingTestPriceRequests(finalBooking),
+        )
+          .then(priceResponse => {
+            if (!priceResponse?.ok) {
+              return;
+            }
+
+            const pricedBooking = mergeBookingTestsWithLocalPrices(
+              finalBooking,
+              priceResponse,
+            );
+            setSelectedBooking(previousBooking =>
+              previousBooking?.id === pricedBooking.id
+                ? pricedBooking
+                : previousBooking,
+            );
+            setAppointmentDetailState(previousState => ({
+              ...previousState,
+              ...buildAppointmentDetailStateFromBooking(pricedBooking),
+            }));
+          })
+          .catch(() => {});
       }
     },
     [bookings],
@@ -592,14 +847,19 @@ export const useAppShellController = () => {
         setAppointmentDetailState(previousState => {
           const patientSelectedTestsMap =
             previousState?.patientSelectedTestsMap || {};
+          const hasSelectedTestsOverride =
+            Object.prototype.hasOwnProperty.call(
+              patientSelectedTestsMap,
+              patientId,
+            );
 
-          if ((patientSelectedTestsMap[patientId] || []).length) {
+          if (hasSelectedTestsOverride) {
             return {
               ...previousState,
               patientSelectedTestsMap: {
                 ...patientSelectedTestsMap,
                 [patientId]: withPanelContextForTests(
-                  patientSelectedTestsMap[patientId],
+                  patientSelectedTestsMap[patientId] || [],
                   patient,
                   resolvedPanelCompany,
                 ),
@@ -635,8 +895,13 @@ export const useAppShellController = () => {
         setAppointmentDetailState(previousState => {
           const patientSelectedTestsMap =
             previousState?.patientSelectedTestsMap || {};
+          const hasSelectedTestsOverride =
+            Object.prototype.hasOwnProperty.call(
+              patientSelectedTestsMap,
+              patientId,
+            );
 
-          if ((patientSelectedTestsMap[patientId] || []).length) {
+          if (hasSelectedTestsOverride) {
             return previousState;
           }
 
@@ -679,6 +944,12 @@ export const useAppShellController = () => {
       const nextEntry = {
         key,
         panelCompanyName: panelCompany?.name || 'Selected Panel',
+        cat_details: panelCompany?.details || panelCompany?.CatDetails || '',
+        selected_charge_mode:
+          panelCompany?.billingChargeMode ||
+          panelCompany?.chargeMode ||
+          panelCompany?.BillingChargeMode ||
+          '',
         panelCompanyId: panelCompany?.compCatId || '',
         testcode1:
           childTest?.testcode1 ||
@@ -696,6 +967,25 @@ export const useAppShellController = () => {
         description:
           childTest?.description || test?.description || 'Unnamed Test',
         mrp: Number(childTest?.mrp || test?.mrp || childTest?.charge || test?.charge || 0) || 0,
+        charge:
+          Number(childTest?.charge || test?.charge || childTest?.mrp || test?.mrp || 0) ||
+          0,
+        max_discount:
+          Number(
+            childTest?.max_discount ||
+              test?.max_discount ||
+              childTest?.maxDiscount ||
+              test?.maxDiscount ||
+              0,
+          ) || 0,
+        max_allowed_discount:
+          Number(
+            childTest?.max_allowed_discount ||
+              test?.max_allowed_discount ||
+              childTest?.maxAllowedDiscount ||
+              test?.maxAllowedDiscount ||
+              0,
+          ) || 0,
         specimenName:
           childTest?.specimen_name ||
           test?.specimen_name ||
@@ -705,6 +995,7 @@ export const useAppShellController = () => {
           'N/A',
         childTests: profileChildTests,
         isChildTest: Boolean(childTest),
+        isAppAdded: true,
         parentDescription: childTest ? test?.description || '' : '',
       };
 
@@ -793,15 +1084,36 @@ export const useAppShellController = () => {
     }).catch(() => {});
   }, [selectedBooking?.id]);
 
+  const handleCollectSample = useCallback(({patient, selectedCount = 0}) => {
+    const patientId = getPatientMutationId(patient);
+    if (!patientId) {
+      return;
+    }
+
+    setAppointmentDetailState(previousState => ({
+      ...previousState,
+      patientSampleCollectionMap: {
+        ...(previousState?.patientSampleCollectionMap || {}),
+        [patientId]: {
+          collected: true,
+          selectedCount,
+          collectedAt: new Date().toISOString(),
+        },
+      },
+    }));
+    setSelectedBookingScreen('details');
+  }, []);
+
   const handleBookingAction = useCallback(
-    async action => {
+    async (action, statusPayload = {}) => {
       if (!selectedBooking) {
         return;
       }
 
-      await bookings.submitBookingAction({
+      return bookings.submitBookingAction({
         booking: selectedBooking,
         action,
+        statusPayload,
         onLocalBookingUpdate: nextStatusUpdate => {
           setSelectedBooking(previousBooking =>
             previousBooking
@@ -986,6 +1298,7 @@ export const useAppShellController = () => {
       handleBookingAction,
       handleCancelPatient,
       handleCompletedCardPress,
+      handleCollectSample,
       handleGoBack,
       handleLoginSubmit,
       handleOpenAddTest,

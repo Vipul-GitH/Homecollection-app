@@ -135,8 +135,9 @@ export const collectTubesForSelectedTest = (
     const childCodes = getMapChildren(childrenMap, mapCode);
     const tube = getSpecimenName(entry);
     const tubeKey = tube.toLowerCase();
+    const shouldUseOwnTube = !isProfileTest(entry) && !childCodes.length;
 
-    if (tube && !seenTubes.has(tubeKey)) {
+    if (shouldUseOwnTube && tube && !seenTubes.has(tubeKey)) {
       seenTubes.add(tubeKey);
       tubes.push(tube);
     }
@@ -183,55 +184,97 @@ export const collectTubeNodesForSelectedTest = (
   providedTestsMap = null,
   providedChildrenMap = null,
 ) => {
-  const visitedCodes = new Set();
   const seenNodes = new Set();
-  const nodes = [];
   const fallbackMaps =
     providedTestsMap && providedChildrenMap
       ? null
       : buildSampleTubeMapsFromTests([test]);
   const testsMap = providedTestsMap || fallbackMaps.testsMap;
   const childrenMap = providedChildrenMap || fallbackMaps.childrenMap;
+  const rootCode = getTestCode(test);
 
-  const dfs = (codeValue, level = 0, parentDescription = '') => {
+  const buildNodes = (
+    codeValue,
+    level = 0,
+    parentDescriptions = [],
+    path = [],
+  ) => {
     const code = normalizeCode(codeValue);
-    if (!code || visitedCodes.has(code)) {
-      return;
+    if (!code || path.includes(code)) {
+      return [];
     }
 
-    visitedCodes.add(code);
     const entry = getMapEntry(testsMap, code);
     const mapCode = normalizeCode(entry?.testcode1 || code);
-    const parentName =
+    const description =
       toStableValue(entry?.description || entry?.name) || mapCode || parentDescription;
     const childCodes = getMapChildren(childrenMap, mapCode);
     const specimenName = getSpecimenName(entry);
+    const isProfile = isProfileTest(entry);
+    const nextPath = [...path, code];
+    const parentDescription =
+      parentDescriptions[parentDescriptions.length - 1] || '';
 
-    if (specimenName) {
-      const nodeKey = `${getTestCode(test)}|${mapCode}|${level}|${parentDescription}`;
+    if (childCodes.length) {
+      const nextParentDescriptions = [
+        ...parentDescriptions,
+        description || 'Unnamed Test',
+      ];
+      const childNodes = childCodes.flatMap(childCode =>
+        buildNodes(childCode, level + 1, nextParentDescriptions, nextPath),
+      );
+      const specimenNames = Array.from(
+        new Set(
+          childNodes
+            .map(node => node.specimenName)
+            .filter(childSpecimenName => childSpecimenName),
+        ),
+      );
 
-      if (!seenNodes.has(nodeKey)) {
-        seenNodes.add(nodeKey);
-        nodes.push({
+      return specimenNames.flatMap(childSpecimenName => {
+        const nodeKey = `${rootCode}|${mapCode}|${level}|${parentDescriptions.join(
+          '>',
+        )}|${childSpecimenName}`;
+        const parentNode = {
           key: nodeKey,
           booked_code: mapCode,
-          description:
-            toStableValue(entry?.description || entry?.name) ||
-            mapCode ||
-            'Unnamed Test',
-          specimenName,
+          description: description || 'Unnamed Test',
+          specimenName: childSpecimenName,
           level,
-          isChildTest: level > 0,
+          isProfileContext: true,
           parentDescription,
-        });
-      }
+          parentDescriptions,
+        };
+        return [
+          parentNode,
+          ...childNodes.filter(node => node.specimenName === childSpecimenName),
+        ];
+      });
     }
 
-    childCodes.forEach(childCode =>
-      dfs(childCode, level + 1, parentName),
-    );
+    if (!specimenName || isProfile) {
+      return [];
+    }
+
+    return [
+      {
+        key: `${rootCode}|${mapCode}|${level}|${parentDescriptions.join('>')}`,
+        booked_code: mapCode,
+        description: description || 'Unnamed Test',
+        specimenName,
+        level,
+        isChildTest: level > 0,
+        parentDescription,
+        parentDescriptions,
+      },
+    ];
   };
 
-  dfs(getTestCode(test));
-  return nodes;
+  return buildNodes(rootCode).filter(node => {
+    if (seenNodes.has(node.key)) {
+      return false;
+    }
+    seenNodes.add(node.key);
+    return true;
+  });
 };

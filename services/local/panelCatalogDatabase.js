@@ -72,6 +72,21 @@ export const getDatabasePanelCatalogByCompanyResponse = async panelCompany => {
   );
 };
 
+export const getDatabaseBookingTestPricesResponse = async requests => {
+  if (
+    !isCatalogDatabaseAvailable() ||
+    !CatalogDatabaseModule.getBookingTestPrices
+  ) {
+    return null;
+  }
+
+  return parseNativeJson(
+    await CatalogDatabaseModule.getBookingTestPrices(
+      JSON.stringify(Array.isArray(requests) ? requests : []),
+    ),
+  );
+};
+
 export const getDatabaseSpecimenNameForTestCode = testCode => {
   if (!isCatalogDatabaseAvailable()) {
     return '';

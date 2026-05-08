@@ -6,6 +6,7 @@ function PatientTestsAccordion({
   styles,
   patient,
   tests,
+  subtotal = 0,
   isExpanded,
   isNarrow,
   onToggle,
@@ -30,7 +31,11 @@ function PatientTestsAccordion({
               style={styles.testsAccordionButton}
               onPress={onToggle}>
               <Text style={styles.testsAccordionButtonText}>
-                {isExpanded ? 'Hide Tests' : `View Tests (${tests.length})`}
+                {isExpanded
+                  ? `Hide Tests | Rs. ${Number(subtotal || 0).toFixed(2)}`
+                  : `View Tests (${tests.length}) | Rs. ${Number(
+                      subtotal || 0,
+                    ).toFixed(2)}`}
               </Text>
               <Ionicons
                 name={isExpanded ? 'chevron-up' : 'chevron-down'}
@@ -58,6 +63,9 @@ function PatientTestsAccordion({
                           Panel: {test.panelCompanyName}
                         </Text>
                       ) : null}
+                      <Text style={styles.sampleCollectionSelectedMeta}>
+                        MRP: Rs. {Number(test?.mrp || 0).toFixed(2)}
+                      </Text>
                     </View>
                     {test.isAppAdded && onRemoveSelectedTest ? (
                       <TouchableOpacity
@@ -70,7 +78,7 @@ function PatientTestsAccordion({
                           })
                         }>
                         <Ionicons
-                          name="trash-outline"
+                          name="close"
                           size={15}
                           style={styles.sampleCollectionRemoveButtonIcon}
                         />

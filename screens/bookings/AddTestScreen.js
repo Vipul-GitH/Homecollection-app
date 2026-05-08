@@ -66,6 +66,90 @@ const getCatalogSubgroupId = subgroup =>
     subgroup?.subgroup_id || subgroup?.scode || subgroup?.subgroup_code,
   );
 
+const getCatalogTestId = test =>
+  toStableValue(test?.booked_code || test?.testcode1 || test?.test_code || test?.code);
+
+const compareCatalogIds = (leftId, rightId) =>
+  toStableValue(leftId).localeCompare(toStableValue(rightId), undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+
+const getCatalogCodeSortParts = code => {
+  const normalizedCode = toStableValue(code).toUpperCase();
+  const match = normalizedCode.match(/^G(\d+)S(\d+)T(\d+)/);
+
+  return match
+    ? {
+        group: Number(match[1]),
+        subgroup: Number(match[2]),
+        test: Number(match[3]),
+        code: normalizedCode,
+      }
+    : {
+        group: Number.MAX_SAFE_INTEGER,
+        subgroup: Number.MAX_SAFE_INTEGER,
+        test: Number.MAX_SAFE_INTEGER,
+        code: normalizedCode,
+      };
+};
+
+const compareCatalogTestCodes = (leftCode, rightCode) => {
+  const leftParts = getCatalogCodeSortParts(leftCode);
+  const rightParts = getCatalogCodeSortParts(rightCode);
+
+  return (
+    leftParts.group - rightParts.group ||
+    leftParts.subgroup - rightParts.subgroup ||
+    leftParts.test - rightParts.test ||
+    compareCatalogIds(leftParts.code, rightParts.code)
+  );
+};
+
+const sortCatalogTestsByCode = tests =>
+  (Array.isArray(tests) ? [...tests] : [])
+    .map((test, index) => {
+      const sortedTest = {...test};
+
+      if (Array.isArray(test?.child_tests)) {
+        sortedTest.child_tests = sortCatalogTestsByCode(test.child_tests);
+      }
+
+      if (Array.isArray(test?.childTests)) {
+        sortedTest.childTests = sortCatalogTestsByCode(test.childTests);
+      }
+
+      return {test: sortedTest, index};
+    })
+    .sort(
+      (leftItem, rightItem) =>
+        compareCatalogTestCodes(
+          getCatalogTestId(leftItem.test),
+          getCatalogTestId(rightItem.test),
+        ) || leftItem.index - rightItem.index,
+    )
+    .map(item => item.test);
+
+const sortCatalogGroups = groups =>
+  (Array.isArray(groups) ? [...groups] : [])
+    .map(group => ({
+      ...group,
+      subgroups: (Array.isArray(group?.subgroups) ? [...group.subgroups] : [])
+        .map(subgroup => ({
+          ...subgroup,
+          tests: sortCatalogTestsByCode(subgroup?.tests),
+        }))
+        .sort((leftSubgroup, rightSubgroup) =>
+          compareCatalogIds(
+            getCatalogSubgroupId(leftSubgroup),
+            getCatalogSubgroupId(rightSubgroup),
+          ),
+        ),
+    }))
+    .sort((leftGroup, rightGroup) =>
+      compareCatalogIds(getCatalogGroupId(leftGroup), getCatalogGroupId(rightGroup)),
+    );
+
 const getCatalogGroupTitle = group => {
   const groupId = getCatalogGroupId(group);
   const groupName = toStableValue(group?.group_name) || 'Unnamed Group';
@@ -246,7 +330,9 @@ function AddTestScreen({
     () =>
       groups.flatMap(group =>
         (Array.isArray(group?.subgroups) ? group.subgroups : []).flatMap(subgroup =>
-          dedupeTests(Array.isArray(subgroup?.tests) ? subgroup.tests : []).map(test => {
+          sortCatalogTestsByCode(
+            dedupeTests(Array.isArray(subgroup?.tests) ? subgroup.tests : []),
+          ).map(test => {
             const childSearchKey = (Array.isArray(test?.child_tests)
               ? test.child_tests
               : [])
@@ -340,8 +426,10 @@ function AddTestScreen({
         return flattenedCompanyTests;
       }
 
-      return flattenedCompanyTests.filter(test =>
-        test.__searchKey?.includes(normalizedSearch),
+      return sortCatalogTestsByCode(
+        flattenedCompanyTests.filter(test =>
+          test.__searchKey?.includes(normalizedSearch),
+        ),
       );
     }
 
@@ -349,22 +437,29 @@ function AddTestScreen({
       const tests = Array.isArray(selectedSubgroup.tests)
         ? selectedSubgroup.tests
         : [];
-      return dedupeTests(tests);
+      return sortCatalogTestsByCode(dedupeTests(tests));
     }
 
     if (selectedGroup) {
       const subgroups = Array.isArray(selectedGroup.subgroups)
         ? selectedGroup.subgroups
         : [];
-      return subgroups;
+      return [...subgroups].sort((leftSubgroup, rightSubgroup) =>
+        compareCatalogIds(
+          getCatalogSubgroupId(leftSubgroup),
+          getCatalogSubgroupId(rightSubgroup),
+        ),
+      );
     }
 
     if (!normalizedSearch) {
-      return groups;
+      return sortCatalogGroups(groups);
     }
 
-    return flattenedCompanyTests.filter(test =>
-      test.__searchKey?.includes(normalizedSearch),
+    return sortCatalogTestsByCode(
+      flattenedCompanyTests.filter(test =>
+        test.__searchKey?.includes(normalizedSearch),
+      ),
     );
   }, [
     dedupeTests,
@@ -438,9 +533,7 @@ function AddTestScreen({
         panelCompany,
       });
 
-      const nextGroups = Array.isArray(catalogResponse?.groups)
-        ? catalogResponse.groups
-        : [];
+      const nextGroups = sortCatalogGroups(catalogResponse?.groups);
 
       if (!nextGroups.length) {
         Alert.alert(

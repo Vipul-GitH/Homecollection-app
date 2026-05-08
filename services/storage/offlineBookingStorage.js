@@ -168,6 +168,7 @@ export const queuePendingBookingAction = async ({
   action,
   appointmentId,
   sourceType,
+  statusPayload,
 }) => {
   const normalizedSourceType = String(sourceType || '')
     .trim()
@@ -185,6 +186,9 @@ export const queuePendingBookingAction = async ({
             ? Number(normalizedAppointmentId)
             : normalizedAppointmentId,
         }
+      : {}),
+    ...(statusPayload && Object.keys(statusPayload).length
+      ? {statusPayload}
       : {}),
     queuedAt: new Date().toISOString(),
   };
