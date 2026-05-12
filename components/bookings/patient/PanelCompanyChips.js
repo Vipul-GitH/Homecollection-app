@@ -13,7 +13,7 @@ function PanelCompanyChips({
   onRemovePanelCompany,
 }) {
   const {width} = useWindowDimensions();
-  const isNarrow = width < 370;
+  const isNarrow = width < 390;
 
   if (!panelCompanies.length) {
     return null;

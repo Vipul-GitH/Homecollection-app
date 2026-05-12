@@ -1,15 +1,18 @@
-import React, {useEffect, useMemo, useState} from 'react';
-import {Alert, NativeModules, Text, TouchableOpacity, View} from 'react-native';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {NativeModules, Text, TouchableOpacity, View} from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import AppAlertModal from '../../components/common/AppAlertModal';
 import {
   buildSampleTubeMapsFromTests,
   collectTubeNodesForSelectedTest,
   collectUniqueTubesForSelectedTests,
 } from '../../utils/bookings/sampleTubeMapping';
+import {
+  sampleTubeMappingCache,
+  sampleTubeMappingRequests,
+} from '../../utils/bookings/sampleTubeMappingCache';
 
 const {CatalogDatabaseModule} = NativeModules;
-const sampleTubeMappingCache = new Map();
-const sampleTubeMappingRequests = new Map();
 
 const toStableValue = value =>
   value === null || value === undefined ? '' : String(value).trim();
@@ -39,6 +42,46 @@ const dedupeSelectedTests = tests => {
 const getTestCode = test =>
   toStableValue(test?.testcode1 || test?.booked_code || test?.test_code || test?.code) ||
   'N/A';
+
+const toNumberOrValue = value => {
+  const normalizedValue = toStableValue(value);
+  if (!normalizedValue) {
+    return '';
+  }
+
+  const numericValue = Number(normalizedValue);
+  return Number.isFinite(numericValue) ? numericValue : normalizedValue;
+};
+
+const getPatientApiId = patient =>
+  toNumberOrValue(
+    patient?.patientId ||
+      patient?.patient_id ||
+      patient?.labmatePid ||
+      patient?.labmate_pid ||
+      patient?.id,
+  );
+
+const getBookingPatientId = patient =>
+  toNumberOrValue(
+    patient?.bookingPatientId ||
+      patient?.booking_patient_id ||
+      patient?.booking_patient ||
+      patient?.id,
+  );
+
+const getBookingTestId = test =>
+  toNumberOrValue(
+    test?.bookingTestId ||
+      test?.booking_test_id ||
+      test?.bookingTestID ||
+      test?.booking_test ||
+      test?.id,
+  );
+
+const getTestDescription = test =>
+  toStableValue(test?.description || test?.name || test?.test_name) ||
+  'Unnamed Test';
 
 const isFullCatalogCode = code => /^G[^|]+S[^|]+T[^|]+$/i.test(toStableValue(code));
 
@@ -103,22 +146,58 @@ const getSampleTubeMappingCacheKey = rootTests =>
     })),
   );
 
+const isUndefinedSpecimenName = value => {
+  const normalizedValue = String(value || '').trim().toLowerCase();
+  return !normalizedValue || normalizedValue === 'none' || normalizedValue === 'n/a';
+};
+
+const normalizeDraftKey = value => toStableValue(value).toUpperCase();
+
+const isMatchingDraftUnselectedTest = (test, draftTest) => {
+  const testCode = normalizeDraftKey(test?.booked_code);
+  const draftCode = normalizeDraftKey(draftTest?.booked_code);
+
+  if (!testCode || testCode !== draftCode) {
+    return false;
+  }
+
+  const testRoot = normalizeDraftKey(test?.rootBookedCode);
+  const draftRoot = normalizeDraftKey(draftTest?.root_booked_code);
+  return !draftRoot || !testRoot || draftRoot === testRoot;
+};
+
 function SampleCollectionScreen({
+  selectedBooking,
   selectedPatient,
   selectedTests,
+  sampleCollectionDraft,
   styles,
   onCollectSample,
+  onSampleCollectionDraftChange,
   onLocalDatabaseLoadingChange,
 }) {
+  const [appAlert, setAppAlert] = useState(null);
   const [expandedSpecimens, setExpandedSpecimens] = useState({});
-  const [, setSelectedSpecimens] = useState({});
-  const [selectedSpecimenTests, setSelectedSpecimenTests] = useState({});
+  const [selectedSpecimens, setSelectedSpecimens] = useState(
+    () => sampleCollectionDraft?.selectedSpecimens || {},
+  );
+  const [selectedSpecimenTests, setSelectedSpecimenTests] = useState(
+    () => sampleCollectionDraft?.selectedSpecimenTests || {},
+  );
+  const sampleCollectionDraftRef = useRef(sampleCollectionDraft);
   const [sampleTubeMaps, setSampleTubeMaps] = useState(() =>
     buildSampleTubeMapsFromTests([]),
   );
 
   useEffect(() => {
+    sampleCollectionDraftRef.current = sampleCollectionDraft;
+  }, [sampleCollectionDraft]);
+
+  useEffect(() => {
+    const currentDraft = sampleCollectionDraftRef.current || {};
     setExpandedSpecimens({});
+    setSelectedSpecimens(currentDraft?.selectedSpecimens || {});
+    setSelectedSpecimenTests(currentDraft?.selectedSpecimenTests || {});
   }, [selectedPatient]);
 
   const normalizedSelectedTests = useMemo(
@@ -144,6 +223,9 @@ function SampleCollectionScreen({
         ...node,
         removalKey: test?.key,
         panelCompanyName: test?.panelCompanyName,
+        rootBookedCode: getTestCode(test),
+        rootTestName: getTestDescription(test),
+        rootBookingTestId: getBookingTestId(test),
       })),
     );
 
@@ -179,7 +261,7 @@ function SampleCollectionScreen({
         normalizedSelectedTests,
         sampleTubeMaps.testsMap,
         sampleTubeMaps.childrenMap,
-      ),
+      ).filter(tube => !isUndefinedSpecimenName(tube)),
     [normalizedSelectedTests, sampleTubeMaps.childrenMap, sampleTubeMaps.testsMap],
   );
 
@@ -269,12 +351,32 @@ function SampleCollectionScreen({
   }, [normalizedSelectedTests, onLocalDatabaseLoadingChange]);
 
   useEffect(() => {
+    const currentDraft = sampleCollectionDraftRef.current || {};
+    const draftUnselectedTests = Array.isArray(currentDraft?.unselectedTests)
+      ? currentDraft.unselectedTests
+      : [];
+    const draftUnselectedTubes = Array.isArray(currentDraft?.unselectedTubes)
+      ? currentDraft.unselectedTubes
+      : [];
+    const draftUnselectedTubeMap = draftUnselectedTubes.reduce(
+      (nextMap, item) => ({
+        ...nextMap,
+        [toStableValue(item?.tubeName).toLowerCase()]: item,
+      }),
+      {},
+    );
+
     setSelectedSpecimens(previousState => {
       const nextState = {};
       selectedSpecimenSummary.forEach(item => {
+        const draftTube = draftUnselectedTubeMap[
+          toStableValue(item.specimenName).toLowerCase()
+        ];
         nextState[item.specimenName] =
           previousState[item.specimenName] !== undefined
             ? previousState[item.specimenName]
+            : draftTube && Number(draftTube.selectedCount || 0) <= 0
+            ? false
             : true;
       });
       return nextState;
@@ -284,8 +386,15 @@ function SampleCollectionScreen({
       const nextState = {};
       selectedSpecimenSummary.forEach(item => {
         item.tests.forEach(test => {
+          const wasDraftUnselected = draftUnselectedTests.some(draftTest =>
+            isMatchingDraftUnselectedTest(test, draftTest),
+          );
           nextState[test.key] =
-            previousState[test.key] !== undefined ? previousState[test.key] : true;
+            previousState[test.key] !== undefined
+              ? previousState[test.key]
+              : wasDraftUnselected
+              ? false
+              : true;
         });
       });
       return nextState;
@@ -299,10 +408,104 @@ function SampleCollectionScreen({
     }));
   };
 
-  const isSpecimenItemSelected = item =>
-    item.tests.some(
-      test => !test.isProfileContext && Boolean(selectedSpecimenTests[test.key]),
-    );
+  const allSpecimenTests = useMemo(
+    () => selectedSpecimenSummary.flatMap(item => item.tests),
+    [selectedSpecimenSummary],
+  );
+
+  const getRootKeyFromTestKey = useCallback(
+    testKey => toStableValue(testKey).split('|')[0],
+    [],
+  );
+
+  const getParentBookedCode = useCallback(
+    childTest => {
+      const parentDescription = toStableValue(childTest?.parentDescription);
+      const rootKey = getRootKeyFromTestKey(childTest?.key);
+      const childLevel = Number(childTest?.level || 0);
+
+      if (!parentDescription || !rootKey) {
+        return childTest?.rootBookedCode || rootKey;
+      }
+
+      const parentNode = allSpecimenTests.find(test => {
+        const sameRoot = getRootKeyFromTestKey(test?.key) === rootKey;
+        const sameDescription =
+          toStableValue(test?.description) === parentDescription;
+        const expectedLevel = Number(test?.level || 0) === childLevel - 1;
+        return sameRoot && sameDescription && expectedLevel;
+      });
+
+      return parentNode?.booked_code || childTest?.rootBookedCode || rootKey;
+    },
+    [allSpecimenTests, getRootKeyFromTestKey],
+  );
+
+  const descendantKeysByTestKey = useMemo(() => {
+    const keysMap = {};
+
+    allSpecimenTests.forEach(selectedTest => {
+      const rootKey = getRootKeyFromTestKey(selectedTest.key);
+      const keys = new Set([selectedTest.key]);
+
+      if (!rootKey) {
+        keysMap[selectedTest.key] = Array.from(keys);
+        return;
+      }
+
+      if (Number(selectedTest.level || 0) === 0) {
+        allSpecimenTests.forEach(test => {
+          if (getRootKeyFromTestKey(test.key) === rootKey) {
+            keys.add(test.key);
+          }
+        });
+        keysMap[selectedTest.key] = Array.from(keys);
+        return;
+      }
+
+      const pendingParentNames = [selectedTest.description];
+      while (pendingParentNames.length) {
+        const parentName = pendingParentNames.shift();
+
+        allSpecimenTests.forEach(test => {
+          if (
+            getRootKeyFromTestKey(test.key) === rootKey &&
+            test.parentDescription === parentName &&
+            !keys.has(test.key)
+          ) {
+            keys.add(test.key);
+            pendingParentNames.push(test.description);
+          }
+        });
+      }
+
+      keysMap[selectedTest.key] = Array.from(keys);
+    });
+
+    return keysMap;
+  }, [allSpecimenTests, getRootKeyFromTestKey]);
+
+  const selectedDisplayMap = useMemo(() => {
+    const nextMap = {};
+
+    allSpecimenTests.forEach(test => {
+      nextMap[test.key] =
+        Boolean(selectedSpecimenTests[test.key]) ||
+        (descendantKeysByTestKey[test.key] || []).some(
+          testKey => testKey !== test.key && selectedSpecimenTests[testKey],
+        );
+    });
+
+    return nextMap;
+  }, [allSpecimenTests, descendantKeysByTestKey, selectedSpecimenTests]);
+
+  const isSpecimenItemSelected = useCallback(
+    item =>
+      item.tests.some(
+        test => !test.isProfileContext && Boolean(selectedSpecimenTests[test.key]),
+      ),
+    [selectedSpecimenTests],
+  );
 
   const toggleSpecimenSelection = item => {
     const nextSelected = !isSpecimenItemSelected(item);
@@ -319,48 +522,10 @@ function SampleCollectionScreen({
     });
   };
 
-  const getRootKeyFromTestKey = testKey => toStableValue(testKey).split('|')[0];
-  const getTestAndDescendantKeys = selectedTest => {
-    const rootKey = getRootKeyFromTestKey(selectedTest.key);
-    const allTests = selectedSpecimenSummary.flatMap(item => item.tests);
-    const keys = new Set([selectedTest.key]);
-
-    if (!rootKey) {
-      return Array.from(keys);
-    }
-
-    if (Number(selectedTest.level || 0) === 0) {
-      allTests.forEach(test => {
-        if (getRootKeyFromTestKey(test.key) === rootKey) {
-          keys.add(test.key);
-        }
-      });
-      return Array.from(keys);
-    }
-
-    const pendingParentNames = [selectedTest.description];
-    while (pendingParentNames.length) {
-      const parentName = pendingParentNames.shift();
-
-      allTests.forEach(test => {
-        if (
-          getRootKeyFromTestKey(test.key) === rootKey &&
-          test.parentDescription === parentName &&
-          !keys.has(test.key)
-        ) {
-          keys.add(test.key);
-          pendingParentNames.push(test.description);
-        }
-      });
-    }
-
-    return Array.from(keys);
-  };
-
   const toggleSpecimenTestSelection = selectedTest => {
     setSelectedSpecimenTests(previousState => ({
       ...previousState,
-      ...getTestAndDescendantKeys(selectedTest).reduce(
+      ...(descendantKeysByTestKey[selectedTest.key] || [selectedTest.key]).reduce(
         (nextState, testKey) => {
           nextState[testKey] = !previousState[selectedTest.key];
           return nextState;
@@ -370,24 +535,184 @@ function SampleCollectionScreen({
     }));
   };
 
-  const isSpecimenTestSelected = test => {
-    if (selectedSpecimenTests[test.key]) {
-      return true;
-    }
-
-    return getTestAndDescendantKeys(test).some(
-      testKey => testKey !== test.key && selectedSpecimenTests[testKey],
-    );
-  };
-
-  const getSelectedSpecimenTestCount = item =>
-    item.tests.filter(test => !test.isProfileContext && selectedSpecimenTests[test.key])
-      .length;
+  const getSelectedSpecimenTestCount = useCallback(
+    item =>
+      item.tests.filter(
+        test => !test.isProfileContext && selectedSpecimenTests[test.key],
+      ).length,
+    [selectedSpecimenTests],
+  );
   const selectedSampleTestCount = selectedSpecimenSummary.reduce(
     (total, item) => total + getSelectedSpecimenTestCount(item),
     0,
   );
+  const tubeSelectionSummary = useMemo(
+    () =>
+      selectedSpecimenSummary.map(item => {
+        const selectedCount = getSelectedSpecimenTestCount(item);
+        const totalCount = Number(item.count || 0);
+
+        return {
+          tubeName: item.specimenName,
+          totalCount,
+          selectedCount,
+          pendingCount: Math.max(totalCount - selectedCount, 0),
+      };
+    }),
+    [getSelectedSpecimenTestCount, selectedSpecimenSummary],
+  );
+  const selectedTubes = useMemo(
+    () =>
+      tubeSelectionSummary
+        .filter(item => Number(item.selectedCount || 0) > 0)
+        .map(item => ({
+          tubeName: item.tubeName,
+          totalCount: item.totalCount,
+          selectedCount: item.selectedCount,
+          pendingCount: item.pendingCount,
+        })),
+    [tubeSelectionSummary],
+  );
+  const unselectedTubes = useMemo(
+    () =>
+      tubeSelectionSummary
+        .filter(item => Number(item.pendingCount || 0) > 0)
+        .map(item => ({
+          tubeName: item.tubeName,
+          totalCount: item.totalCount,
+          selectedCount: item.selectedCount,
+          pendingCount: item.pendingCount,
+        })),
+    [tubeSelectionSummary],
+  );
+  const unselectedTests = useMemo(() => {
+    const tests = [];
+
+    selectedSpecimenSummary.forEach(item => {
+      item.tests.forEach(test => {
+        if (test.isProfileContext || selectedSpecimenTests[test.key]) {
+          return;
+        }
+
+        tests.push({
+          key: test.key,
+          booked_code: test.booked_code,
+          description: test.description || getTestDescription(test),
+          specimenName: item.specimenName || test.specimenName || 'N/A',
+          parent_booked_code: getParentBookedCode(test),
+          root_booked_code:
+            toStableValue(test.rootBookedCode) || getRootKeyFromTestKey(test.key),
+          root_test_name: test.rootTestName || test.rootBookedCode || '',
+          booking_test_id: test.rootBookingTestId || '',
+          level: Number(test.level || 0),
+        });
+      });
+    });
+
+    return tests;
+  }, [
+    getParentBookedCode,
+    getRootKeyFromTestKey,
+    selectedSpecimenSummary,
+    selectedSpecimenTests,
+  ]);
+  const pendingChildTestsPayload = useMemo(() => {
+    const bookingId = toNumberOrValue(selectedBooking?.id);
+    const bookingPatientId = getBookingPatientId(selectedPatient);
+    const patientId = getPatientApiId(selectedPatient);
+    const pendingGroupMap = new Map();
+
+    selectedSpecimenSummary.forEach(item => {
+      item.tests.forEach(test => {
+        const isPendingChildTest =
+          !test.isProfileContext &&
+          Number(test.level || 0) > 0 &&
+          !selectedSpecimenTests[test.key];
+
+        if (!isPendingChildTest) {
+          return;
+        }
+
+        const rootBookedCode =
+          toStableValue(test.rootBookedCode) || getRootKeyFromTestKey(test.key);
+        const groupKey = [
+          rootBookedCode,
+          toStableValue(item.specimenName || test.specimenName),
+          toStableValue(test.rootBookingTestId),
+        ].join('|');
+        const pendingTest = {
+          booked_code: test.booked_code,
+          parent_booked_code: getParentBookedCode(test),
+        };
+        const existingGroup = pendingGroupMap.get(groupKey);
+
+        if (existingGroup) {
+          existingGroup.pending.push(pendingTest);
+          return;
+        }
+
+        pendingGroupMap.set(groupKey, {
+          booking_id: bookingId,
+          booking_patient_id: bookingPatientId,
+          patient_id: patientId,
+          booking_test_id: test.rootBookingTestId || '',
+          root_booked_code: rootBookedCode,
+          root_test_name: test.rootTestName || rootBookedCode,
+          tube_name: item.specimenName || test.specimenName || 'N/A',
+          pending: [pendingTest],
+        });
+      });
+    });
+
+    return Array.from(pendingGroupMap.values());
+  }, [
+    getParentBookedCode,
+    getRootKeyFromTestKey,
+    selectedBooking?.id,
+    selectedPatient,
+    selectedSpecimenSummary,
+    selectedSpecimenTests,
+  ]);
+  useEffect(() => {
+    if (!selectedPatient || !allSpecimenTests.length) {
+      return;
+    }
+
+    onSampleCollectionDraftChange?.({
+      collected: Boolean(sampleCollectionDraft?.collected),
+      selectedCount: selectedSampleTestCount,
+      selectedSpecimens,
+      selectedSpecimenTests,
+      tubeSelectionSummary,
+      selectedTubes,
+      unselectedTubes,
+      unselectedTests,
+      pendingChildTests: pendingChildTestsPayload,
+      updatedAt: new Date().toISOString(),
+    });
+  }, [
+    allSpecimenTests.length,
+    onSampleCollectionDraftChange,
+    pendingChildTestsPayload,
+    sampleCollectionDraft?.collected,
+    selectedPatient,
+    selectedSampleTestCount,
+    selectedSpecimenTests,
+    selectedSpecimens,
+    selectedTubes,
+    tubeSelectionSummary,
+    unselectedTests,
+    unselectedTubes,
+  ]);
   const canCollectSample = selectedSampleTestCount > 0;
+  const showAppAlert = useCallback((title, message) => {
+    setAppAlert({
+      title,
+      message,
+      actions: [{text: 'OK'}],
+      cancelable: false,
+    });
+  }, []);
   const handleCollectSample = () => {
     if (!canCollectSample) {
       return;
@@ -397,11 +722,18 @@ function SampleCollectionScreen({
       onCollectSample({
         patient: selectedPatient,
         selectedCount: selectedSampleTestCount,
+        pendingChildTests: pendingChildTestsPayload,
+        tubeSelectionSummary,
+        selectedTubes,
+        selectedSpecimens,
+        selectedSpecimenTests,
+        unselectedTubes,
+        unselectedTests,
       });
       return;
     }
 
-    Alert.alert(
+    showAppAlert(
       'Sample Collection',
       `${selectedSampleTestCount} test${
         selectedSampleTestCount > 1 ? 's' : ''
@@ -501,7 +833,9 @@ function SampleCollectionScreen({
                         onPress={() => toggleSpecimenExpansion(item.specimenName)}>
                         <View style={styles.sampleCollectionSpecimenTextWrap}>
                           <Text style={styles.sampleCollectionSpecimenTitle}>
-                            {item.specimenName}
+                            {isUndefinedSpecimenName(item.specimenName)
+                              ? 'Sample tube not defined'
+                              : item.specimenName}
                           </Text>
                           <Text style={styles.sampleCollectionSpecimenMeta}>
                             {selectedCount}/{item.count} tests selected
@@ -523,7 +857,7 @@ function SampleCollectionScreen({
                     {isExpanded ? (
                       <View style={styles.sampleCollectionSpecimenTestsList}>
                         {item.tests.map(test => {
-                          const isTestSelected = isSpecimenTestSelected(test);
+                          const isTestSelected = Boolean(selectedDisplayMap[test.key]);
                           const parentChain = Array.isArray(test.parentDescriptions)
                             ? test.parentDescriptions.filter(Boolean)
                             : test.parentDescription
@@ -589,6 +923,11 @@ function SampleCollectionScreen({
                                 <Text style={styles.sampleCollectionSelectedTitle}>
                                   {test.description}
                                 </Text>
+                                {isUndefinedSpecimenName(item.specimenName) ? (
+                                  <Text style={styles.sampleCollectionSelectedMeta}>
+                                    Sample tube is not defined for this test.
+                                  </Text>
+                                ) : null}
                                 {parentChain.length ? (
                                   <Text style={styles.sampleCollectionSelectedMeta}>
                                     test in {parentChain.join(' > ')}
@@ -634,6 +973,11 @@ function SampleCollectionScreen({
           </TouchableOpacity>
         </View>
       </View>
+      <AppAlertModal
+        alert={appAlert}
+        styles={styles}
+        onClose={() => setAppAlert(null)}
+      />
     </>
   );
 }

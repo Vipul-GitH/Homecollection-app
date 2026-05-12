@@ -45,6 +45,17 @@ const getPreviewStatusTone = status => {
   };
 };
 
+const isCompletedBooking = booking => {
+  const statusCode = Number(booking?.bookingStatusCode || 0);
+  const statusText = String(booking?.status || '').trim().toLowerCase();
+
+  return (
+    statusCode === 3 ||
+    statusCode === 5 ||
+    statusText.includes('complete')
+  );
+};
+
 function DashboardScreen({
   styles,
   isSmallPhone,
@@ -54,7 +65,9 @@ function DashboardScreen({
   onCompletedCardPress,
   onUpcomingBookingPress,
 }) {
-  const upcomingBookings = appointments.slice(0, 2);
+  const upcomingBookings = appointments
+    .filter(booking => !isCompletedBooking(booking))
+    .slice(0, 2);
 
   const renderPreviewStatusStyle = status => {
     const tone = getPreviewStatusTone(status);

@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import {getAddressFromCoords} from '../utils/location/getAddressFromCoords';
 import {isAndroidEmulator} from '../utils/app/runtimeHelpers';
-import {warnDebug} from '../utils/app/logger';
+import {logDebug, warnDebug} from '../utils/app/logger';
 
 export const useLocationGate = () => {
   const [stateDistrict, setStateDistrict] = useState('');
@@ -96,6 +96,10 @@ export const useLocationGate = () => {
 
   const requestLocation = useCallback(async () => {
     try {
+      logDebug('[LocationGate] Request started', {
+        platform: Platform.OS,
+        shouldBypassStrictLocationCheck,
+      });
       setIsRequestingLocation(true);
       setLocationStatus('Checking location access...');
       setLocationReady(false);
@@ -106,6 +110,7 @@ export const useLocationGate = () => {
         const granted = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
         );
+        logDebug('[LocationGate] Android permission result', granted);
 
         if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
           Alert.alert('Permission Denied', 'Location permission is required');
@@ -121,6 +126,7 @@ export const useLocationGate = () => {
 
       if (Platform.OS === 'android') {
         try {
+          logDebug('[LocationGate] Checking Android location services');
           await LocationServicesDialogBox.checkLocationServicesIsEnabled({
             message: `
     <div style="
@@ -146,6 +152,7 @@ export const useLocationGate = () => {
             showDialog: true,
             openLocationServices: true,
           });
+          logDebug('[LocationGate] Android location services enabled');
         } catch (locationServicesError) {
           if (!shouldBypassStrictLocationCheck) {
             throw locationServicesError;
@@ -168,15 +175,27 @@ export const useLocationGate = () => {
       let nextFullAddress = 'Location unavailable';
 
       try {
+        logDebug('[LocationGate] Fetching current GPS position');
         const location = await GetLocation.getCurrentPosition({
           enableHighAccuracy: true,
           timeout: 20000,
+        });
+        logDebug('[LocationGate] GPS position received', {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          accuracy: location.accuracy,
+          provider: location.provider,
         });
 
         const address = await getAddressFromCoords(
           location.latitude,
           location.longitude,
         );
+        logDebug('[LocationGate] Address resolved', {
+          stateDistrict: address?.rawAddress?.state_district || '',
+          suburb: address?.rawAddress?.suburb || '',
+          fullAddress: address?.fullAddress || address?.displayName || '',
+        });
 
         nextStateDistrict = address?.rawAddress?.state_district || 'N/A';
         nextSuburb = address?.rawAddress?.suburb || 'N/A';
@@ -196,6 +215,11 @@ export const useLocationGate = () => {
           : 'Location ready',
       );
       setLocationReady(true);
+      logDebug('[LocationGate] Location ready state saved', {
+        stateDistrict: nextStateDistrict,
+        suburb: nextSuburb,
+        fullAddress: nextFullAddress,
+      });
 
       await AsyncStorage.multiSet([
         ['state_district', nextStateDistrict === 'N/A' ? '' : nextStateDistrict],

@@ -1,17 +1,17 @@
-import React, {useEffect, useState} from 'react';
+import React, {useCallback, useEffect, useState} from 'react';
 import {
   BackHandler,
   Keyboard,
   KeyboardAvoidingView,
   Linking,
   Platform,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AppHeader from '../../components/common/AppHeader';
 import BottomTabBar from '../../components/common/BottomTabBar';
@@ -21,7 +21,6 @@ import AppointmentDetailsScreen from '../bookings/AppointmentDetailsScreen';
 import AssignedAppointmentsScreen from '../bookings/AssignedAppointmentsScreen';
 import SampleCollectionScreen from '../bookings/SampleCollectionScreen';
 import DashboardScreen from './DashboardScreen';
-import CGHSScreen from '../operations/CGHSScreen';
 import EodScreen from '../operations/EodScreen';
 import HandoverScreen from '../operations/HandoverScreen';
 import {getPatientMutationId} from '../bookings/appointmentDetails/helpers';
@@ -68,6 +67,12 @@ const getMergedPatientSelectedTests = (patient, selectedTests, panelCompany = nu
       panelCode: basePanelCode,
       panelAbarid: basePanelAbarid,
       booked_code: test?.code || 'N/A',
+      bookingTestId:
+        test?.bookingTestId ||
+        test?.booking_test_id ||
+        test?.bookingTestID ||
+        test?.booking_test ||
+        '',
       catalog_key: [basePanelCompanyId, '', '', test?.code || ''].join('|'),
       gcode: test?.gcode || '',
       scode: test?.scode || '',
@@ -147,6 +152,7 @@ function HomeScreen({
   onLocalDatabaseLoadingChange,
 }) {
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const safeAreaInsets = useSafeAreaInsets();
   const isBookingDetailScreen =
     activeTab === 'appointments' && Boolean(selectedBooking);
   const activeTabConfig = isBookingDetailScreen
@@ -192,6 +198,27 @@ function HomeScreen({
         [],
         selectedSamplePanelCompany,
       );
+  const handleSampleCollectionDraftChange = useCallback(
+    draft => {
+      if (!selectedPatientId) {
+        return;
+      }
+
+      onAppointmentDetailStateChange?.(previousState => ({
+        ...previousState,
+        patientSampleCollectionMap: {
+          ...(previousState?.patientSampleCollectionMap || {}),
+          [selectedPatientId]: {
+            ...(previousState?.patientSampleCollectionMap?.[
+              selectedPatientId
+            ] || {}),
+            ...(draft || {}),
+          },
+        },
+      }));
+    },
+    [onAppointmentDetailStateChange, selectedPatientId],
+  );
   const bookingPatientCount = selectedBooking?.patients?.length || 0;
   const bookingAmount = String(selectedBooking?.payment?.amount || '').trim();
   const bookingHeaderAmount =
@@ -275,11 +302,35 @@ function HomeScreen({
               selectedPatient={selectedSamplePatient}
               selectedPanelCompany={selectedSamplePanelCompany}
               selectedTests={selectedPatientTests}
+              sampleCollectionDraft={
+                selectedPatientId
+                  ? appointmentDetailState?.patientSampleCollectionMap?.[
+                      selectedPatientId
+                    ] || null
+                  : null
+              }
               styles={styles}
               onAddTestPatient={onAddTestPatient}
               onPanelCompanySelect={onPanelCompanySelect}
               onToggleSelectedTest={onTogglePatientTestSelection}
               onRemoveSelectedTest={onRemovePatientSelectedTest}
+              onSampleCollectionReset={() => {
+                if (!selectedPatientId) {
+                  return;
+                }
+
+                onAppointmentDetailStateChange?.(previousState => {
+                  const nextMap = {
+                    ...(previousState?.patientSampleCollectionMap || {}),
+                  };
+                  delete nextMap[selectedPatientId];
+
+                  return {
+                    ...previousState,
+                    patientSampleCollectionMap: nextMap,
+                  };
+                });
+              }}
               onLocalDatabaseLoadingChange={onLocalDatabaseLoadingChange}
             />
           );
@@ -288,10 +339,19 @@ function HomeScreen({
         if (selectedBookingScreen === 'sample-collection') {
           return (
             <SampleCollectionScreen
+              selectedBooking={selectedBooking}
               selectedPatient={selectedSamplePatient}
               selectedTests={selectedPatientTests}
+              sampleCollectionDraft={
+                selectedPatientId
+                  ? appointmentDetailState?.patientSampleCollectionMap?.[
+                      selectedPatientId
+                    ] || null
+                  : null
+              }
               styles={styles}
               onCollectSample={onCollectSample}
+              onSampleCollectionDraftChange={handleSampleCollectionDraftChange}
               onRemoveSelectedTest={onRemovePatientSelectedTest}
               onLocalDatabaseLoadingChange={onLocalDatabaseLoadingChange}
             />
@@ -380,10 +440,6 @@ function HomeScreen({
 
     if (activeTab === 'saved') {
       return <HandoverScreen styles={styles} />;
-    }
-
-    if (activeTab === 'cghs') {
-      return <CGHSScreen styles={styles} />;
     }
 
     if (activeTab === 'profile') {
@@ -524,6 +580,11 @@ function HomeScreen({
               contentContainerStyle={[
                 styles.homeScrollContent,
                 isKeyboardVisible && styles.homeScrollContentKeyboardOpen,
+                {
+                  paddingBottom:
+                    (isKeyboardVisible ? 120 : 96) +
+                    Math.max(safeAreaInsets.bottom, 8),
+                },
               ]}
               keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
               keyboardShouldPersistTaps="handled"

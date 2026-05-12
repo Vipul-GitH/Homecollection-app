@@ -2,6 +2,44 @@ import React from 'react';
 import {Text, TouchableOpacity, View} from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
+function LocationStatusIcon({styles, variant, onPress, disabled}) {
+  const isSuccess = variant === 'success';
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      onPress={onPress}
+      disabled={disabled}
+      style={[
+        styles.bookingDetailLocationStatusIconWrap,
+        isSuccess
+          ? styles.bookingDetailLocationStatusIconWrapSuccess
+          : styles.bookingDetailLocationStatusIconWrapError,
+      ]}>
+      <Ionicons
+        name="location"
+        size={17}
+        style={[
+          styles.bookingDetailLocationStatusPin,
+          isSuccess
+            ? styles.bookingDetailLocationStatusPinSuccess
+            : styles.bookingDetailLocationStatusPinError,
+        ]}
+      />
+      <Ionicons
+        name={isSuccess ? 'checkmark-circle' : 'close-circle'}
+        size={13}
+        style={[
+          styles.bookingDetailLocationStatusBadge,
+          isSuccess
+          ? styles.bookingDetailLocationStatusBadgeSuccess
+          : styles.bookingDetailLocationStatusBadgeError,
+        ]}
+      />
+    </TouchableOpacity>
+  );
+}
+
 function BookingLocationCard({
   styles,
   address,
@@ -33,11 +71,20 @@ function BookingLocationCard({
           </Text>
         ) : null}
       </View>
-      <Ionicons
-        name="open-outline"
-        size={18}
-        style={styles.bookingDetailLocationIcon}
-      />
+      <View style={styles.bookingDetailLocationActionGroup}>
+        <LocationStatusIcon
+          styles={styles}
+          variant="success"
+          onPress={onOpenLocation}
+          disabled={disabled}
+        />
+        <LocationStatusIcon
+          styles={styles}
+          variant="error"
+          onPress={onOpenLocation}
+          disabled={disabled}
+        />
+      </View>
     </TouchableOpacity>
   );
 }

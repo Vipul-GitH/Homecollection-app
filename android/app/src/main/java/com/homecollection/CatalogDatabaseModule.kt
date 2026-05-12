@@ -18,8 +18,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
   override fun getName(): String = "CatalogDatabaseModule"
 
   private val assetName = "catalog_preload.db"
-  private val databaseVersion = "bhasin_7001_v18"
-  private val seedSyncedAt = "2026-05-06 17:04:27"
+  private val databaseVersion = "bhasin_7001_v19"
+  private val seedSyncedAt = "2026-05-09 14:56:55"
   private val maxProfileTreeDepth = 8
   private val maxProfileChildrenPerNode = 150
   private val skippedSyncTables = setOf("address_allowed_center", "testwarning")

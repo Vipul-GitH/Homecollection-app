@@ -7,13 +7,8 @@ import React, {
   useState,
 } from 'react';
 import {
-  Alert,
-  ActivityIndicator,
-  Animated,
   Linking,
-  Modal,
   NativeModules,
-  PanResponder,
   ScrollView,
   Text,
   TextInput,
@@ -22,23 +17,31 @@ import {
   View,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import PatientDetailCard from '../../components/bookings/PatientDetailCard';
-import BookingLocationCard from '../../components/bookings/appointmentDetails/BookingLocationCard';
-import RequiredLabel from '../../components/bookings/appointmentDetails/RequiredLabel';
-import TerminalStatusCard from '../../components/bookings/appointmentDetails/TerminalStatusCard';
+import AppAlertModal from '../../components/common/AppAlertModal';
+import AddPatientModal from '../../components/bookings/appointmentDetails/AddPatientModal';
+import BookingDetailOverview from '../../components/bookings/appointmentDetails/BookingDetailOverview';
+import CancelBookingModal from '../../components/bookings/appointmentDetails/CancelBookingModal';
+import OptionSelectModal from '../../components/bookings/appointmentDetails/OptionSelectModal';
+import PaymentSummarySection from '../../components/bookings/appointmentDetails/PaymentSummarySection';
+import PatientSelectorSection from '../../components/bookings/appointmentDetails/PatientSelectorSection';
 import {
   CATALOG_ITEM_PAGE_SIZE,
   CATALOG_TEST_VISIBLE_LIMIT,
   EDITABLE_GENDER_TITLES,
-  GENDER_OPTIONS,
   INITIAL_PATIENT_FORM,
-  MONTH_LABELS,
   PANEL_COMPANY_DEFAULT_VISIBLE,
   PANEL_COMPANY_SEARCH_VISIBLE_LIMIT,
   TAG_OPTIONS,
   TITLE_OPTIONS,
-  WEEKDAY_LABELS,
 } from './appointmentDetails/constants';
+import CalendarPickerModal from './appointmentDetails/CalendarPickerModal';
+import {
+  getCatalogDisplayTitle,
+  getCatalogGroupId,
+  getCatalogSubgroupId,
+  sortCatalogGroupsById,
+  sortCatalogTestsByCode,
+} from './appointmentDetails/catalogHelpers';
 import {
   calculateAgeFromDob,
   buildApiPanelCompaniesFromPatient,
@@ -54,12 +57,77 @@ import {
   normalizePanelCompanyItems,
   toDateInputValue,
 } from './appointmentDetails/helpers';
+import {
+  COMPLETE_PAYMENT_MODE_OPTIONS,
+  createCompletePaymentEntry,
+  normalizeCompletePaymentDrafts,
+} from './appointmentDetails/paymentDrafts';
+import SelectedPatientAppointmentSection from './appointmentDetails/SelectedPatientAppointmentSection';
+import {
+  areSampleTubeListsEqual,
+  buildSampleTubeRootTests,
+  getSampleTubeMappingCacheKey,
+  mergeSampleTubeMaps,
+  normalizeTestsForSampleTubeMapping,
+} from './appointmentDetails/sampleTubeHelpers';
 import {BRAND} from '../../styles/appStyles';
 import {warnDebug} from '../../utils/app/logger';
 import {
   getLocalPanelCompaniesResponse,
 } from '../../services/local/panelCatalogLocal';
-const {LocalDocumentPickerModule} = NativeModules;
+import {
+  buildSampleTubeMapsFromTests,
+  collectUniqueTubesForSelectedTests,
+} from '../../utils/bookings/sampleTubeMapping';
+import {
+  sampleTubeMappingCache,
+  sampleTubeMappingRequests,
+} from '../../utils/bookings/sampleTubeMappingCache';
+const {CatalogDatabaseModule, LocalDocumentPickerModule} = NativeModules;
+const stringifyForDebugLog = value => {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (error) {
+    return String(value);
+  }
+};
+
+const logCompleteBookingPayload = (label, payload) => {
+  if (__DEV__) {
+    console.log(label, stringifyForDebugLog(payload));
+  }
+};
+const normalizeAppAlertArgs = (
+  titleOrMessage,
+  messageOrButtons,
+  buttonsOrOptions,
+  options,
+) => {
+  const hasMessage = typeof messageOrButtons === 'string';
+  const title = String(titleOrMessage || '');
+  const message = hasMessage ? messageOrButtons : '';
+  const actions = Array.isArray(hasMessage ? buttonsOrOptions : messageOrButtons)
+    ? hasMessage
+      ? buttonsOrOptions
+      : messageOrButtons
+    : [{text: 'OK'}];
+  const alertOptions =
+    (hasMessage ? options : buttonsOrOptions) &&
+    !Array.isArray(hasMessage ? options : buttonsOrOptions)
+      ? hasMessage
+        ? options
+        : buttonsOrOptions
+      : {};
+
+  return {
+    title: hasMessage ? title : '',
+    message: hasMessage ? message : title,
+    actions,
+    cancelable: Boolean(alertOptions?.cancelable),
+    onDismiss: alertOptions?.onDismiss,
+  };
+};
+
 const CANCELLATION_REASON_OPTIONS = [
   'Patient requested cancellation',
   'Duplicate / wrong booking created',
@@ -77,7 +145,6 @@ const CANCEL_TIME_SLOT_OPTIONS = [
   '09:00 AM to 09:30 AM',
   '10:30 AM to 11:00 AM',
 ];
-const COMPLETE_PAYMENT_MODE_OPTIONS = ['Cash', 'UPI', 'Online', 'At Lab'];
 const EMPTY_UPLOAD_DOCUMENTS = [];
 const DEFAULT_TEST_BOOKING_STATUS = 'confirmed_booked';
 const MANUAL_HC_SLIP_STATUS = 'manual_hc_slip';
@@ -93,6 +160,8 @@ const getBillingChargeMode = company =>
       company?.billing_charge_mode ||
       company?.chargeMode ||
       company?.charge_mode ||
+      company?.selectedChargeMode ||
+      company?.selected_charge_mode ||
       company?.selectedChargeModes ||
       company?.selected_charge_modes,
   ).toUpperCase();
@@ -103,6 +172,21 @@ const getPanelCompanyChipIdentity = company =>
     normalizeFormText(company?.centerId),
     normalizeFormText(company?.name || company?.panelCompany).toLowerCase(),
   ].join('|');
+
+const withPanelCompanyChipMeta = (company, source) => {
+  const normalizedSource = normalizeFormText(source || company?.chipSource).toUpperCase();
+  const rawId =
+    normalizeFormText(company?.id || company?.compCatId) ||
+    getPanelCompanyChipIdentity(company);
+  const prefix = normalizedSource === 'API' ? 'api' : 'app';
+  const chipId = normalizeFormText(company?.chipId) || `${prefix}-${rawId}`;
+
+  return {
+    ...company,
+    chipId,
+    chipSource: normalizedSource || source,
+  };
+};
 
 const getPanelCompanySearchRank = (item, searchText, searchTokens) => {
   const name = normalizeFormText(item?.name).toLowerCase();
@@ -138,16 +222,36 @@ const getPanelCompanySearchRank = (item, searchText, searchTokens) => {
 
 const dedupePanelCompanyChips = companies => {
   const chipMap = new Map();
+  const canonicalMap = new Map();
 
   (Array.isArray(companies) ? companies : []).forEach(company => {
-    const key = getPanelCompanyChipIdentity(company);
+    const companyWithMeta = company?.chipSource
+      ? company
+      : withPanelCompanyChipMeta(company, 'APP');
+    const key = normalizeFormText(companyWithMeta?.chipId) || getPanelCompanyChipIdentity(companyWithMeta);
+    const canonicalKey = getPanelCompanyChipIdentity(companyWithMeta);
 
-    if (!key.replace(/\|/g, '')) {
+    if (!canonicalKey.replace(/\|/g, '')) {
       return;
     }
 
-    if (!chipMap.has(key) || company?.chipSource === 'APP') {
-      chipMap.set(key, company);
+    if (canonicalMap.has(canonicalKey)) {
+      const existingKey = canonicalMap.get(canonicalKey);
+      const existingCompany = chipMap.get(existingKey);
+      const existingSource = normalizeFormText(existingCompany?.chipSource).toUpperCase();
+      const nextSource = normalizeFormText(companyWithMeta?.chipSource).toUpperCase();
+
+      if (existingSource !== 'API' && nextSource === 'API') {
+        chipMap.delete(existingKey);
+        chipMap.set(key, companyWithMeta);
+        canonicalMap.set(canonicalKey, key);
+      }
+      return;
+    }
+
+    if (!chipMap.has(key)) {
+      chipMap.set(key, companyWithMeta);
+      canonicalMap.set(canonicalKey, key);
     }
   });
 
@@ -198,6 +302,29 @@ const withSelectedBillingChargeMode = (company, selectedMode) => {
 
 const doesSelectedTestBelongToPanelCompany = (test, panelCompany) => {
   if (!test || !panelCompany) {
+    return false;
+  }
+
+  const testChipId = normalizeFormText(test?.panelCompanyChipId);
+  const panelChipId = normalizeFormText(panelCompany?.chipId || panelCompany?.id);
+  const testSource = normalizeFormText(test?.panelCompanySource).toUpperCase();
+  const panelSource = normalizeFormText(panelCompany?.chipSource).toUpperCase();
+
+  if (testChipId && panelChipId) {
+    return testChipId === panelChipId;
+  }
+
+  if (panelSource === 'APP') {
+    return (
+      testSource === 'APP' &&
+      normalizeFormText(test?.panelCompanyId || test?.compCatId) ===
+        normalizeFormText(panelCompany?.compCatId) &&
+      normalizeFormText(test?.panelCompanyName || test?.panel_company_name).toLowerCase() ===
+        normalizeFormText(panelCompany?.name || panelCompany?.panelCompany).toLowerCase()
+    );
+  }
+
+  if (testSource === 'APP') {
     return false;
   }
 
@@ -281,6 +408,7 @@ const getMergedPatientSelectedTests = (patient, selectedTests, panelCompany = nu
       patient?.panelAbarid ||
       patient?.panel_abarid,
   );
+  const baseBillingChargeMode = getBillingChargeMode(panelCompany);
 
   (Array.isArray(patient?.tests) ? patient.tests : []).forEach(test => {
     const dedupeKey = normalizeFormText(
@@ -295,6 +423,8 @@ const getMergedPatientSelectedTests = (patient, selectedTests, panelCompany = nu
         test?.name || test?.test_name || 'na'
       }`,
       panelCompanyName: basePanelCompanyName,
+      panelCompanySource: panelCompany?.chipSource || 'API',
+      panelCompanyChipId: panelCompany?.chipId || panelCompany?.id || '',
       panelCompanyId: basePanelCompanyId,
       centerId: baseCenterId,
       atype: baseAtype,
@@ -313,6 +443,10 @@ const getMergedPatientSelectedTests = (patient, selectedTests, panelCompany = nu
       description: test?.name || test?.test_name || 'Unnamed Test',
       specimenName: test?.specimen_name || test?.specimenName || 'N/A',
       mrp: toCurrencyNumber(test?.mrp || test?.charge || test?.amount),
+      billingChargeMode: getBillingChargeMode(test) || baseBillingChargeMode,
+      chargeMode: getBillingChargeMode(test) || baseBillingChargeMode,
+      selectedChargeMode: getBillingChargeMode(test) || baseBillingChargeMode,
+      selected_charge_mode: getBillingChargeMode(test) || baseBillingChargeMode,
       isChildTest: false,
       parentDescription: '',
       dedupe_key: dedupeKey,
@@ -440,196 +574,6 @@ const isPatientTerminalForCompletion = patient => {
 const isManualHcSlipSelected = value =>
   normalizeFormText(value) === MANUAL_HC_SLIP_STATUS;
 
-const getCatalogGroupId = group =>
-  normalizeFormText(group?.group_id || group?.gcode || group?.group_code);
-
-const getCatalogSubgroupId = subgroup =>
-  normalizeFormText(
-    subgroup?.subgroup_id || subgroup?.scode || subgroup?.subgroup_code,
-  );
-
-const getCatalogTestId = test =>
-  normalizeFormText(test?.booked_code || test?.testcode1 || test?.test_code || test?.code);
-
-const compareCatalogIds = (leftId, rightId) =>
-  normalizeFormText(leftId).localeCompare(normalizeFormText(rightId), undefined, {
-    numeric: true,
-    sensitivity: 'base',
-  });
-
-const getCatalogCodeSortParts = code => {
-  const normalizedCode = normalizeFormText(code).toUpperCase();
-  const match = normalizedCode.match(/^G(\d+)S(\d+)T(\d+)/);
-
-  return match
-    ? {
-        group: Number(match[1]),
-        subgroup: Number(match[2]),
-        test: Number(match[3]),
-        code: normalizedCode,
-      }
-    : {
-        group: Number.MAX_SAFE_INTEGER,
-        subgroup: Number.MAX_SAFE_INTEGER,
-        test: Number.MAX_SAFE_INTEGER,
-        code: normalizedCode,
-      };
-};
-
-const compareCatalogTestCodes = (leftCode, rightCode) => {
-  const leftParts = getCatalogCodeSortParts(leftCode);
-  const rightParts = getCatalogCodeSortParts(rightCode);
-
-  return (
-    leftParts.group - rightParts.group ||
-    leftParts.subgroup - rightParts.subgroup ||
-    leftParts.test - rightParts.test ||
-    compareCatalogIds(leftParts.code, rightParts.code)
-  );
-};
-
-const clamp = (value, minValue, maxValue) =>
-  Math.min(maxValue, Math.max(minValue, value));
-
-const sortCatalogTestsByCode = tests =>
-  (Array.isArray(tests) ? [...tests] : [])
-    .map((test, index) => {
-      const sortedTest = {...test};
-
-      if (Array.isArray(test?.child_tests)) {
-        sortedTest.child_tests = sortCatalogTestsByCode(test.child_tests);
-      }
-
-      if (Array.isArray(test?.childTests)) {
-        sortedTest.childTests = sortCatalogTestsByCode(test.childTests);
-      }
-
-      return {test: sortedTest, index};
-    })
-    .sort(
-      (leftItem, rightItem) =>
-        compareCatalogTestCodes(
-          getCatalogTestId(leftItem.test),
-          getCatalogTestId(rightItem.test),
-        ) || leftItem.index - rightItem.index,
-    )
-    .map(item => item.test);
-
-const sortCatalogGroupsById = groups =>
-  (Array.isArray(groups) ? groups : [])
-    .map(group => ({
-      ...group,
-      subgroups: (Array.isArray(group?.subgroups) ? [...group.subgroups] : [])
-        .map(subgroup => ({
-          ...subgroup,
-          tests: sortCatalogTestsByCode(subgroup?.tests),
-        }))
-        .sort((leftSubgroup, rightSubgroup) =>
-          compareCatalogIds(
-            getCatalogSubgroupId(leftSubgroup),
-            getCatalogSubgroupId(rightSubgroup),
-          ),
-        ),
-    }))
-    .sort((leftGroup, rightGroup) =>
-      compareCatalogIds(getCatalogGroupId(leftGroup), getCatalogGroupId(rightGroup)),
-    );
-
-const getCatalogDisplayTitle = ({item, isGroupList, isSubgroupList}) => {
-  if (isGroupList) {
-    const groupId = getCatalogGroupId(item);
-    const groupName = item?.group_name || '';
-    return groupId ? `${groupId} - ${groupName || 'Unnamed Group'}` : groupName;
-  }
-
-  if (isSubgroupList) {
-    const subgroupId = getCatalogSubgroupId(item);
-    const subgroupName = item?.subgroup_name || '';
-    return subgroupId
-      ? `${subgroupId} - ${subgroupName || 'Unnamed Subgroup'}`
-      : subgroupName;
-  }
-
-  return item?.description || item?.booked_code;
-};
-
-function SwipeCompleteButton({styles, disabled, isLoading, onComplete}) {
-  const translateX = useRef(new Animated.Value(0)).current;
-  const [trackWidth, setTrackWidth] = useState(0);
-  const thumbSize = 52;
-  const maxTranslateX = Math.max(trackWidth - thumbSize - 8, 0);
-
-  const resetThumb = useCallback(() => {
-    Animated.spring(translateX, {
-      toValue: 0,
-      useNativeDriver: true,
-    }).start();
-  }, [translateX]);
-
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => !disabled && !isLoading,
-        onMoveShouldSetPanResponder: (_, gestureState) =>
-          !disabled && !isLoading && Math.abs(gestureState.dx) > 4,
-        onPanResponderMove: (_, gestureState) => {
-          translateX.setValue(clamp(gestureState.dx, 0, maxTranslateX));
-        },
-        onPanResponderRelease: (_, gestureState) => {
-          const didComplete =
-            maxTranslateX > 0 && gestureState.dx >= maxTranslateX * 0.78;
-
-          if (didComplete) {
-            Animated.timing(translateX, {
-              toValue: maxTranslateX,
-              duration: 120,
-              useNativeDriver: true,
-            }).start(() => {
-              onComplete?.();
-              resetThumb();
-            });
-            return;
-          }
-
-          resetThumb();
-        },
-        onPanResponderTerminate: resetThumb,
-      }),
-    [disabled, isLoading, maxTranslateX, onComplete, resetThumb, translateX],
-  );
-
-  return (
-    <View
-      style={[
-        styles.swipeCompleteTrack,
-        (disabled || isLoading) && styles.swipeCompleteTrackDisabled,
-      ]}
-      onLayout={event => setTrackWidth(event.nativeEvent.layout.width)}>
-      <Text style={styles.swipeCompleteText}>
-        {isLoading ? 'Completing...' : 'Swipe to Complete'}
-      </Text>
-      <Animated.View
-        {...panResponder.panHandlers}
-        style={[
-          styles.swipeCompleteThumb,
-          {
-            transform: [{translateX}],
-          },
-        ]}>
-        {isLoading ? (
-          <ActivityIndicator color={BRAND.surface} size="small" />
-        ) : (
-          <Ionicons
-            name="chevron-forward"
-            size={24}
-            style={styles.swipeCompleteThumbIcon}
-          />
-        )}
-      </Animated.View>
-    </View>
-  );
-}
-
 function AppointmentDetailsScreen({
   selectedBooking,
   styles,
@@ -653,15 +597,13 @@ function AppointmentDetailsScreen({
   onLocalDatabaseLoadingChange,
 }) {
   const {width} = useWindowDimensions();
-  const isNarrowScreen = width < 370;
+  const isNarrowScreen = width < 390;
   const [isAddPatientModalVisible, setIsAddPatientModalVisible] =
     useState(false);
   const [addPatientModalStep, setAddPatientModalStep] = useState('linked-list');
   const [selectedLinkedPatientId, setSelectedLinkedPatientId] = useState('');
   const [isDobCalendarVisible, setIsDobCalendarVisible] = useState(false);
   const [isCancelBookingModalVisible, setIsCancelBookingModalVisible] =
-    useState(false);
-  const [isCompleteBookingModalVisible, setIsCompleteBookingModalVisible] =
     useState(false);
   const [isCancelCalendarVisible, setIsCancelCalendarVisible] = useState(false);
   const [isCancellationReasonSelectVisible, setIsCancellationReasonSelectVisible] =
@@ -682,19 +624,29 @@ function AppointmentDetailsScreen({
   const [cancelCalendarMonth, setCancelCalendarMonth] = useState(
     () => new Date(),
   );
-  const [completeRemarks, setCompleteRemarks] = useState('');
   const [isAdditionalDiscountEnabled, setIsAdditionalDiscountEnabled] =
-    useState(false);
+    useState(() => Boolean(appointmentDetailState?.isAdditionalDiscountEnabled));
   const [completeAdditionalDiscountMode, setCompleteAdditionalDiscountMode] =
-    useState('amount');
-  const [completeAdditionalDiscount, setCompleteAdditionalDiscount] = useState('');
-  const [appliedAdditionalDiscountMode, setAppliedAdditionalDiscountMode] =
-    useState('');
-  const [appliedAdditionalDiscount, setAppliedAdditionalDiscount] = useState('');
-  const [completePaymentMode, setCompletePaymentMode] = useState(
-    COMPLETE_PAYMENT_MODE_OPTIONS[0],
+    useState(
+      () => appointmentDetailState?.completeAdditionalDiscountMode || 'amount',
+    );
+  const [completeAdditionalDiscount, setCompleteAdditionalDiscount] = useState(
+    () =>
+      appointmentDetailState?.completeAdditionalDiscount === undefined
+        ? ''
+        : String(appointmentDetailState.completeAdditionalDiscount),
   );
-  const [completeAmountReceived, setCompleteAmountReceived] = useState('');
+  const [appliedAdditionalDiscountMode, setAppliedAdditionalDiscountMode] =
+    useState(() => appointmentDetailState?.appliedAdditionalDiscountMode || '');
+  const [appliedAdditionalDiscount, setAppliedAdditionalDiscount] = useState(
+    () =>
+      appointmentDetailState?.appliedAdditionalDiscount === undefined
+        ? ''
+        : String(appointmentDetailState.appliedAdditionalDiscount),
+  );
+  const [completePayments, setCompletePayments] = useState(() =>
+    normalizeCompletePaymentDrafts(appointmentDetailState?.completePayments),
+  );
   const additionalDiscountLimitAlertKeyRef = useRef('');
   const [dobCalendarMonth, setDobCalendarMonth] = useState(() => new Date());
   const [patientForm, setPatientForm] = useState(INITIAL_PATIENT_FORM);
@@ -716,6 +668,14 @@ function AppointmentDetailsScreen({
   const [selectedPanelCompanyId, setSelectedPanelCompanyId] = useState('');
   const [selectedPanelCompanyName, setSelectedPanelCompanyName] = useState('');
   const [selectedPanelCompany, setSelectedPanelCompany] = useState(null);
+  const [selectedPatientKey, setSelectedPatientKey] = useState(
+    () => appointmentDetailState?.selectedPatientKey || '',
+  );
+  const [patientSearchText, setPatientSearchText] = useState('');
+  const [appAlert, setAppAlert] = useState(null);
+  const appointmentDetailStateRef = useRef(appointmentDetailState);
+  const [patientPrecomputedSampleTubesMap, setPatientPrecomputedSampleTubesMap] =
+    useState({});
   const [isPanelCatalogVisible, setIsPanelCatalogVisible] = useState(false);
   const patientApiPanelCompaniesMap = useMemo(
     () => appointmentDetailState?.patientApiPanelCompaniesMap || {},
@@ -745,6 +705,74 @@ function AppointmentDetailsScreen({
     () => appointmentDetailState?.patientTestBookingStatusMap || {},
     [appointmentDetailState?.patientTestBookingStatusMap],
   );
+  const patientCghsEnabledMap = useMemo(
+    () => appointmentDetailState?.patientCghsEnabledMap || {},
+    [appointmentDetailState?.patientCghsEnabledMap],
+  );
+  const patientCghsIdMap = useMemo(
+    () => appointmentDetailState?.patientCghsIdMap || {},
+    [appointmentDetailState?.patientCghsIdMap],
+  );
+  const patientCghsDocumentsMap = useMemo(
+    () => appointmentDetailState?.patientCghsDocumentsMap || {},
+    [appointmentDetailState?.patientCghsDocumentsMap],
+  );
+  useEffect(() => {
+    appointmentDetailStateRef.current = appointmentDetailState;
+  }, [appointmentDetailState]);
+  useEffect(() => {
+    const currentDraft = appointmentDetailStateRef.current || {};
+
+    setIsAdditionalDiscountEnabled(
+      Boolean(currentDraft?.isAdditionalDiscountEnabled),
+    );
+    setCompleteAdditionalDiscountMode(
+      currentDraft?.completeAdditionalDiscountMode || 'amount',
+    );
+    setCompleteAdditionalDiscount(
+      currentDraft?.completeAdditionalDiscount === undefined
+        ? ''
+        : String(currentDraft.completeAdditionalDiscount),
+    );
+    setAppliedAdditionalDiscountMode(
+      currentDraft?.appliedAdditionalDiscountMode || '',
+    );
+    setAppliedAdditionalDiscount(
+      currentDraft?.appliedAdditionalDiscount === undefined
+        ? ''
+        : String(currentDraft.appliedAdditionalDiscount),
+    );
+    setCompletePayments(
+      normalizeCompletePaymentDrafts(currentDraft?.completePayments),
+    );
+    setSelectedPatientKey(currentDraft?.selectedPatientKey || '');
+  }, [selectedBooking?.id]);
+  useEffect(() => {
+    if (!selectedBooking?.id) {
+      return;
+    }
+
+    onAppointmentDetailStateChange?.(previousState => ({
+      ...previousState,
+      completePayments,
+      isAdditionalDiscountEnabled,
+      completeAdditionalDiscountMode,
+      completeAdditionalDiscount,
+      appliedAdditionalDiscountMode,
+      appliedAdditionalDiscount,
+      selectedPatientKey,
+    }));
+  }, [
+    appliedAdditionalDiscount,
+    appliedAdditionalDiscountMode,
+    completeAdditionalDiscount,
+    completeAdditionalDiscountMode,
+    completePayments,
+    isAdditionalDiscountEnabled,
+    onAppointmentDetailStateChange,
+    selectedBooking?.id,
+    selectedPatientKey,
+  ]);
   const setPatientApiPanelCompaniesMap = useCallback(
     updater =>
       onAppointmentDetailStateChange?.(previousState => ({
@@ -811,6 +839,115 @@ function AppointmentDetailsScreen({
       })),
     [onAppointmentDetailStateChange],
   );
+  const setPatientCghsEnabledMap = useCallback(
+    updater =>
+      onAppointmentDetailStateChange?.(previousState => ({
+        ...previousState,
+        patientCghsEnabledMap:
+          typeof updater === 'function'
+            ? updater(previousState?.patientCghsEnabledMap || {})
+            : updater,
+      })),
+    [onAppointmentDetailStateChange],
+  );
+  const setPatientCghsIdMap = useCallback(
+    updater =>
+      onAppointmentDetailStateChange?.(previousState => ({
+        ...previousState,
+        patientCghsIdMap:
+          typeof updater === 'function'
+            ? updater(previousState?.patientCghsIdMap || {})
+            : updater,
+      })),
+    [onAppointmentDetailStateChange],
+  );
+  const setPatientCghsDocumentsMap = useCallback(
+    updater =>
+      onAppointmentDetailStateChange?.(previousState => ({
+        ...previousState,
+        patientCghsDocumentsMap:
+          typeof updater === 'function'
+            ? updater(previousState?.patientCghsDocumentsMap || {})
+            : updater,
+      })),
+    [onAppointmentDetailStateChange],
+  );
+  const showAppAlert = useCallback(
+    (titleOrMessage, messageOrButtons, buttonsOrOptions, options) => {
+      setAppAlert(
+        normalizeAppAlertArgs(
+          titleOrMessage,
+          messageOrButtons,
+          buttonsOrOptions,
+          options,
+        ),
+      );
+    },
+    [],
+  );
+  const resetPatientSampleCollectionDraft = useCallback(
+    patientId => {
+      if (!patientId) {
+        return;
+      }
+
+      onAppointmentDetailStateChange?.(previousState => {
+        const nextMap = {...(previousState?.patientSampleCollectionMap || {})};
+        delete nextMap[patientId];
+
+        return {
+          ...previousState,
+          patientSampleCollectionMap: nextMap,
+        };
+      });
+    },
+    [onAppointmentDetailStateChange],
+  );
+  const confirmSampleCollectionReset = useCallback(
+    (patient, onConfirm) => {
+      const patientId = getPatientMutationId(patient);
+      const isSampleCollected = Boolean(
+        patientId && patientSampleCollectionMap[patientId]?.collected,
+      );
+
+      if (!isSampleCollected) {
+        onConfirm?.();
+        return;
+      }
+
+      showAppAlert(
+        'Reset Sample Collection?',
+        "This patient's sample has already been collected. Changing tests or panel companies will reset sample collection, and tubes must be selected again.",
+        [
+          {text: 'Cancel', style: 'cancel'},
+          {
+            text: 'Reset & Continue',
+            style: 'destructive',
+            onPress: () => {
+              resetPatientSampleCollectionDraft(patientId);
+              onConfirm?.();
+            },
+          },
+        ],
+        {cancelable: true},
+      );
+    },
+    [
+      patientSampleCollectionMap,
+      resetPatientSampleCollectionDraft,
+      showAppAlert,
+    ],
+  );
+  const closeAppAlert = useCallback(
+    shouldDismiss => {
+      const onDismiss = appAlert?.onDismiss;
+      setAppAlert(null);
+      if (shouldDismiss) {
+        onDismiss?.();
+      }
+    },
+    [appAlert],
+  );
   const [panelCatalogGroups, setPanelCatalogGroups] = useState([]);
   const [selectedCatalogGroup, setSelectedCatalogGroup] = useState(null);
   const [selectedCatalogSubgroup, setSelectedCatalogSubgroup] = useState(null);
@@ -826,6 +963,170 @@ function AppointmentDetailsScreen({
         : [],
     [selectedBooking?.patients],
   );
+  const patientSelectorItems = useMemo(
+    () =>
+      patients.map((patient, index) => {
+        const patientId =
+          getPatientMutationId(patient) ||
+          patient?.id ||
+          patient?.patientId ||
+          `patient-${index}`;
+        const statusCode = Number(patient?.bookingPatientStatusCode || 0);
+        const sampleCollected =
+          Boolean(
+            patientId && patientSampleCollectionMap[patientId]?.collected,
+          ) || statusCode === 3;
+        const statusLabel =
+          statusCode === 4
+            ? 'Cancelled'
+            : statusCode === 5
+            ? 'Partial'
+            : sampleCollected
+            ? 'Collected'
+            : 'Pending';
+
+        return {
+          patient,
+          index,
+          key: String(patientId),
+          name: normalizeFormText(patient?.name) || `Patient ${index + 1}`,
+          meta: [
+            normalizeFormText(patient?.labmatePid || patient?.labmate_pid),
+            normalizeFormText(patient?.mobileNumber || patient?.mobile_number),
+          ]
+            .filter(Boolean)
+            .join(' | '),
+          statusCode,
+          statusLabel,
+        };
+      }),
+    [patientSampleCollectionMap, patients],
+  );
+  const filteredPatientSelectorItems = useMemo(() => {
+    const searchText = patientSearchText.trim().toLowerCase();
+
+    if (!searchText) {
+      return patientSelectorItems;
+    }
+
+    return patientSelectorItems.filter(item =>
+      `${item.name} ${item.meta}`.toLowerCase().includes(searchText),
+    );
+  }, [patientSearchText, patientSelectorItems]);
+  const selectedPatientItem =
+    patientSelectorItems.find(item => item.key === selectedPatientKey) ||
+    patientSelectorItems[0] ||
+    null;
+  useEffect(() => {
+    let isMounted = true;
+    const bookingPatients = Array.isArray(patients) ? patients : [];
+
+    if (!bookingPatients.length) {
+      setPatientPrecomputedSampleTubesMap({});
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    const applyPatientTubes = (patientId, tubes) => {
+      if (!isMounted) {
+        return;
+      }
+
+      setPatientPrecomputedSampleTubesMap(previousMap => {
+        const previousTubes = previousMap[patientId] || [];
+        if (areSampleTubeListsEqual(previousTubes, tubes)) {
+          return previousMap;
+        }
+
+        return {
+          ...previousMap,
+          [patientId]: tubes,
+        };
+      });
+    };
+
+    bookingPatients.forEach(patient => {
+      const patientId = getPatientMutationId(patient);
+      if (!patientId) {
+        return;
+      }
+
+      const hasSelectedTestsOverride = Object.prototype.hasOwnProperty.call(
+        patientSelectedTestsMap,
+        patientId,
+      );
+      const sourceTests = hasSelectedTestsOverride
+        ? patientSelectedTestsMap[patientId] || []
+        : getMergedPatientSelectedTests(patient, [], null);
+      const normalizedTests = normalizeTestsForSampleTubeMapping(sourceTests);
+
+      if (!normalizedTests.length) {
+        applyPatientTubes(patientId, []);
+        return;
+      }
+
+      const fallbackMaps = buildSampleTubeMapsFromTests(normalizedTests);
+      const fallbackTubes = collectUniqueTubesForSelectedTests(
+        normalizedTests,
+        fallbackMaps.testsMap,
+        fallbackMaps.childrenMap,
+      );
+      applyPatientTubes(patientId, fallbackTubes);
+
+      const rootTests = buildSampleTubeRootTests(normalizedTests);
+      if (
+        !rootTests.length ||
+        !CatalogDatabaseModule?.getSampleTubeMappingForTestCodes
+      ) {
+        return;
+      }
+
+      const cacheKey = getSampleTubeMappingCacheKey(rootTests);
+      const cachedMaps = sampleTubeMappingCache.get(cacheKey);
+      const applyNativeMaps = nativeMaps => {
+        const mergedMaps = mergeSampleTubeMaps(fallbackMaps, nativeMaps);
+        const nativeTubes = collectUniqueTubesForSelectedTests(
+          normalizedTests,
+          mergedMaps.testsMap,
+          mergedMaps.childrenMap,
+        );
+        applyPatientTubes(patientId, nativeTubes);
+      };
+
+      if (cachedMaps) {
+        applyNativeMaps(cachedMaps);
+        return;
+      }
+
+      const mappingRequest =
+        sampleTubeMappingRequests.get(cacheKey) ||
+        CatalogDatabaseModule.getSampleTubeMappingForTestCodes(
+          JSON.stringify(rootTests),
+        )
+          .then(response => {
+            const parsedResponse =
+              typeof response === 'string' ? JSON.parse(response) : response;
+            sampleTubeMappingCache.set(cacheKey, parsedResponse);
+            sampleTubeMappingRequests.delete(cacheKey);
+            return parsedResponse;
+          })
+          .catch(error => {
+            sampleTubeMappingRequests.delete(cacheKey);
+            throw error;
+          });
+
+      sampleTubeMappingRequests.set(cacheKey, mappingRequest);
+      mappingRequest.then(applyNativeMaps).catch(error => {
+        warnDebug('Unable to precompute patient sample tubes:', error);
+        applyPatientTubes(patientId, fallbackTubes);
+      });
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [patientSelectedTestsMap, patients]);
   const linkedPatients = useMemo(
     () =>
       Array.isArray(selectedBooking?.linkedPatients)
@@ -834,6 +1135,17 @@ function AppointmentDetailsScreen({
     [selectedBooking?.linkedPatients],
   );
 
+  useEffect(() => {
+    if (!patientSelectorItems.length) {
+      setSelectedPatientKey('');
+      setPatientSearchText('');
+      return;
+    }
+
+    if (!patientSelectorItems.some(item => item.key === selectedPatientKey)) {
+      setSelectedPatientKey(patientSelectorItems[0].key);
+    }
+  }, [patientSelectorItems, selectedPatientKey]);
   useEffect(() => {
     setPatientCompletionDocumentsMap({});
     setPatientManualSlipDocumentsMap({});
@@ -949,83 +1261,6 @@ function AppointmentDetailsScreen({
   const selectedLinkedPatient = linkedPatients.find(
     patient => patient.id === selectedLinkedPatientId,
   );
-  const completeBookingPanelCompanies = (() => {
-    const companyMap = new Map();
-    const bookingPatients = Array.isArray(selectedBooking?.patients)
-      ? selectedBooking.patients
-      : [];
-
-    const addCompany = (company, fallbackPatientName = '') => {
-      const name = normalizeFormText(company?.name || company?.panelCompany);
-      if (!name) {
-        return;
-      }
-
-      const mode = getBillingChargeMode(company);
-      const key = [
-        normalizeFormText(company?.compCatId || company?.id),
-        name.toLowerCase(),
-        mode,
-      ].join('|');
-
-      if (companyMap.has(key)) {
-        return;
-      }
-
-      companyMap.set(key, {
-        id: key,
-        name,
-        billingChargeMode: mode,
-        paymentLabel: getPaymentLabelFromBillingMode(mode),
-        patientName: fallbackPatientName,
-      });
-    };
-
-    bookingPatients.forEach(patient => {
-      const patientId = getPatientMutationId(patient);
-      const patientName = normalizeFormText(patient?.name);
-      const hasApiCompanyOverride =
-        patientId &&
-        Object.prototype.hasOwnProperty.call(
-          patientApiPanelCompaniesMap,
-          patientId,
-        );
-      const apiCompanies = patientId
-        ? patientApiPanelCompaniesMap[patientId] || []
-        : [];
-      const selectedCompanies = patientId
-        ? patientPanelCompaniesMap[patientId] || []
-        : [];
-
-      [...apiCompanies, ...selectedCompanies].forEach(company =>
-        addCompany(company, patientName),
-      );
-
-      if (
-        !hasApiCompanyOverride &&
-        !apiCompanies.length &&
-        !selectedCompanies.length
-      ) {
-        addCompany(
-          {
-            name: patient?.panelCompany,
-            billingChargeMode:
-              patient?.billingChargeMode ||
-              patient?.BillingChargeMode ||
-              patient?.billing_charge_mode ||
-              patient?.chargeMode ||
-              patient?.selectedChargeModes ||
-              patient?.selected_charge_modes,
-          },
-          patientName,
-        );
-      }
-    });
-
-    return Array.from(companyMap.values()).sort((leftItem, rightItem) =>
-      leftItem.name.localeCompare(rightItem.name),
-    );
-  })();
   const getPatientPanelCompanies = useCallback(
     patient => {
       const patientId = getPatientMutationId(patient);
@@ -1037,16 +1272,8 @@ function AppointmentDetailsScreen({
         : [];
 
       return dedupePanelCompanyChips([
-        ...apiCompanies.map(company => ({
-          ...company,
-          chipId: `api-${company.id}`,
-          chipSource: 'API',
-        })),
-        ...selectedCompanies.map(company => ({
-          ...company,
-          chipId: `app-${company.id}`,
-          chipSource: 'APP',
-        })),
+        ...apiCompanies.map(company => withPanelCompanyChipMeta(company, 'API')),
+        ...selectedCompanies.map(company => withPanelCompanyChipMeta(company, 'APP')),
       ]);
     },
     [patientApiPanelCompaniesMap, patientPanelCompaniesMap],
@@ -1196,6 +1423,17 @@ function AppointmentDetailsScreen({
     0,
     completeBillingTotal - completeDiscountAmount,
   );
+  const completeAmountReceived = useMemo(
+    () =>
+      completePayments.reduce(
+        (total, payment) => total + toCurrencyNumber(payment?.amount),
+        0,
+      ),
+    [completePayments],
+  );
+  const completePaymentMode =
+    completePayments.find(payment => normalizeFormText(payment?.mode))?.mode ||
+    COMPLETE_PAYMENT_MODE_OPTIONS[0];
   useEffect(() => {
     if (!appliedAdditionalDiscountMode) {
       return;
@@ -1218,18 +1456,15 @@ function AppointmentDetailsScreen({
     setAppliedAdditionalDiscountMode('');
     setAppliedAdditionalDiscount('');
 
-    if (
-      isCompleteBookingModalVisible &&
-      additionalDiscountLimitAlertKeyRef.current !== message
-    ) {
+    if (additionalDiscountLimitAlertKeyRef.current !== message) {
       additionalDiscountLimitAlertKeyRef.current = message;
-      Alert.alert(message);
+      showAppAlert(message);
     }
   }, [
     appliedAdditionalDiscountMode,
-    isCompleteBookingModalVisible,
     localBillingSummary.maxAdditionalAllowed,
     localBillingSummary.requestedAdditional,
+    showAppAlert,
   ]);
 
   const completeBookingPayload = useMemo(() => {
@@ -1323,7 +1558,8 @@ function AppointmentDetailsScreen({
         });
 
         const testBookingStatus =
-          patientTestBookingStatusMap[patientId] || DEFAULT_TEST_BOOKING_STATUS;
+          patientTestBookingStatusMap[patientId] ||
+          DEFAULT_TEST_BOOKING_STATUS;
 
         return {
           patient_id: payloadPatientId,
@@ -1339,13 +1575,27 @@ function AppointmentDetailsScreen({
           (patientPayload.panels.length ||
             isManualHcSlipSelected(patientPayload.test_booking_status)),
       );
+    const pendingChildTestsPayload = Object.values(patientSampleCollectionMap)
+      .flatMap(sampleCollection =>
+        Array.isArray(sampleCollection?.pendingChildTests)
+          ? sampleCollection.pendingChildTests
+          : [],
+      )
+      .filter(
+        pendingGroup =>
+          pendingGroup?.patient_id &&
+          pendingGroup?.root_booked_code &&
+          Array.isArray(pendingGroup?.pending) &&
+          pendingGroup.pending.length,
+      );
 
     return {
       additional_discount_mode: appliedAdditionalDiscountMode || 'amount',
       additional_discount_value: additionalDiscountValue,
-      amount_received: toCurrencyNumber(completeAmountReceived),
+      amount_received: completeAmountReceived,
       payment_mode: completePaymentMode,
       tests_payload: testsPayload,
+      pending_child_tests: pendingChildTestsPayload,
       patient_documents_map: patientCompletionDocumentsMap,
       manual_slip_documents_map: patientManualSlipDocumentsMap,
     };
@@ -1357,6 +1607,7 @@ function AppointmentDetailsScreen({
     completePaymentMode,
     patientCompletionDocumentsMap,
     patientManualSlipDocumentsMap,
+    patientSampleCollectionMap,
     patientSelectedTestsMap,
     patientTestBookingStatusMap,
     patients,
@@ -1607,11 +1858,33 @@ function AppointmentDetailsScreen({
       return;
     }
 
-    try {
-      await Linking.openURL(`tel:${phoneNumber}`);
-    } catch (error) {
-      warnDebug('Open booking phone error:', error);
-    }
+    const openPhoneCall = async () => {
+      try {
+        await Linking.openURL(`tel:${phoneNumber}`);
+      } catch (error) {
+        warnDebug('Open booking phone error:', error);
+        showAppAlert('Call Failed', 'Unable to open the phone dialer right now.');
+      }
+    };
+    const openWhatsApp = async () => {
+      try {
+        await Linking.openURL(`https://wa.me/${phoneNumber}`);
+      } catch (error) {
+        warnDebug('Open booking WhatsApp error:', error);
+        showAppAlert('WhatsApp Failed', 'Unable to open WhatsApp right now.');
+      }
+    };
+
+    showAppAlert(
+      'Contact Patient',
+      `Choose how you want to contact ${selectedBooking.patientName || 'this patient'}.`,
+      [
+        {text: 'Phone Call', onPress: openPhoneCall},
+        {text: 'WhatsApp', onPress: openWhatsApp},
+        {text: 'Cancel', style: 'cancel'},
+      ],
+      {cancelable: true},
+    );
   };
 
   const updatePatientFormField = (field, value) => {
@@ -1742,51 +2015,28 @@ function AppointmentDetailsScreen({
     setAddPatientModalStep('form');
   };
 
-  const handleUseLinkedPatient = () => {
+  const handleUseLinkedPatient = async () => {
     if (!selectedLinkedPatient) {
-      Alert.alert(
+      showAppAlert(
         'Select Linked Patient',
         'Please select a linked patient first.',
       );
       return;
     }
 
-    const title = normalizeOptionValue(
-      selectedLinkedPatient.title,
-      TITLE_OPTIONS,
-      INITIAL_PATIENT_FORM.title,
-    );
-    const dateOfBirth = normalizeFormText(selectedLinkedPatient.dob);
-
-    setPatientForm({
-      title,
-      fullName: normalizeFormText(selectedLinkedPatient.name),
-      gender:
-        normalizeFormText(selectedLinkedPatient.gender) || getGenderFromTitle(title),
-      dateOfBirth,
-      ageYears:
-        calculateAgeFromDob(dateOfBirth) ||
-        normalizeFormText(selectedLinkedPatient.age),
-      primaryMobile: normalizeMobileValue(selectedLinkedPatient.mobileNumber),
-      alternateMobile: normalizeMobileValue(
-        selectedLinkedPatient.alternateMobileNumber,
-      ),
-      email: '',
-      labmatePid: normalizeFormText(selectedLinkedPatient.patientCode),
-      panelCompany:
-        normalizeFormText(selectedLinkedPatient.panelCompany) ||
-        INITIAL_PATIENT_FORM.panelCompany,
-      tag: normalizeOptionValue(
-        selectedLinkedPatient.tag,
-        TAG_OPTIONS,
-        INITIAL_PATIENT_FORM.tag,
-      ),
+    const didSavePatient = await onAddPatient({
+      existing_patient_id: selectedLinkedPatient.id,
+      linked_patient: selectedLinkedPatient,
     });
-    setAddPatientModalStep('form');
+
+    if (didSavePatient) {
+      setIsAddPatientModalVisible(false);
+      resetAddPatientForm();
+    }
   };
 
   const handlePatientCancelBooking = patient => {
-    Alert.alert(
+    showAppAlert(
       'Cancel Patient',
       `Cancel ${patient.name} from this booking?`,
       [
@@ -1823,6 +2073,48 @@ function AppointmentDetailsScreen({
     setPatientTestBookingStatusMap(previousMap => ({
       ...previousMap,
       [patientId]: nextValue,
+    }));
+  };
+
+  const handlePatientCghsEnabledChange = (patient, isEnabled) => {
+    const patientId = getPatientMutationId(patient);
+
+    if (!patientId) {
+      return;
+    }
+
+    setPatientCghsEnabledMap(previousMap => ({
+      ...previousMap,
+      [patientId]: Boolean(isEnabled),
+    }));
+  };
+
+  const handlePatientCghsIdChange = (patient, nextValue) => {
+    const patientId = getPatientMutationId(patient);
+
+    if (!patientId) {
+      return;
+    }
+
+    setPatientCghsIdMap(previousMap => ({
+      ...previousMap,
+      [patientId]: nextValue,
+    }));
+  };
+
+  const handlePatientCghsDocumentsChange = (patient, sectionKey, documents) => {
+    const patientId = getPatientMutationId(patient);
+
+    if (!patientId || !sectionKey) {
+      return;
+    }
+
+    setPatientCghsDocumentsMap(previousMap => ({
+      ...previousMap,
+      [patientId]: {
+        ...(previousMap[patientId] || {}),
+        [sectionKey]: Array.isArray(documents) ? documents : [],
+      },
     }));
   };
 
@@ -1893,26 +2185,6 @@ function AppointmentDetailsScreen({
     setIsCancelBookingModalVisible(false);
   };
 
-  const openCompleteBookingModal = () => {
-    setCompleteRemarks('');
-    setIsAdditionalDiscountEnabled(false);
-    setCompleteAdditionalDiscountMode('amount');
-    setCompleteAdditionalDiscount('');
-    setAppliedAdditionalDiscountMode('');
-    setAppliedAdditionalDiscount('');
-    setCompletePaymentMode(COMPLETE_PAYMENT_MODE_OPTIONS[0]);
-    setCompleteAmountReceived('');
-    setIsCompleteBookingModalVisible(true);
-  };
-
-  const closeCompleteBookingModal = () => {
-    if (bookingActionLoading === 'completed') {
-      return;
-    }
-
-    setIsCompleteBookingModalVisible(false);
-  };
-
   const validateAdditionalDiscountLimit = ({
     mode = completeAdditionalDiscountMode,
     value = completeAdditionalDiscount,
@@ -1935,7 +2207,7 @@ function AppointmentDetailsScreen({
         )} only. You have entered ${enteredAmount.toFixed(2)}.`;
         if (additionalDiscountLimitAlertKeyRef.current !== message) {
           additionalDiscountLimitAlertKeyRef.current = message;
-          Alert.alert(message);
+          showAppAlert(message);
         }
       }
       return false;
@@ -1957,6 +2229,10 @@ function AppointmentDetailsScreen({
 
     setAppliedAdditionalDiscountMode(completeAdditionalDiscountMode);
     setAppliedAdditionalDiscount(completeAdditionalDiscount);
+    showAppAlert(
+      'Additional Discount Applied',
+      `Additional discount ${completeAdditionalDiscountMode === 'percent' ? `${completeAdditionalDiscount || 0}%` : `Rs. ${toCurrencyNumber(completeAdditionalDiscount).toFixed(2)}`} has been applied.`,
+    );
   };
 
   const handleAdditionalDiscountToggle = () => {
@@ -1990,7 +2266,8 @@ function AppointmentDetailsScreen({
 
       const patientId = getPatientMutationId(patient);
       const testBookingStatus =
-        patientTestBookingStatusMap[patientId] || DEFAULT_TEST_BOOKING_STATUS;
+        patientTestBookingStatusMap[patientId] ||
+        DEFAULT_TEST_BOOKING_STATUS;
 
       if (!isManualHcSlipSelected(testBookingStatus)) {
         return false;
@@ -2003,7 +2280,7 @@ function AppointmentDetailsScreen({
     });
 
     if (pendingManualSlipPatients.length) {
-      Alert.alert(
+      showAppAlert(
         'Manual Slip Required',
         `Please upload manual HC slip for: ${pendingManualSlipPatients
           .map(patient => patient?.name || 'Patient')
@@ -2019,7 +2296,8 @@ function AppointmentDetailsScreen({
 
       const patientId = getPatientMutationId(patient);
       const testBookingStatus =
-        patientTestBookingStatusMap[patientId] || DEFAULT_TEST_BOOKING_STATUS;
+        patientTestBookingStatusMap[patientId] ||
+        DEFAULT_TEST_BOOKING_STATUS;
 
       if (isManualHcSlipSelected(testBookingStatus)) {
         return false;
@@ -2029,7 +2307,7 @@ function AppointmentDetailsScreen({
     });
 
     if (pendingSamplePatients.length) {
-      Alert.alert(
+      showAppAlert(
         'Sample Collection Pending',
         `Please collect sample or cancel patient booking for: ${pendingSamplePatients
           .map(patient => patient?.name || 'Patient')
@@ -2041,7 +2319,8 @@ function AppointmentDetailsScreen({
     const pendingProofPatients = patients.filter(patient => {
       const patientId = getPatientMutationId(patient);
       const testBookingStatus =
-        patientTestBookingStatusMap[patientId] || DEFAULT_TEST_BOOKING_STATUS;
+        patientTestBookingStatusMap[patientId] ||
+        DEFAULT_TEST_BOOKING_STATUS;
 
       if (isManualHcSlipSelected(testBookingStatus)) {
         return false;
@@ -2058,7 +2337,7 @@ function AppointmentDetailsScreen({
     });
 
     if (pendingProofPatients.length) {
-      Alert.alert(
+      showAppAlert(
         'Upload Required',
         `Please upload prescription or billing proof for: ${pendingProofPatients
           .map(patient => patient?.name || 'Patient')
@@ -2076,14 +2355,18 @@ function AppointmentDetailsScreen({
       return;
     }
 
+    logCompleteBookingPayload(
+      '[Complete Booking Payload Before Submit]',
+      completeBookingPayload,
+    );
+
     const didComplete = await onBookingAction('completed', completeBookingPayload);
 
     if (!didComplete) {
       return;
     }
 
-    setIsCompleteBookingModalVisible(false);
-    Alert.alert(
+    showAppAlert(
       'Booking Completed',
       [
         'Appointment completed successfully.',
@@ -2093,6 +2376,28 @@ function AppointmentDetailsScreen({
       ].join('\n'),
     );
   };
+  const handleCompletePaymentChange = useCallback((paymentId, updates) => {
+    setCompletePayments(previousPayments =>
+      previousPayments.map(payment =>
+        payment.id === paymentId ? {...payment, ...updates} : payment,
+      ),
+    );
+  }, []);
+  const handleAddCompletePayment = useCallback(() => {
+    setCompletePayments(previousPayments => [
+      ...previousPayments,
+      createCompletePaymentEntry(),
+    ]);
+  }, []);
+  const handleRemoveCompletePayment = useCallback(paymentId => {
+    setCompletePayments(previousPayments => {
+      if (previousPayments.length <= 1) {
+        return [createCompletePaymentEntry()];
+      }
+
+      return previousPayments.filter(payment => payment.id !== paymentId);
+    });
+  }, []);
 
   const moveCancelCalendarMonth = direction => {
     setCancelCalendarMonth(previousMonth => {
@@ -2113,7 +2418,7 @@ function AppointmentDetailsScreen({
 
   const handlePickPatientDocuments = async () => {
     if (!LocalDocumentPickerModule?.pickDocuments) {
-      Alert.alert(
+      showAppAlert(
         'Upload Not Available',
         'Document picker module is not available in this build.',
       );
@@ -2148,7 +2453,7 @@ function AppointmentDetailsScreen({
       }
 
       warnDebug('Patient document pick error:', error);
-      Alert.alert(
+      showAppAlert(
         'Upload Failed',
         'Unable to select documents right now. Please try again.',
       );
@@ -2169,7 +2474,7 @@ function AppointmentDetailsScreen({
           return;
         }
 
-        Alert.alert(
+        showAppAlert(
           'Select Billing Type',
           `${panelCompany?.name || 'This panel company'} supports both Credit and Paying. Choose how to use it for this selection.`,
           [
@@ -2192,7 +2497,7 @@ function AppointmentDetailsScreen({
           {cancelable: true, onDismiss: () => resolve(null)},
         );
       }),
-    [],
+    [showAppAlert],
   );
 
   const closePanelCompanyModal = () => {
@@ -2220,38 +2525,41 @@ function AppointmentDetailsScreen({
     setSelectedPanelCompanyId(resolvedPanelCompany.id);
     if (panelFlowMode === 'panel-only') {
       const selectedPatientId = getPatientMutationId(selectedPanelPatient);
+      const appPanelCompany = withPanelCompanyChipMeta(resolvedPanelCompany, 'APP');
       if (selectedPatientId) {
         setPatientPanelCompaniesMap(previousMap => {
           const previousCompanies = previousMap[selectedPatientId] || [];
           const hasCompany = previousCompanies.some(
             existingCompany =>
-              isSamePanelCompany(existingCompany, resolvedPanelCompany),
+              getPanelCompanyChipIdentity(existingCompany) ===
+                getPanelCompanyChipIdentity(appPanelCompany),
           );
 
           return {
             ...previousMap,
             [selectedPatientId]: hasCompany
               ? previousCompanies.map(existingCompany =>
-                  isSamePanelCompany(existingCompany, resolvedPanelCompany)
-                    ? resolvedPanelCompany
+                  getPanelCompanyChipIdentity(existingCompany) ===
+                  getPanelCompanyChipIdentity(appPanelCompany)
+                    ? appPanelCompany
                     : existingCompany,
                 )
-              : [...previousCompanies, resolvedPanelCompany],
+              : [...previousCompanies, appPanelCompany],
           };
         });
         setActivePatientPanelCompanyMap(previousMap => ({
           ...previousMap,
-          [selectedPatientId]: `app-${resolvedPanelCompany.id}`,
+          [selectedPatientId]: appPanelCompany.chipId,
         }));
       }
-      setSelectedPanelCompanyName(resolvedPanelCompany.name);
-      setSelectedPanelCompany(resolvedPanelCompany);
+      setSelectedPanelCompanyName(appPanelCompany.name);
+      setSelectedPanelCompany(appPanelCompany);
       setIsPanelCompanyModalVisible(false);
       setIsPanelCatalogVisible(false);
-      Alert.alert(
+      showAppAlert(
         'Panel Company Selected',
-        `${resolvedPanelCompany.name || 'Panel company'} selected as ${getPaymentLabelFromBillingMode(
-          resolvedPanelCompany.billingChargeMode,
+        `${appPanelCompany.name || 'Panel company'} selected as ${getPaymentLabelFromBillingMode(
+          appPanelCompany.billingChargeMode,
         )}.`,
       );
       return;
@@ -2267,7 +2575,7 @@ function AppointmentDetailsScreen({
       const groups = sortCatalogGroupsById(catalogResponse?.groups);
 
       if (!groups.length) {
-        Alert.alert(
+        showAppAlert(
           'No Groups Found',
           'No groups were returned for the selected panel company.',
         );
@@ -2288,6 +2596,7 @@ function AppointmentDetailsScreen({
   };
 
   const openPanelCompanyTests = async ({patient, panelCompany}) => {
+    confirmSampleCollectionReset(patient, async () => {
     const resolvedPanelCompany =
       await resolvePanelCompanyChargeMode(panelCompany);
 
@@ -2309,9 +2618,11 @@ function AppointmentDetailsScreen({
     }
 
     onOpenAddTest?.(patient, resolvedPanelCompany);
+    });
   };
 
   const handlePatientAddPanelCompany = async patient => {
+    confirmSampleCollectionReset(patient, async () => {
     setPanelFlowMode('panel-only');
     setSelectedPanelPatient(patient);
     const selectedPatientId = getPatientMutationId(patient);
@@ -2347,7 +2658,7 @@ function AppointmentDetailsScreen({
     ];
 
     if (!mergedPanelCompanies.length) {
-      Alert.alert(
+      showAppAlert(
         'No Panel Companies',
         'Panel company data is empty in the local database.',
       );
@@ -2378,6 +2689,7 @@ function AppointmentDetailsScreen({
     setCatalogVisibleCount(CATALOG_ITEM_PAGE_SIZE);
     setIsPanelCatalogVisible(false);
     setIsPanelCompanyModalVisible(true);
+    });
   };
 
   const ensureApiPanelCompanyMatch = async patient => {
@@ -2420,7 +2732,7 @@ function AppointmentDetailsScreen({
     const apiMatchedCompanies = await ensureApiPanelCompanyMatch(patient);
 
     if (!apiMatchedCompanies.length) {
-      Alert.alert(
+      showAppAlert(
         'No Panel Company Found',
         'No matching API panel company was found for this patient.',
       );
@@ -2441,37 +2753,60 @@ function AppointmentDetailsScreen({
   };
 
   const handleRemovePatientPanelCompany = (patient, panelCompanyToRemove) => {
+    confirmSampleCollectionReset(patient, () => {
     const selectedPatientId = getPatientMutationId(patient);
     if (!selectedPatientId) {
       return;
     }
+    const normalizedPanelToRemove = withPanelCompanyChipMeta(
+      panelCompanyToRemove,
+      panelCompanyToRemove?.chipSource || 'APP',
+    );
+    const removeSource = normalizeFormText(normalizedPanelToRemove?.chipSource).toUpperCase();
+    const removeChipId = normalizeFormText(normalizedPanelToRemove?.chipId);
+    const removeCanonicalId = getPanelCompanyChipIdentity(normalizedPanelToRemove);
 
-    setPatientApiPanelCompaniesMap(previousMap => ({
-      ...previousMap,
-      [selectedPatientId]: (previousMap[selectedPatientId] || []).filter(
-        company => !isSamePanelCompany(company, panelCompanyToRemove),
-      ),
-    }));
+    if (removeSource !== 'APP') {
+      setPatientApiPanelCompaniesMap(previousMap => ({
+        ...previousMap,
+        [selectedPatientId]: (previousMap[selectedPatientId] || []).filter(
+          company => {
+            const normalizedCompany = withPanelCompanyChipMeta(company, 'API');
+            return (
+              normalizeFormText(normalizedCompany?.chipId) !== removeChipId &&
+              getPanelCompanyChipIdentity(normalizedCompany) !== removeCanonicalId
+            );
+          },
+        ),
+      }));
+    }
 
-    setPatientPanelCompaniesMap(previousMap => {
-      const nextMap = {...previousMap};
-      const nextCompanies = (nextMap[selectedPatientId] || []).filter(
-        company => !isSamePanelCompany(company, panelCompanyToRemove),
-      );
+    if (removeSource !== 'API') {
+      setPatientPanelCompaniesMap(previousMap => {
+        const nextMap = {...previousMap};
+        const nextCompanies = (nextMap[selectedPatientId] || []).filter(company => {
+          const normalizedCompany = withPanelCompanyChipMeta(company, 'APP');
+          return (
+            normalizeFormText(normalizedCompany?.chipId) !== removeChipId &&
+            getPanelCompanyChipIdentity(normalizedCompany) !== removeCanonicalId
+          );
+        });
 
-      if (nextCompanies.length) {
-        nextMap[selectedPatientId] = nextCompanies;
-      } else {
-        delete nextMap[selectedPatientId];
-      }
-      return nextMap;
-    });
+        if (nextCompanies.length) {
+          nextMap[selectedPatientId] = nextCompanies;
+        } else {
+          delete nextMap[selectedPatientId];
+        }
+        return nextMap;
+      });
+    }
 
     setActivePatientPanelCompanyMap(previousMap => {
       const nextMap = {...previousMap};
       const currentActiveId = nextMap[selectedPatientId];
 
       if (
+        (removeChipId && String(currentActiveId) === removeChipId) ||
         String(currentActiveId) === String(`api-${panelCompanyToRemove?.id}`) ||
         String(currentActiveId) === String(`app-${panelCompanyToRemove?.id}`) ||
         String(currentActiveId) === String(panelCompanyToRemove?.id)
@@ -2491,7 +2826,7 @@ function AppointmentDetailsScreen({
         ? previousTestsMap[selectedPatientId] || []
         : getMergedPatientSelectedTests(patient, [], panelCompanyToRemove);
       const remainingTests = previousTests.filter(
-        test => !doesSelectedTestBelongToPanelCompany(test, panelCompanyToRemove),
+        test => !doesSelectedTestBelongToPanelCompany(test, normalizedPanelToRemove),
       );
 
       if (remainingTests.length === previousTests.length) {
@@ -2509,10 +2844,23 @@ function AppointmentDetailsScreen({
       return nextTestsMap;
     });
 
-    if (isSamePanelCompany(selectedPanelCompany, panelCompanyToRemove)) {
+    if (
+      getPanelCompanyChipIdentity(selectedPanelCompany) === removeCanonicalId ||
+      normalizeFormText(selectedPanelCompany?.chipId) === removeChipId
+    ) {
       closePanelCompanyModal();
     }
+    });
   };
+
+  const handleRemoveSelectedTestWithSampleReset = useCallback(
+    payload => {
+      confirmSampleCollectionReset(payload?.patient, () => {
+        onRemovePatientSelectedTest?.(payload);
+      });
+    },
+    [confirmSampleCollectionReset, onRemovePatientSelectedTest],
+  );
 
   const calendarDays = getCalendarDays(dobCalendarMonth);
   const cancelCalendarDays = getCalendarDays(cancelCalendarMonth);
@@ -2921,6 +3269,11 @@ function AppointmentDetailsScreen({
             </View>
           )}
         </View>
+        <AppAlertModal
+          alert={appAlert}
+          styles={styles}
+          onClose={closeAppAlert}
+        />
       </>
     );
   }
@@ -2935,12 +3288,12 @@ function AppointmentDetailsScreen({
     const ageYears = Number(patientForm.ageYears);
 
     if (!fullName) {
-      Alert.alert('Missing Name', 'Please enter the patient full name.');
+      showAppAlert('Missing Name', 'Please enter the patient full name.');
       return;
     }
 
     if (!/^\d{10}$/.test(primaryMobile)) {
-      Alert.alert(
+      showAppAlert(
         'Invalid Mobile',
         'Please enter a valid 10 digit primary mobile number.',
       );
@@ -2948,28 +3301,23 @@ function AppointmentDetailsScreen({
     }
 
     if (alternateMobile && !/^\d{10}$/.test(alternateMobile)) {
-      Alert.alert(
+      showAppAlert(
         'Invalid Alternate Mobile',
         'Please enter a valid 10 digit alternate mobile number.',
       );
       return;
     }
 
-    if (!patientForm.dateOfBirth || !patientForm.ageYears) {
-      Alert.alert(
-        'Invalid DOB',
-        'Please enter date of birth in YYYY-MM-DD format.',
+    if (!ageYears || ageYears <= 0) {
+      showAppAlert(
+        'Invalid Age',
+        'Please enter a valid patient age.',
       );
       return;
     }
 
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      Alert.alert('Invalid Email', 'Please enter a valid email address.');
-      return;
-    }
-
-    if (!panelCompany) {
-      Alert.alert('Missing Panel', 'Please enter the panel company.');
+      showAppAlert('Invalid Email', 'Please enter a valid email address.');
       return;
     }
 
@@ -2977,15 +3325,14 @@ function AppointmentDetailsScreen({
       title: patientForm.title,
       full_name: fullName,
       gender: patientForm.gender,
-      date_of_birth: patientForm.dateOfBirth,
       age_years: ageYears,
-      contact_mobile: primaryMobile,
       primary_mobile: primaryMobile,
-      alternate_mobile: alternateMobile,
-      email,
-      labmate_pid: labmatePid,
-      panel_company: panelCompany,
-      tag: patientForm.tag,
+      ...(patientForm.dateOfBirth ? {date_of_birth: patientForm.dateOfBirth} : {}),
+      ...(alternateMobile ? {alternate_mobile: alternateMobile} : {}),
+      ...(email ? {email} : {}),
+      ...(labmatePid ? {labmate_pid: labmatePid} : {}),
+      ...(panelCompany ? {panel_company: panelCompany} : {}),
+      ...(patientForm.tag ? {tag: patientForm.tag} : {}),
       patient_documents: patientDocuments,
     };
     const editingPatientId = editingPatient
@@ -3007,1742 +3354,259 @@ function AppointmentDetailsScreen({
 
   return (
     <>
-      <Modal
-        transparent
-        animationType="slide"
+      <CancelBookingModal
+        styles={styles}
         visible={isCancelBookingModalVisible}
-        onRequestClose={closeCancelBookingModal}>
-        <View
-          style={[
-            styles.addPatientModalOverlay,
-            styles.cancelBookingScreenOverlay,
-          ]}>
-          <View
-            style={[
-              styles.addPatientModalCard,
-              styles.cancelBookingModalCard,
-              isNarrowScreen && styles.addPatientModalCardCompact,
-            ]}>
-            <View style={[styles.addPatientModalHeader, styles.cancelBookingHeader]}>
-              <View style={styles.panelCompanyModalHeaderText}>
-                <Text style={styles.cancelBookingTitle}>Cancel entire booking</Text>
-                <Text style={styles.cancelBookingSubtitle}>
-                  {selectedBooking?.bookingCode ||
-                    selectedBooking?.bookingNumber ||
-                    selectedBooking?.id ||
-                    'Appointment'}{' '}
-                  • {patientCount} Patient{patientCount > 1 ? 's' : ''}
-                </Text>
-              </View>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={[
-                  styles.addPatientModalCloseButton,
-                  styles.cancelBookingCloseButton,
-                ]}
-                onPress={closeCancelBookingModal}
-                disabled={bookingActionLoading === 'cancel'}>
-                <Ionicons
-                  name="close"
-                  size={20}
-                  style={styles.cancelBookingCloseIcon}
-                />
-              </TouchableOpacity>
-            </View>
+        isNarrowScreen={isNarrowScreen}
+        selectedBooking={selectedBooking}
+        patientCount={patientCount}
+        bookingActionLoading={bookingActionLoading}
+        cancellationReasonOptions={CANCELLATION_REASON_OPTIONS}
+        cancellationReason={cancellationReason}
+        setCancellationReason={setCancellationReason}
+        cancelRemarks={cancelRemarks}
+        setCancelRemarks={setCancelRemarks}
+        isCancelRescheduleRequested={isCancelRescheduleRequested}
+        setIsCancelRescheduleRequested={setIsCancelRescheduleRequested}
+        isCancelKnownSlot={isCancelKnownSlot}
+        setIsCancelKnownSlot={setIsCancelKnownSlot}
+        cancelNewVisitDate={cancelNewVisitDate}
+        setIsCancelCalendarVisible={setIsCancelCalendarVisible}
+        cancelNewTimeSlot={cancelNewTimeSlot}
+        isCancelTimeSlotSelectVisible={isCancelTimeSlotSelectVisible}
+        setIsCancelTimeSlotSelectVisible={setIsCancelTimeSlotSelectVisible}
+        closeCancelBookingModal={closeCancelBookingModal}
+        confirmCancelBooking={confirmCancelBooking}
+      />
 
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={[
-                styles.addPatientModalContent,
-                styles.cancelBookingContent,
-              ]}>
-              <View style={styles.cancelBookingSpacer} />
+      <BookingDetailOverview
+        styles={styles}
+        selectedBooking={selectedBooking}
+        patientCount={patientCount}
+        isSmallPhone={isSmallPhone}
+        canUseActiveBookingControls={canUseActiveBookingControls}
+        canUsePatientActions={canUsePatientActions}
+        shouldShowProgressActions={shouldShowProgressActions}
+        shouldShowStartOnly={shouldShowStartOnly}
+        bookingActionLoading={bookingActionLoading}
+        resolvedAddress={resolvedAddress}
+        latitude={latitude}
+        longitude={longitude}
+        isTerminalBooking={isTerminalBooking}
+        isCompletedBooking={isCompletedBooking}
+        isCancelledBooking={isCancelledBooking}
+        terminalBookingMessage={terminalBookingMessage}
+        canCallBookingPhone={Boolean(
+          normalizeFormText(selectedBooking.phoneNumber),
+        )}
+        handleCallBookingPhone={handleCallBookingPhone}
+        handleOpenLocation={handleOpenLocation}
+        handleAddPatientPress={handleAddPatientPress}
+        openCancelBookingModal={openCancelBookingModal}
+        onBookingAction={onBookingAction}
+      />
 
-              <View style={styles.cancelFormSection}>
-                <View style={styles.cancelFieldGroup}>
-                  <RequiredLabel styles={styles}>Cancellation Reason</RequiredLabel>
-                  <View style={styles.cancelReasonChipRow}>
-                    {CANCELLATION_REASON_OPTIONS.map(reason => {
-                      const isSelected = cancellationReason === reason;
+      <PatientSelectorSection
+        styles={styles}
+        isSmallPhone={isSmallPhone}
+        patientCount={patientCount}
+        patientSelectorItems={patientSelectorItems}
+        filteredPatientSelectorItems={filteredPatientSelectorItems}
+        selectedPatientItem={selectedPatientItem}
+        patientSearchText={patientSearchText}
+        setPatientSearchText={setPatientSearchText}
+        setSelectedPatientKey={setSelectedPatientKey}
+      />
 
-                      return (
-                        <TouchableOpacity
-                          key={reason}
-                          activeOpacity={0.85}
-                          style={[
-                            styles.cancelReasonChip,
-                            isSelected && styles.cancelReasonChipActive,
-                          ]}
-                          onPress={() => setCancellationReason(reason)}>
-                          <Text
-                            style={[
-                              styles.cancelReasonChipText,
-                              isSelected && styles.cancelReasonChipTextActive,
-                            ]}>
-                            {reason}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                </View>
+      <SelectedPatientAppointmentSection
+        selectedPatientItem={selectedPatientItem}
+        styles={styles}
+        isSmallPhone={isSmallPhone}
+        canUsePatientActions={canUsePatientActions}
+        canCancelPatientForBooking={canCancelPatientForBooking}
+        isTerminalBooking={isTerminalBooking}
+        isBookingCompleteOrCancelled={isCompletedBooking || isCancelledBooking}
+        activePatientPanelCompanyMap={activePatientPanelCompanyMap}
+        patientSelectedTestsMap={patientSelectedTestsMap}
+        patientPrecomputedSampleTubesMap={patientPrecomputedSampleTubesMap}
+        patientSampleCollectionMap={patientSampleCollectionMap}
+        patientTestBookingStatusMap={patientTestBookingStatusMap}
+        patientCghsEnabledMap={patientCghsEnabledMap}
+        patientCghsIdMap={patientCghsIdMap}
+        patientCghsDocumentsMap={patientCghsDocumentsMap}
+        patientManualSlipDocumentsMap={patientManualSlipDocumentsMap}
+        patientCompletionDocumentsMap={patientCompletionDocumentsMap}
+        patientReportCourierMap={patientReportCourierMap}
+        addingTestPatientId={addingTestPatientId}
+        cancellingPatientId={cancellingPatientId}
+        defaultTestBookingStatus={DEFAULT_TEST_BOOKING_STATUS}
+        emptyUploadDocuments={EMPTY_UPLOAD_DOCUMENTS}
+        getPatientPanelCompanies={getPatientPanelCompanies}
+        isManualHcSlipSelected={isManualHcSlipSelected}
+        doesPatientNeedPaymentProof={doesPatientNeedPaymentProof}
+        handlePrimaryPanelCompanyPress={handlePrimaryPanelCompanyPress}
+        openPanelCompanyTests={openPanelCompanyTests}
+        handleRemovePatientPanelCompany={handleRemovePatientPanelCompany}
+        handlePatientCancelBooking={handlePatientCancelBooking}
+        handleEditPatientPress={handleEditPatientPress}
+        handleReportCourierChange={handleReportCourierChange}
+        handleTestBookingStatusChange={handleTestBookingStatusChange}
+        handlePatientCghsEnabledChange={handlePatientCghsEnabledChange}
+        handlePatientCghsIdChange={handlePatientCghsIdChange}
+        handlePatientCghsDocumentsChange={handlePatientCghsDocumentsChange}
+        handlePatientManualSlipDocumentsChange={
+          handlePatientManualSlipDocumentsChange
+        }
+        handlePatientPaymentProofDocumentsChange={
+          handlePatientPaymentProofDocumentsChange
+        }
+        showAppAlert={showAppAlert}
+        onOpenSampleCollection={onOpenSampleCollection}
+        handleRemoveSelectedTestWithSampleReset={
+          handleRemoveSelectedTestWithSampleReset
+        }
+        handlePatientAddPanelCompany={handlePatientAddPanelCompany}
+      />
 
-                <TextInput
-                  value={cancelRemarks}
-                  onChangeText={setCancelRemarks}
-                  placeholder="Remarks (optional)"
-                  placeholderTextColor={BRAND.textMuted}
-                  style={styles.cancelRemarksInput}
-                />
+      <PaymentSummarySection
+        styles={styles}
+        patientCount={patientCount}
+        completeBillingTotal={completeBillingTotal}
+        completeBaseDiscountAmount={completeBaseDiscountAmount}
+        completeAdditionalDiscountAmount={completeAdditionalDiscountAmount}
+        completeCreditAmount={completeCreditAmount}
+        completeNetAmount={completeNetAmount}
+        localBillingSummary={localBillingSummary}
+        isAdditionalDiscountEnabled={isAdditionalDiscountEnabled}
+        completeAdditionalDiscountMode={completeAdditionalDiscountMode}
+        completeAdditionalDiscount={completeAdditionalDiscount}
+        completePayments={completePayments}
+        completePaymentModeOptions={COMPLETE_PAYMENT_MODE_OPTIONS}
+        bookingActionLoading={bookingActionLoading}
+        shouldShowProgressActions={shouldShowProgressActions}
+        handleAdditionalDiscountToggle={handleAdditionalDiscountToggle}
+        setCompleteAdditionalDiscountMode={setCompleteAdditionalDiscountMode}
+        setCompleteAdditionalDiscount={setCompleteAdditionalDiscount}
+        handleApplyAdditionalDiscount={handleApplyAdditionalDiscount}
+        handleCompletePaymentChange={handleCompletePaymentChange}
+        handleRemoveCompletePayment={handleRemoveCompletePayment}
+        handleAddCompletePayment={handleAddCompletePayment}
+        confirmCompleteBooking={confirmCompleteBooking}
+      />
 
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={styles.cancelCheckboxRow}
-                  onPress={() =>
-                    setIsCancelRescheduleRequested(previous => !previous)
-                  }>
-                  <View
-                    style={[
-                      styles.cancelCheckbox,
-                      isCancelRescheduleRequested && styles.cancelCheckboxActive,
-                    ]}>
-                    {isCancelRescheduleRequested ? (
-                      <Ionicons
-                        name="checkmark"
-                        size={13}
-                        style={styles.cancelCheckboxIcon}
-                      />
-                    ) : null}
-                  </View>
-                  <Text style={styles.cancelCheckboxText}>
-                    Reschedule this booking
-                  </Text>
-                </TouchableOpacity>
-              </View>
+      <AddPatientModal
+        styles={styles}
+        isAddPatientModalVisible={isAddPatientModalVisible}
+        closeAddPatientModal={closeAddPatientModal}
+        isNarrowScreen={isNarrowScreen}
+        editingPatient={editingPatient}
+        addPatientModalStep={addPatientModalStep}
+        isAddingPatient={isAddingPatient}
+        isUpdatingPatient={isUpdatingPatient}
+        linkedPatients={linkedPatients}
+        selectedLinkedPatientId={selectedLinkedPatientId}
+        setSelectedLinkedPatientId={setSelectedLinkedPatientId}
+        handleOpenAddPatientForm={handleOpenAddPatientForm}
+        handleUseLinkedPatient={handleUseLinkedPatient}
+        patientForm={patientForm}
+        updatePatientFormField={updatePatientFormField}
+        handleTitleChange={handleTitleChange}
+        isGenderEditable={isGenderEditable}
+        setIsDobCalendarVisible={setIsDobCalendarVisible}
+        handlePickPatientDocuments={handlePickPatientDocuments}
+        patientDocuments={patientDocuments}
+        handleRemovePatientDocument={handleRemovePatientDocument}
+        handlePatientFormPanelCompanyChange={handlePatientFormPanelCompanyChange}
+        setIsPatientFormPanelCompanyFocused={
+          setIsPatientFormPanelCompanyFocused
+        }
+        shouldShowPatientFormPanelCompanySuggestions={
+          shouldShowPatientFormPanelCompanySuggestions
+        }
+        filteredPatientFormPanelCompanyItems={
+          filteredPatientFormPanelCompanyItems
+        }
+        handleSelectPatientFormPanelCompany={
+          handleSelectPatientFormPanelCompany
+        }
+        handleSubmitAddPatient={handleSubmitAddPatient}
+      />
 
-              {isCancelRescheduleRequested ? (
-                <View style={styles.cancelFormSection}>
-                  <Text style={styles.addPatientFieldLabel}>
-                    Is new date and slot known?
-                  </Text>
-                  <View style={styles.cancelSegmentedRow}>
-                    {[true, false].map(value => {
-                      const isSelected = isCancelKnownSlot === value;
-                      return (
-                        <TouchableOpacity
-                          key={value ? 'known' : 'unknown'}
-                          activeOpacity={0.85}
-                          style={[
-                            styles.cancelSegmentButton,
-                            isSelected && styles.cancelSegmentButtonActive,
-                          ]}
-                          onPress={() => setIsCancelKnownSlot(value)}>
-                          <Text
-                            style={[
-                              styles.cancelSegmentButtonText,
-                              isSelected && styles.cancelSegmentButtonTextActive,
-                            ]}>
-                            {value ? 'Yes' : 'No'}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-
-                  {isCancelKnownSlot ? (
-                    <>
-                      <View
-                        style={[
-                          styles.addPatientFieldRow,
-                          isNarrowScreen && styles.addPatientFieldRowStacked,
-                        ]}>
-                        <View style={styles.addPatientFieldHalf}>
-                          <RequiredLabel styles={styles}>New Visit Date</RequiredLabel>
-                          <TouchableOpacity
-                            activeOpacity={0.85}
-                            style={styles.cancelSelectButton}
-                            onPress={() => setIsCancelCalendarVisible(true)}>
-                            <Text
-                              style={[
-                                styles.cancelSelectButtonText,
-                                !cancelNewVisitDate &&
-                                  styles.addPatientDatePickerPlaceholder,
-                              ]}>
-                              {cancelNewVisitDate || 'Select date'}
-                            </Text>
-                            <Ionicons
-                              name="calendar-outline"
-                              size={18}
-                              style={styles.cancelSelectButtonIcon}
-                            />
-                          </TouchableOpacity>
-                        </View>
-                        <View style={styles.addPatientFieldHalf}>
-                          <RequiredLabel styles={styles}>New Time Slot</RequiredLabel>
-                          <TouchableOpacity
-                            activeOpacity={0.85}
-                            style={styles.cancelSelectButton}
-                            onPress={() =>
-                              setIsCancelTimeSlotSelectVisible(previous => !previous)
-                            }>
-                            <Text style={styles.cancelSelectButtonText}>
-                              {cancelNewTimeSlot}
-                            </Text>
-                            <Ionicons
-                              name={
-                                isCancelTimeSlotSelectVisible
-                                  ? 'chevron-up'
-                                  : 'chevron-down'
-                              }
-                              size={18}
-                              style={styles.cancelSelectButtonIcon}
-                            />
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    </>
-                  ) : (
-                    <View style={styles.cancelInfoBox}>
-                      <Text style={styles.cancelInfoText}>
-                        Booking will be cancelled and follow-up will be sent to
-                        Lead Management.
-                      </Text>
-                    </View>
-                  )}
-                </View>
-              ) : null}
-
-              <Text style={styles.cancelReviewMeta}>
-                Reason: {cancellationReason}
-                {cancelRemarks ? ` • ${cancelRemarks}` : ''}
-              </Text>
-            </ScrollView>
-
-            <View style={styles.cancelModalFooter}>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={[
-                  styles.cancelModalPrimaryButton,
-                  styles.cancelBookingConfirmButton,
-                  bookingActionLoading === 'cancel' &&
-                    styles.addPatientSubmitButtonDisabled,
-                ]}
-                onPress={confirmCancelBooking}
-                disabled={bookingActionLoading === 'cancel'}>
-                {bookingActionLoading === 'cancel' ? (
-                  <ActivityIndicator color={BRAND.surface} />
-                ) : (
-                  <Text style={styles.cancelModalPrimaryButtonText}>
-                    CONFIRM CANCELLATION
-                  </Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal
-        transparent
-        animationType="slide"
-        visible={isCompleteBookingModalVisible}
-        onRequestClose={closeCompleteBookingModal}>
-        <View style={styles.addPatientModalOverlay}>
-          <TouchableOpacity
-            activeOpacity={1}
-            style={styles.addPatientModalBackdrop}
-            onPress={closeCompleteBookingModal}
-          />
-          <View
-            style={[
-              styles.addPatientModalCard,
-              isNarrowScreen && styles.addPatientModalCardCompact,
-            ]}>
-            <View style={styles.addPatientModalHeader}>
-              <View style={styles.panelCompanyModalHeaderText}>
-                <Text style={styles.addPatientModalTitle}>Complete Booking</Text>
-                <Text style={styles.addPatientModalEyebrow}>
-                  {selectedBooking?.bookingNumber || selectedBooking?.id || 'Appointment'}
-                </Text>
-              </View>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.addPatientModalCloseButton}
-                onPress={closeCompleteBookingModal}
-                disabled={bookingActionLoading === 'completed'}>
-                <Ionicons
-                  name="close"
-                  size={20}
-                  style={styles.addPatientModalCloseIcon}
-                />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.addPatientModalContent}>
-              <View style={styles.completeFormSection}>
-                <RequiredLabel styles={styles}>Panel Companies</RequiredLabel>
-                {completeBookingPanelCompanies.length ? (
-                  <View style={styles.completePanelCompanyBadgeWrap}>
-                    {completeBookingPanelCompanies.map(company => {
-                      const isCreditCompany = getBillingChargeMode(company).includes(
-                        'C',
-                      );
-
-                      return (
-                        <View
-                          key={company.id}
-                          style={[
-                            styles.completePanelCompanyBadge,
-                            isCreditCompany &&
-                              styles.completePanelCompanyBadgeCredit,
-                          ]}>
-                          <Text
-                            style={styles.completePanelCompanyName}
-                            numberOfLines={1}>
-                            {company.name}
-                          </Text>
-                          <Text style={styles.completePanelCompanyMode}>
-                            {company.paymentLabel}
-                          </Text>
-                        </View>
-                      );
-                    })}
-                  </View>
-                ) : (
-                  <Text style={styles.completePanelCompanyEmptyText}>
-                    No panel company found for this booking.
-                  </Text>
-                )}
-              </View>
-
-              <View style={styles.completeFormSection}>
-                <RequiredLabel styles={styles}>Billing Summary</RequiredLabel>
-                <View style={styles.completeBillingSummaryGrid}>
-                  <View style={styles.completeBillingSummaryCard}>
-                    <Text style={styles.completeBillingSummaryLabel}>SubTotal</Text>
-                    <Text style={styles.completeBillingSummaryValue}>
-                      Rs. {completeBillingTotal.toFixed(2)}
-                    </Text>
-                  </View>
-                  <View style={styles.completeBillingSummaryCard}>
-                    <Text style={styles.completeBillingSummaryLabel}>Base</Text>
-                    <Text style={styles.completeBillingSummaryValue}>
-                      Rs. {completeBaseDiscountAmount.toFixed(2)}
-                    </Text>
-                  </View>
-                  <View style={styles.completeBillingSummaryCard}>
-                    <Text style={styles.completeBillingSummaryLabel}>Additional</Text>
-                    <Text style={styles.completeBillingSummaryValue}>
-                      Rs. {completeAdditionalDiscountAmount.toFixed(2)}
-                    </Text>
-                  </View>
-                  <View style={styles.completeBillingSummaryCard}>
-                    <Text style={styles.completeBillingSummaryLabel}>Credit</Text>
-                    <Text style={styles.completeBillingSummaryValue}>
-                      Rs. {completeCreditAmount.toFixed(2)}
-                    </Text>
-                  </View>
-                  <View style={styles.completeBillingSummaryCard}>
-                    <Text style={styles.completeBillingSummaryLabel}>FinalAmount</Text>
-                    <Text style={styles.completeBillingSummaryValue}>
-                      Rs. {completeNetAmount.toFixed(2)}
-                    </Text>
-                  </View>
-                </View>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={[
-                    styles.completeSecondaryButton,
-                    isAdditionalDiscountEnabled &&
-                      styles.completeSecondaryButtonActive,
-                  ]}
-                  onPress={handleAdditionalDiscountToggle}
-                  disabled={localBillingSummary.payingTestCount <= 0}>
-                  <Ionicons
-                    name="pricetag-outline"
-                    size={16}
-                    style={[
-                      styles.completeSecondaryButtonIcon,
-                      isAdditionalDiscountEnabled &&
-                        styles.completeSecondaryButtonIconActive,
-                    ]}
-                  />
-                  <Text
-                    style={[
-                      styles.completeSecondaryButtonText,
-                      isAdditionalDiscountEnabled &&
-                        styles.completeSecondaryButtonTextActive,
-                    ]}>
-                    Additional Discount
-                  </Text>
-                </TouchableOpacity>
-                {isAdditionalDiscountEnabled ? (
-                  <>
-                    <View style={styles.cancelSegmentedRow}>
-                      {[
-                        {label: 'Amount', value: 'amount'},
-                        {label: 'Percent', value: 'percent'},
-                      ].map(option => {
-                        const isSelected =
-                          completeAdditionalDiscountMode === option.value;
-
-                        return (
-                          <TouchableOpacity
-                            key={option.value}
-                            activeOpacity={0.85}
-                            style={[
-                              styles.cancelSegmentButton,
-                              isSelected && styles.cancelSegmentButtonActive,
-                            ]}
-                            onPress={() =>
-                              setCompleteAdditionalDiscountMode(option.value)
-                            }>
-                            <Text
-                              style={[
-                                styles.cancelSegmentButtonText,
-                                isSelected &&
-                                  styles.cancelSegmentButtonTextActive,
-                              ]}>
-                              {option.label}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                    <View style={styles.completeAdditionalDiscountRow}>
-                      <View
-                        style={[
-                          styles.completeCashInputWrap,
-                          styles.completeAdditionalDiscountInputWrap,
-                        ]}>
-                        <Text style={styles.completeCashPrefix}>
-                          {completeAdditionalDiscountMode === 'percent'
-                            ? '%'
-                            : 'Rs.'}
-                        </Text>
-                        <TextInput
-                          value={completeAdditionalDiscount}
-                          onChangeText={setCompleteAdditionalDiscount}
-                          keyboardType="numeric"
-                          placeholder="Enter additional discount"
-                          placeholderTextColor="#7B8AA3"
-                          style={styles.completeCashInput}
-                        />
-                      </View>
-                      <TouchableOpacity
-                        activeOpacity={0.85}
-                        style={styles.completeAdditionalDiscountApplyButton}
-                        onPress={handleApplyAdditionalDiscount}>
-                        <Text
-                          style={
-                            styles.completeAdditionalDiscountApplyButtonText
-                          }>
-                          Apply
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  </>
-                ) : null}
-                <Text style={styles.completeBillingHintText}>
-                  {localBillingSummary.payingTestCount} paying tests billed.
-                  Credit {localBillingSummary.creditTestCount} view only. Free{' '}
-                  {localBillingSummary.freeTestCount} excluded. Max additional:
-                  {' '}Rs. {localBillingSummary.maxAdditionalAllowed.toFixed(2)}
-                </Text>
-              </View>
-
-              <View style={styles.completeFormSection}>
-                <RequiredLabel styles={styles}>Payment Mode</RequiredLabel>
-                <View style={styles.cancelSegmentedRow}>
-                  {COMPLETE_PAYMENT_MODE_OPTIONS.map(mode => {
-                    const isSelected = completePaymentMode === mode;
-
-                    return (
-                      <TouchableOpacity
-                        key={mode}
-                        activeOpacity={0.85}
-                        style={[
-                          styles.cancelSegmentButton,
-                          isSelected && styles.cancelSegmentButtonActive,
-                        ]}
-                        onPress={() => setCompletePaymentMode(mode)}>
-                        <Text
-                          style={[
-                            styles.cancelSegmentButtonText,
-                            isSelected && styles.cancelSegmentButtonTextActive,
-                          ]}>
-                          {mode}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </View>
-
-              <View style={styles.completeFormSection}>
-                <RequiredLabel styles={styles}>Amount Received</RequiredLabel>
-                <View style={styles.completeCashInputWrap}>
-                  <Text style={styles.completeCashPrefix}>Rs.</Text>
-                  <TextInput
-                    value={completeAmountReceived}
-                    onChangeText={setCompleteAmountReceived}
-                    keyboardType="numeric"
-                    placeholder="Enter amount received"
-                    placeholderTextColor="#7B8AA3"
-                    style={styles.completeCashInput}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.completeFormSection}>
-                <Text style={styles.addPatientFieldLabel}>Remarks</Text>
-                <TextInput
-                  value={completeRemarks}
-                  onChangeText={setCompleteRemarks}
-                  placeholder="Add billing or reporting remarks"
-                  placeholderTextColor="#7B8AA3"
-                  multiline
-                  textAlignVertical="top"
-                  style={styles.completeRemarksInput}
-                />
-              </View>
-            </ScrollView>
-
-            <View style={styles.cancelModalFooter}>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.cancelModalSecondaryButton}
-                onPress={closeCompleteBookingModal}
-                disabled={bookingActionLoading === 'completed'}>
-                <Text style={styles.cancelModalSecondaryButtonText}>Close</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={[
-                  styles.completeModalPrimaryButton,
-                  bookingActionLoading === 'completed' &&
-                    styles.addPatientSubmitButtonDisabled,
-                ]}
-                onPress={confirmCompleteBooking}
-                disabled={bookingActionLoading === 'completed'}>
-                {bookingActionLoading === 'completed' ? (
-                  <ActivityIndicator color={BRAND.surface} />
-                ) : (
-                  <Text style={styles.completeModalPrimaryButtonText}>
-                    Confirm Complete
-                  </Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      <View style={styles.bookingDetailShell}>
-        <View style={styles.bookingDetailHero}>
-          <View style={styles.bookingDetailHeroTopRow}>
-            <View style={styles.bookingDetailHeroText}>
-              <Text style={styles.bookingDetailHeroCode}>
-                {selectedBooking.bookingCode || selectedBooking.id}
-              </Text>
-              <Text style={styles.bookingDetailHeroMeta}>
-                {patientCount} Patient{patientCount > 1 ? 's' : ''} |{' '}
-                {selectedBooking.timeSlot}
-              </Text>
-            </View>
-            <View style={styles.bookingDetailHeroIconRow}>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.bookingDetailHeroIconButton}
-                onPress={handleCallBookingPhone}
-                disabled={!normalizeFormText(selectedBooking.phoneNumber)}>
-                <Ionicons
-                  name="call-outline"
-                  size={18}
-                  style={styles.bookingDetailHeroIcon}
-                />
-              </TouchableOpacity>
-              {canUseActiveBookingControls ? (
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={styles.bookingDetailHeroIconButton}
-                  onPress={handleOpenLocation}>
-                  <Ionicons
-                    name="map-outline"
-                    size={18}
-                    style={styles.bookingDetailHeroIcon}
-                  />
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          </View>
-          <View style={styles.bookingDetailHeroStatusRow}>
-            <View style={styles.bookingDetailHeroStatusChip}>
-              <Text style={styles.bookingDetailHeroStatusText}>
-                {selectedBooking.status}
-              </Text>
-            </View>
-            <Text style={styles.bookingDetailHeroDate}>
-              {selectedBooking.preferredVisitDate}
-            </Text>
-          </View>
-        </View>
-
-        {canUsePatientActions || shouldShowProgressActions ? (
-          <View
-            style={[
-              styles.bookingDetailQuickActionRow,
-              isSmallPhone && styles.bookingDetailQuickActionRowStacked,
-            ]}>
-            {canUsePatientActions ? (
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={[
-                  styles.bookingDetailQuickAction,
-                  styles.bookingDetailQuickActionPrimary,
-                ]}
-                onPress={handleAddPatientPress}>
-                <Ionicons
-                  name="person-add-outline"
-                  size={17}
-                  style={styles.bookingDetailQuickActionIcon}
-                />
-                <Text style={styles.bookingDetailQuickActionText}>
-                  ADD PATIENT
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-            {shouldShowProgressActions ? (
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={[
-                  styles.bookingDetailQuickAction,
-                  styles.bookingDetailQuickActionDanger,
-                ]}
-                onPress={openCancelBookingModal}
-                disabled={Boolean(bookingActionLoading)}>
-                <Ionicons
-                  name="close-circle-outline"
-                  size={17}
-                  style={styles.bookingDetailQuickActionDangerIcon}
-                />
-                <Text
-                  style={[
-                    styles.bookingDetailQuickActionText,
-                    styles.bookingDetailQuickActionDangerText,
-                  ]}>
-                  CANCEL
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        ) : null}
-
-        {shouldShowStartOnly || shouldShowProgressActions ? (
-          <View style={styles.bookingDetailSecondaryRow}>
-            <Text style={styles.bookingDetailSecondaryText}>Booking control</Text>
-            {shouldShowStartOnly ? (
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.bookingDetailSecondaryButton}
-                onPress={() => onBookingAction('start')}
-                disabled={Boolean(bookingActionLoading)}>
-                <Text style={styles.bookingDetailSecondaryButtonText}>
-                  {bookingActionLoading === 'start' ? 'STARTING...' : 'START'}
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-            {shouldShowProgressActions ? (
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.bookingDetailSecondaryButton}
-                onPress={() => onBookingAction('stop')}
-                disabled={Boolean(bookingActionLoading)}>
-                <Text style={styles.bookingDetailSecondaryButtonText}>
-                  {bookingActionLoading === 'stop' ? 'STOPPING...' : 'STOP'}
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        ) : null}
-
-        <BookingLocationCard
-          styles={styles}
-          address={resolvedAddress}
-          accessNotes={selectedBooking.address.accessNotes}
-          disabled={!resolvedAddress && (!latitude || !longitude)}
-          onOpenLocation={handleOpenLocation}
-        />
-
-        {isTerminalBooking ? (
-          <TerminalStatusCard
-            styles={styles}
-            isCompleted={isCompletedBooking}
-            isCancelled={isCancelledBooking}
-            message={terminalBookingMessage}
-          />
-        ) : null}
-      </View>
-
-      <View style={styles.bookingDetailCard}>
-        <RequiredLabel styles={styles}>Billing Summary</RequiredLabel>
-        <View style={styles.completeBillingSummaryGrid}>
-          <View style={styles.completeBillingSummaryCard}>
-            <Text style={styles.completeBillingSummaryLabel}>SubTotal</Text>
-            <Text style={styles.completeBillingSummaryValue}>
-              Rs. {completeBillingTotal.toFixed(2)}
-            </Text>
-          </View>
-          <View style={styles.completeBillingSummaryCard}>
-            <Text style={styles.completeBillingSummaryLabel}>Base</Text>
-            <Text style={styles.completeBillingSummaryValue}>
-              Rs. {completeBaseDiscountAmount.toFixed(2)}
-            </Text>
-          </View>
-          <View style={styles.completeBillingSummaryCard}>
-            <Text style={styles.completeBillingSummaryLabel}>Additional</Text>
-            <Text style={styles.completeBillingSummaryValue}>
-              Rs. {completeAdditionalDiscountAmount.toFixed(2)}
-            </Text>
-          </View>
-          <View style={styles.completeBillingSummaryCard}>
-            <Text style={styles.completeBillingSummaryLabel}>Credit</Text>
-            <Text style={styles.completeBillingSummaryValue}>
-              Rs. {completeCreditAmount.toFixed(2)}
-            </Text>
-          </View>
-          <View style={styles.completeBillingSummaryCard}>
-            <Text style={styles.completeBillingSummaryLabel}>FinalAmount</Text>
-            <Text style={styles.completeBillingSummaryValue}>
-              Rs. {completeNetAmount.toFixed(2)}
-            </Text>
-          </View>
-        </View>
-      </View>
-
-      {selectedBooking.patients.map((patient, index) => {
-        const patientStatusCode = Number(patient.bookingPatientStatusCode || 0);
-        const canUseThisPatientActions =
-          canUsePatientActions &&
-          ![3, 4, 5].includes(patientStatusCode);
-        const patientId = getPatientMutationId(patient);
-        const activePanelCompanyId = patientId
-          ? activePatientPanelCompanyMap[patientId] || ''
-          : '';
-        const selectedTests = patientId
-          ? patientSelectedTestsMap[patientId] || []
-          : [];
-        const hasSelectedTestsOverride =
-          patientId &&
-          Object.prototype.hasOwnProperty.call(
-            patientSelectedTestsMap,
-            patientId,
-          );
-        const companyChips = getPatientPanelCompanies(patient);
-        const sampleCollected =
-          Boolean(patientId && patientSampleCollectionMap[patientId]?.collected) ||
-          patientStatusCode === 3;
-        const testBookingStatus = patientId
-          ? patientTestBookingStatusMap[patientId] ||
-            DEFAULT_TEST_BOOKING_STATUS
-          : DEFAULT_TEST_BOOKING_STATUS;
-
-        return (
-        <PatientDetailCard
-          key={`patient-${getPatientMutationId(patient) || patient.id || 'na'}-${index}`}
-          patient={patient}
-          styles={styles}
-          onPrimaryPanelCompanyPress={
-            canUseThisPatientActions ? handlePrimaryPanelCompanyPress : undefined
-          }
-          panelCompanies={companyChips}
-          activePanelCompanyId={activePanelCompanyId}
-          onSelectPanelCompany={
-            canUseThisPatientActions ? openPanelCompanyTests : undefined
-          }
-          onRemovePanelCompany={
-            canUseThisPatientActions ? handleRemovePatientPanelCompany : undefined
-          }
-          onCancelBooking={
-            canUseThisPatientActions &&
-            canCancelPatientForBooking
-              ? handlePatientCancelBooking
-              : undefined
-          }
-          onEditPatient={canUseThisPatientActions ? handleEditPatientPress : undefined}
-          onReportCourierChange={
-            canUseThisPatientActions ? handleReportCourierChange : undefined
-          }
-          testBookingStatusValue={
-            testBookingStatus
-          }
-          onTestBookingStatusChange={
-            canUseThisPatientActions
-              ? handleTestBookingStatusChange
-              : undefined
-          }
-          manualSlipDocuments={
-            patientId
-              ? patientManualSlipDocumentsMap[patientId] || EMPTY_UPLOAD_DOCUMENTS
-              : EMPTY_UPLOAD_DOCUMENTS
-          }
-          onManualSlipDocumentsChange={
-            canUseThisPatientActions
-              ? handlePatientManualSlipDocumentsChange
-              : undefined
-          }
-          paymentProofDocuments={
-            patientId
-              ? patientCompletionDocumentsMap[patientId] || EMPTY_UPLOAD_DOCUMENTS
-              : EMPTY_UPLOAD_DOCUMENTS
-          }
-          onPaymentProofDocumentsChange={
-            canUseThisPatientActions
-              ? handlePatientPaymentProofDocumentsChange
-              : undefined
-          }
-          requiresPaymentProof={
-            !isManualHcSlipSelected(testBookingStatus) &&
-            doesPatientNeedPaymentProof(patient)
-          }
-          sampleCollected={sampleCollected}
-          reportCourierValue={
-            patientId && patientReportCourierMap[patientId]
-              ? patientReportCourierMap[patientId]
-              : ''
-          }
-          onAddPanelCompany={
-            canUseThisPatientActions ? handlePatientAddPanelCompany : undefined
-          }
-          onOpenSampleCollection={
-            canUseThisPatientActions ? onOpenSampleCollection : undefined
-          }
-          selectedTests={selectedTests}
-          selectedTestsSourceReady={Boolean(hasSelectedTestsOverride)}
-          onRemoveSelectedTest={
-            canUseThisPatientActions ? onRemovePatientSelectedTest : undefined
-          }
-          isAddPanelCompanyDisabled={
-            Boolean(addingTestPatientId)
-          }
-          isCancelBookingDisabled={Boolean(cancellingPatientId)}
-          addPanelCompanyLabel={
-            String(addingTestPatientId) === String(getPatientMutationId(patient))
-              ? 'Loading...'
-              : 'Add Company'
-          }
-          cancelBookingLabel={
-            String(cancellingPatientId) === String(patient.id)
-              ? 'Cancelling...'
-              : 'Cancel Patient'
-          }
-        />
-        );
-      })}
-
-      {shouldShowProgressActions ? (
-        <View style={styles.swipeCompleteSection}>
-          <SwipeCompleteButton
-            styles={styles}
-            disabled={Boolean(bookingActionLoading)}
-            isLoading={bookingActionLoading === 'completed'}
-            onComplete={openCompleteBookingModal}
-          />
-        </View>
-      ) : null}
-
-      <Modal
-        transparent
-        animationType="slide"
-        visible={isAddPatientModalVisible}
-        onRequestClose={closeAddPatientModal}>
-        <View style={styles.addPatientModalOverlay}>
-          <TouchableOpacity
-            activeOpacity={1}
-            style={styles.addPatientModalBackdrop}
-            onPress={closeAddPatientModal}
-          />
-          <View
-            style={[
-              styles.addPatientModalCard,
-              styles.addPatientFormModalCard,
-              isNarrowScreen && styles.addPatientModalCardCompact,
-            ]}>
-            <View
-              style={[
-                styles.addPatientModalHeader,
-                styles.addPatientFormModalHeader,
-              ]}>
-              <View style={styles.addPatientFormHeaderText}>
-                <Text
-                  style={[
-                    styles.addPatientModalTitle,
-                    styles.addPatientFormModalTitle,
-                  ]}>
-                  {editingPatient
-                    ? 'Edit Patient'
-                    : addPatientModalStep === 'linked-list'
-                    ? 'Linked Patients'
-                    : 'Add Patient'}
-                </Text>
-                <Text
-                  style={[
-                    styles.addPatientModalEyebrow,
-                    styles.addPatientFormModalEyebrow,
-                  ]}>
-                  {editingPatient
-                    ? 'Update patient details'
-                    : addPatientModalStep === 'linked-list'
-                    ? 'Choose linked patient or add a new one'
-                    : 'Add a new patient to this appointment'}
-                </Text>
-              </View>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={[
-                  styles.addPatientModalCloseButton,
-                  styles.addPatientFormModalCloseButton,
-                ]}
-                onPress={closeAddPatientModal}
-                disabled={isAddingPatient || isUpdatingPatient}>
-                <Ionicons
-                  name="close"
-                  size={20}
-                  style={[
-                    styles.addPatientModalCloseIcon,
-                    styles.addPatientFormModalCloseIcon,
-                  ]}
-                />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView
-              style={styles.addPatientModalScroll}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={[
-                styles.addPatientModalContent,
-                styles.addPatientFormModalContent,
-                !editingPatient &&
-                  addPatientModalStep === 'linked-list' &&
-                  styles.linkedPatientScrollContent,
-              ]}>
-              {!editingPatient && addPatientModalStep === 'linked-list' ? (
-                <>
-                  <View style={styles.linkedPatientList}>
-                    {linkedPatients.length ? (
-                      linkedPatients.map(linkedPatient => {
-                      const isSelected =
-                        selectedLinkedPatientId === linkedPatient.id;
-
-                      return (
-                        <TouchableOpacity
-                          key={linkedPatient.id}
-                          activeOpacity={0.85}
-                          style={[
-                            styles.linkedPatientCard,
-                            isSelected && styles.linkedPatientCardActive,
-                          ]}
-                          onPress={() => setSelectedLinkedPatientId(linkedPatient.id)}>
-                          <View style={styles.linkedPatientCardHeader}>
-                            <Text style={styles.linkedPatientName}>
-                              {linkedPatient.name}
-                            </Text>
-                            <View
-                              style={[
-                                styles.linkedPatientSelectChip,
-                                isSelected &&
-                                  styles.linkedPatientSelectChipActive,
-                              ]}>
-                              <Text
-                                style={[
-                                  styles.linkedPatientSelectChipText,
-                                  isSelected &&
-                                    styles.linkedPatientSelectChipTextActive,
-                                ]}>
-                                {isSelected ? 'Selected' : 'Tap to Select'}
-                              </Text>
-                            </View>
-                          </View>
-                          <Text style={styles.linkedPatientMeta}>
-                            {linkedPatient.gender} | {linkedPatient.age} yrs
-                          </Text>
-                          <Text style={styles.linkedPatientMeta}>
-                            {linkedPatient.mobileNumber}
-                          </Text>
-                          <Text style={styles.linkedPatientMeta}>
-                            Panel: {linkedPatient.panelCompany}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                      })
-                    ) : (
-                      <View style={styles.panelCompanyEmptyState}>
-                        <Text style={styles.panelCompanyEmptyStateText}>
-                          No linked patients found for this booking.
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-
-                </>
-              ) : (
-                <>
-              <RequiredLabel styles={styles}>Title</RequiredLabel>
-              <View style={styles.addPatientChipGrid}>
-                {TITLE_OPTIONS.map(title => {
-                  const isSelected = patientForm.title === title;
-                  return (
-                    <TouchableOpacity
-                      key={title}
-                      activeOpacity={0.85}
-                      style={[
-                        styles.addPatientChoiceChip,
-                        isSelected && styles.addPatientChoiceChipActive,
-                      ]}
-                      onPress={() => handleTitleChange(title)}>
-                      <Text
-                        style={[
-                          styles.addPatientChoiceChipText,
-                          isSelected && styles.addPatientChoiceChipTextActive,
-                        ]}>
-                        {title}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              <View style={styles.addPatientInputGroup}>
-                <RequiredLabel styles={styles}>Full Name</RequiredLabel>
-                <TextInput
-                  value={patientForm.fullName}
-                  onChangeText={value => updatePatientFormField('fullName', value)}
-                  placeholder="Patient full name"
-                  placeholderTextColor={BRAND.textMuted}
-                  style={styles.addPatientInput}
-                />
-              </View>
-
-              <View
-                style={[
-                  styles.addPatientFieldRow,
-                  isNarrowScreen && styles.addPatientFieldRowStacked,
-                ]}>
-                <View style={styles.addPatientFieldHalf}>
-                  <RequiredLabel styles={styles}>Gender</RequiredLabel>
-                  {isGenderEditable ? (
-                    <View style={styles.addPatientGenderChipRow}>
-                      {GENDER_OPTIONS.map(gender => {
-                        const isSelected = patientForm.gender === gender;
-                        return (
-                          <TouchableOpacity
-                            key={gender}
-                            activeOpacity={0.85}
-                            style={[
-                              styles.addPatientGenderChip,
-                              isSelected && styles.addPatientGenderChipActive,
-                            ]}
-                            onPress={() =>
-                              updatePatientFormField('gender', gender)
-                            }>
-                            <Text
-                              style={[
-                                styles.addPatientGenderChipText,
-                                isSelected &&
-                                  styles.addPatientGenderChipTextActive,
-                              ]}>
-                              {gender}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  ) : (
-                    <View style={styles.addPatientReadonlyInput}>
-                      <Text style={styles.addPatientReadonlyInputText}>
-                        {patientForm.gender}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                <View style={styles.addPatientFieldHalf}>
-                  <Text style={styles.addPatientFieldLabel}>Age</Text>
-                  <View style={styles.addPatientReadonlyInput}>
-                    <Text style={styles.addPatientReadonlyInputText}>
-                      {patientForm.ageYears || 'Auto'}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-
-              <View style={styles.addPatientInputGroup}>
-                <RequiredLabel styles={styles}>Date of Birth</RequiredLabel>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={styles.addPatientDatePickerButton}
-                  onPress={() => setIsDobCalendarVisible(true)}>
-                  <Text
-                    style={[
-                      styles.addPatientDatePickerText,
-                      !patientForm.dateOfBirth &&
-                        styles.addPatientDatePickerPlaceholder,
-                    ]}>
-                    {patientForm.dateOfBirth || 'Select date'}
-                  </Text>
-                  <Ionicons
-                    name="calendar-outline"
-                    size={18}
-                    style={styles.addPatientDatePickerIcon}
-                  />
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.addPatientInputGroup}>
-                <RequiredLabel styles={styles}>Primary Mobile</RequiredLabel>
-                <TextInput
-                  value={patientForm.primaryMobile}
-                  onChangeText={value =>
-                    updatePatientFormField('primaryMobile', value.replace(/\D/g, ''))
-                  }
-                  placeholder="9898989898"
-                  placeholderTextColor={BRAND.textMuted}
-                  keyboardType="phone-pad"
-                  maxLength={10}
-                  style={styles.addPatientInput}
-                />
-              </View>
-
-              <View style={styles.addPatientInputGroup}>
-                <Text style={styles.addPatientFieldLabel}>Alternate Mobile</Text>
-                <TextInput
-                  value={patientForm.alternateMobile}
-                  onChangeText={value =>
-                    updatePatientFormField(
-                      'alternateMobile',
-                      value.replace(/\D/g, ''),
-                    )
-                  }
-                  placeholder="Optional"
-                  placeholderTextColor={BRAND.textMuted}
-                  keyboardType="phone-pad"
-                  maxLength={10}
-                  style={styles.addPatientInput}
-                />
-              </View>
-
-              <View style={styles.addPatientInputGroup}>
-                <Text style={styles.addPatientFieldLabel}>Email</Text>
-                <TextInput
-                  value={patientForm.email}
-                  onChangeText={value => updatePatientFormField('email', value)}
-                  placeholder="Optional"
-                  placeholderTextColor={BRAND.textMuted}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  style={styles.addPatientInput}
-                />
-              </View>
-
-              <View style={styles.addPatientInputGroup}>
-                <Text style={styles.addPatientFieldLabel}>Documents / Images</Text>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={styles.addPatientDatePickerButton}
-                  onPress={handlePickPatientDocuments}>
-                  <Text style={styles.addPatientDatePickerText}>
-                    Upload Files
-                  </Text>
-                  <Ionicons
-                    name="attach-outline"
-                    size={18}
-                    style={styles.addPatientDatePickerIcon}
-                  />
-                </TouchableOpacity>
-                {patientDocuments.length ? (
-                  <View style={styles.panelCompanyListContent}>
-                    {patientDocuments.map((document, index) => (
-                      <View
-                        key={`${document.uri}-${index}`}
-                        style={styles.panelCompanyItem}>
-                        <View style={styles.panelCompanyItemTextWrap}>
-                          <Text style={styles.panelCompanyName} numberOfLines={1}>
-                            {document.name}
-                          </Text>
-                          <Text style={styles.panelCompanyMeta} numberOfLines={1}>
-                            {document.type}
-                          </Text>
-                        </View>
-                        <TouchableOpacity
-                          activeOpacity={0.85}
-                          style={styles.patientEditButton}
-                          onPress={() => handleRemovePatientDocument(index)}>
-                          <Ionicons
-                            name="trash-outline"
-                            size={16}
-                            style={styles.patientEditButtonIcon}
-                          />
-                        </TouchableOpacity>
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-              </View>
-
-              <View
-                style={[
-                  styles.addPatientFieldRow,
-                  isNarrowScreen && styles.addPatientFieldRowStacked,
-                ]}>
-                <View style={styles.addPatientFieldHalf}>
-                  <Text style={styles.addPatientFieldLabel}>Labmate PID</Text>
-                  <TextInput
-                    value={patientForm.labmatePid}
-                    onChangeText={value =>
-                      updatePatientFormField('labmatePid', value)
-                    }
-                    placeholder="1000000"
-                    placeholderTextColor={BRAND.textMuted}
-                    keyboardType="number-pad"
-                    style={styles.addPatientInput}
-                  />
-                </View>
-                <View style={styles.addPatientFieldHalf}>
-                  <RequiredLabel styles={styles}>Panel</RequiredLabel>
-                  <TextInput
-                    value={patientForm.panelCompany}
-                    onChangeText={handlePatientFormPanelCompanyChange}
-                    onFocus={() => setIsPatientFormPanelCompanyFocused(true)}
-                    onBlur={() => {
-                      setTimeout(() => {
-                        setIsPatientFormPanelCompanyFocused(false);
-                      }, 120);
-                    }}
-                    placeholder="CGHS"
-                    placeholderTextColor={BRAND.textMuted}
-                    style={styles.addPatientInput}
-                  />
-                  {shouldShowPatientFormPanelCompanySuggestions ? (
-                    filteredPatientFormPanelCompanyItems.length ? (
-                      <View style={styles.panelCompanyListContent}>
-                        {filteredPatientFormPanelCompanyItems.map(company => (
-                          <TouchableOpacity
-                            key={`patient-form-company-${company.id}`}
-                            activeOpacity={0.85}
-                            style={styles.panelCompanyItem}
-                            onPress={() =>
-                              handleSelectPatientFormPanelCompany(company)
-                            }>
-                            <View style={styles.panelCompanyItemTextWrap}>
-                              <Text
-                                style={styles.panelCompanyName}
-                                numberOfLines={1}>
-                                {company.name}
-                              </Text>
-                              <Text
-                                style={styles.panelCompanyMeta}
-                                numberOfLines={1}>
-                                {company.details || 'No details available'}
-                              </Text>
-                            </View>
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-                    ) : (
-                      <View style={styles.panelCompanyEmptyState}>
-                        <Text style={styles.panelCompanyEmptyStateText}>
-                          No matching panel company found.
-                        </Text>
-                      </View>
-                    )
-                  ) : null}
-                </View>
-              </View>
-
-              <Text style={styles.addPatientFieldLabel}>Tag</Text>
-              <View style={styles.addPatientChipGrid}>
-                {TAG_OPTIONS.map(tag => {
-                  const isSelected = patientForm.tag === tag;
-                  return (
-                    <TouchableOpacity
-                      key={tag}
-                      activeOpacity={0.85}
-                      style={[
-                        styles.addPatientChoiceChip,
-                        isSelected && styles.addPatientChoiceChipActive,
-                      ]}
-                      onPress={() => updatePatientFormField('tag', tag)}>
-                      <Text
-                        style={[
-                          styles.addPatientChoiceChipText,
-                          isSelected && styles.addPatientChoiceChipTextActive,
-                        ]}>
-                        {tag}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-                </>
-              )}
-            </ScrollView>
-
-            {!editingPatient && addPatientModalStep === 'linked-list' ? (
-              <View style={styles.linkedPatientActionFooter}>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={[
-                    styles.addPatientSubmitButton,
-                    styles.linkedPatientPrimaryButton,
-                    !linkedPatients.length && styles.addPatientSubmitButtonDisabled,
-                  ]}
-                  onPress={handleUseLinkedPatient}
-                  disabled={!linkedPatients.length}>
-                  <Ionicons
-                    name="checkmark-circle-outline"
-                    size={18}
-                    style={styles.addPatientSubmitButtonIcon}
-                  />
-                  <Text style={styles.addPatientSubmitButtonText}>
-                    Use Selected Patient
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={styles.linkedPatientSecondaryButton}
-                  onPress={handleOpenAddPatientForm}>
-                  <Ionicons
-                    name="person-add-outline"
-                    size={18}
-                    style={styles.linkedPatientSecondaryButtonIcon}
-                  />
-                  <Text style={styles.linkedPatientSecondaryButtonText}>
-                    Add New Patient
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            ) : null}
-
-            {editingPatient || addPatientModalStep === 'form' ? (
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={[
-                  styles.addPatientSubmitButton,
-                  styles.addPatientFormSubmitButton,
-                  isAddingPatient && styles.addPatientSubmitButtonDisabled,
-                  isUpdatingPatient && styles.addPatientSubmitButtonDisabled,
-                ]}
-                onPress={handleSubmitAddPatient}
-                disabled={isAddingPatient || isUpdatingPatient}>
-                {isAddingPatient || isUpdatingPatient ? (
-                  <ActivityIndicator color={BRAND.surface} />
-                ) : (
-                  <>
-                    <Ionicons
-                      name="checkmark-circle-outline"
-                      size={18}
-                      style={[
-                        styles.addPatientSubmitButtonIcon,
-                        styles.addPatientFormSubmitButtonIcon,
-                      ]}
-                    />
-                    <Text
-                      style={[
-                        styles.addPatientSubmitButtonText,
-                        styles.addPatientFormSubmitButtonText,
-                      ]}>
-                      {editingPatient ? 'Update Patient' : 'Save Patient'}
-                    </Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        </View>
-      </Modal>
-
-      <Modal
-        transparent
-        animationType="fade"
+      <CalendarPickerModal
+        styles={styles}
         visible={isDobCalendarVisible}
-        onRequestClose={() => setIsDobCalendarVisible(false)}>
-        <View style={styles.dobPickerOverlay}>
-          <TouchableOpacity
-            activeOpacity={1}
-            style={styles.dobPickerBackdrop}
-            onPress={() => setIsDobCalendarVisible(false)}
-          />
-          <View style={styles.dobPickerCard}>
-            <View style={styles.dobPickerHeader}>
-              <View>
-                <Text style={styles.addPatientModalEyebrow}>Date of Birth</Text>
-                <Text style={styles.dobPickerTitle}>
-                  {patientForm.dateOfBirth || 'Select DOB'}
-                </Text>
-              </View>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.addPatientModalCloseButton}
-                onPress={() => setIsDobCalendarVisible(false)}>
-                <Ionicons
-                  name="close"
-                  size={20}
-                  style={styles.addPatientModalCloseIcon}
-                />
-              </TouchableOpacity>
-            </View>
+        eyebrow="Date of Birth"
+        title={patientForm.dateOfBirth || 'Select DOB'}
+        calendarMonth={dobCalendarMonth}
+        calendarDays={calendarDays}
+        selectedDateValue={patientForm.dateOfBirth}
+        onClose={() => setIsDobCalendarVisible(false)}
+        onMoveMonth={moveDobCalendarMonth}
+        onSelectDate={handleDobDateSelect}
+        quickActions={[
+          {label: '-10 yr', onPress: () => moveDobCalendarMonth(-120)},
+          {label: '-1 yr', onPress: () => moveDobCalendarMonth(-12)},
+          {label: '+1 yr', onPress: () => moveDobCalendarMonth(12)},
+          {label: '+10 yr', onPress: () => moveDobCalendarMonth(120)},
+        ]}
+        disableDate={date => date > new Date()}
+        emptyKeyPrefix="dob-empty"
+        dateKeyPrefix="dob"
+      />
 
-            <View style={styles.dobPickerQuickRow}>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.dobPickerQuickButton}
-                onPress={() => moveDobCalendarMonth(-120)}>
-                <Text style={styles.dobPickerQuickButtonText}>-10 yr</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.dobPickerQuickButton}
-                onPress={() => moveDobCalendarMonth(-12)}>
-                <Text style={styles.dobPickerQuickButtonText}>-1 yr</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.dobPickerQuickButton}
-                onPress={() => moveDobCalendarMonth(12)}>
-                <Text style={styles.dobPickerQuickButtonText}>+1 yr</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.dobPickerQuickButton}
-                onPress={() => moveDobCalendarMonth(120)}>
-                <Text style={styles.dobPickerQuickButtonText}>+10 yr</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.addPatientCalendarCard}>
-              <View style={styles.addPatientCalendarHeader}>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={styles.addPatientCalendarNavButton}
-                  onPress={() => moveDobCalendarMonth(-1)}>
-                  <Ionicons
-                    name="chevron-back"
-                    size={18}
-                    style={styles.addPatientCalendarNavIcon}
-                  />
-                </TouchableOpacity>
-                <Text style={styles.addPatientCalendarTitle}>
-                  {MONTH_LABELS[dobCalendarMonth.getMonth()]}{' '}
-                  {dobCalendarMonth.getFullYear()}
-                </Text>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={styles.addPatientCalendarNavButton}
-                  onPress={() => moveDobCalendarMonth(1)}>
-                  <Ionicons
-                    name="chevron-forward"
-                    size={18}
-                    style={styles.addPatientCalendarNavIcon}
-                  />
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.addPatientCalendarGrid}>
-                {WEEKDAY_LABELS.map((weekday, index) => (
-                  <Text
-                    key={`${weekday}-${index}`}
-                    style={styles.addPatientCalendarWeekday}>
-                    {weekday}
-                  </Text>
-                ))}
-                {calendarDays.map((date, index) => {
-                  if (!date) {
-                    return (
-                      <View
-                        key={`empty-${index}`}
-                        style={styles.addPatientCalendarDayPlaceholder}
-                      />
-                    );
-                  }
-
-                  const dateValue = toDateInputValue(date);
-                  const isSelected = patientForm.dateOfBirth === dateValue;
-                  const isFutureDate = date > new Date();
-
-                  return (
-                    <TouchableOpacity
-                      key={dateValue}
-                      activeOpacity={0.85}
-                      style={[
-                        styles.addPatientCalendarDay,
-                        isSelected && styles.addPatientCalendarDaySelected,
-                        isFutureDate && styles.addPatientCalendarDayDisabled,
-                      ]}
-                      onPress={() => handleDobDateSelect(date)}
-                      disabled={isFutureDate}>
-                      <Text
-                        style={[
-                          styles.addPatientCalendarDayText,
-                          isSelected &&
-                            styles.addPatientCalendarDayTextSelected,
-                          isFutureDate &&
-                            styles.addPatientCalendarDayTextDisabled,
-                        ]}>
-                        {date.getDate()}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal
-        transparent
-        animationType="fade"
+      <OptionSelectModal
+        styles={styles}
         visible={isCancellationReasonSelectVisible}
-        onRequestClose={() => setIsCancellationReasonSelectVisible(false)}>
-        <View style={styles.cancelOptionOverlay}>
-          <TouchableOpacity
-            activeOpacity={1}
-            style={styles.cancelOptionBackdrop}
-            onPress={() => setIsCancellationReasonSelectVisible(false)}
-          />
-          <View style={styles.cancelOptionSheet}>
-            <View style={styles.cancelOptionHeader}>
-              <Text style={styles.cancelOptionTitle}>Cancellation Reason</Text>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.cancelOptionCloseButton}
-                onPress={() => setIsCancellationReasonSelectVisible(false)}>
-                <Ionicons
-                  name="close"
-                  size={18}
-                  style={styles.cancelOptionCloseIcon}
-                />
-              </TouchableOpacity>
-            </View>
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.cancelOptionList}>
-              {CANCELLATION_REASON_OPTIONS.map(reason => {
-                const isSelected = cancellationReason === reason;
-                return (
-                  <TouchableOpacity
-                    key={reason}
-                    activeOpacity={0.85}
-                    style={[
-                      styles.cancelSelectOption,
-                      isSelected && styles.cancelSelectOptionActive,
-                    ]}
-                    onPress={() => {
-                      setCancellationReason(reason);
-                      setIsCancellationReasonSelectVisible(false);
-                    }}>
-                    <Text
-                      style={[
-                        styles.cancelSelectOptionText,
-                        isSelected && styles.cancelSelectOptionTextActive,
-                      ]}>
-                      {reason}
-                    </Text>
-                    {isSelected ? (
-                      <Ionicons
-                        name="checkmark-circle"
-                        size={18}
-                        style={styles.cancelSelectOptionIcon}
-                      />
-                    ) : null}
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+        title="Cancellation Reason"
+        options={CANCELLATION_REASON_OPTIONS}
+        selectedValue={cancellationReason}
+        onClose={() => setIsCancellationReasonSelectVisible(false)}
+        onSelect={reason => {
+          setCancellationReason(reason);
+          setIsCancellationReasonSelectVisible(false);
+        }}
+      />
 
-      <Modal
-        transparent
-        animationType="fade"
+      <OptionSelectModal
+        styles={styles}
         visible={isCancelTimeSlotSelectVisible}
-        onRequestClose={() => setIsCancelTimeSlotSelectVisible(false)}>
-        <View style={styles.cancelOptionOverlay}>
-          <TouchableOpacity
-            activeOpacity={1}
-            style={styles.cancelOptionBackdrop}
-            onPress={() => setIsCancelTimeSlotSelectVisible(false)}
-          />
-          <View style={styles.cancelOptionSheet}>
-            <View style={styles.cancelOptionHeader}>
-              <Text style={styles.cancelOptionTitle}>New Time Slot</Text>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.cancelOptionCloseButton}
-                onPress={() => setIsCancelTimeSlotSelectVisible(false)}>
-                <Ionicons
-                  name="close"
-                  size={18}
-                  style={styles.cancelOptionCloseIcon}
-                />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.cancelOptionList}>
-              {CANCEL_TIME_SLOT_OPTIONS.map(slot => {
-                const isSelected = cancelNewTimeSlot === slot;
-                return (
-                  <TouchableOpacity
-                    key={slot}
-                    activeOpacity={0.85}
-                    style={[
-                      styles.cancelSelectOption,
-                      isSelected && styles.cancelSelectOptionActive,
-                    ]}
-                    onPress={() => {
-                      setCancelNewTimeSlot(slot);
-                      setIsCancelTimeSlotSelectVisible(false);
-                    }}>
-                    <Text
-                      style={[
-                        styles.cancelSelectOptionText,
-                        isSelected && styles.cancelSelectOptionTextActive,
-                      ]}>
-                      {slot}
-                    </Text>
-                    {isSelected ? (
-                      <Ionicons
-                        name="checkmark-circle"
-                        size={18}
-                        style={styles.cancelSelectOptionIcon}
-                      />
-                    ) : null}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-        </View>
-      </Modal>
+        title="New Time Slot"
+        options={CANCEL_TIME_SLOT_OPTIONS}
+        selectedValue={cancelNewTimeSlot}
+        onClose={() => setIsCancelTimeSlotSelectVisible(false)}
+        onSelect={slot => {
+          setCancelNewTimeSlot(slot);
+          setIsCancelTimeSlotSelectVisible(false);
+        }}
+        scrollable={false}
+      />
 
-      <Modal
-        transparent
-        animationType="fade"
+      <CalendarPickerModal
+        styles={styles}
         visible={isCancelCalendarVisible}
-        onRequestClose={() => setIsCancelCalendarVisible(false)}>
-        <View style={styles.dobPickerOverlay}>
-          <TouchableOpacity
-            activeOpacity={1}
-            style={styles.dobPickerBackdrop}
-            onPress={() => setIsCancelCalendarVisible(false)}
-          />
-          <View style={styles.dobPickerCard}>
-            <View style={styles.dobPickerHeader}>
-              <View>
-                <Text style={styles.addPatientModalEyebrow}>New Visit Date</Text>
-                <Text style={styles.dobPickerTitle}>
-                  {cancelNewVisitDate || 'Select date'}
-                </Text>
-              </View>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.addPatientModalCloseButton}
-                onPress={() => setIsCancelCalendarVisible(false)}>
-                <Ionicons
-                  name="close"
-                  size={20}
-                  style={styles.addPatientModalCloseIcon}
-                />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.addPatientCalendarCard}>
-              <View style={styles.addPatientCalendarHeader}>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={styles.addPatientCalendarNavButton}
-                  onPress={() => moveCancelCalendarMonth(-1)}>
-                  <Ionicons
-                    name="chevron-back"
-                    size={18}
-                    style={styles.addPatientCalendarNavIcon}
-                  />
-                </TouchableOpacity>
-                <Text style={styles.addPatientCalendarTitle}>
-                  {MONTH_LABELS[cancelCalendarMonth.getMonth()]}{' '}
-                  {cancelCalendarMonth.getFullYear()}
-                </Text>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={styles.addPatientCalendarNavButton}
-                  onPress={() => moveCancelCalendarMonth(1)}>
-                  <Ionicons
-                    name="chevron-forward"
-                    size={18}
-                    style={styles.addPatientCalendarNavIcon}
-                  />
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.addPatientCalendarGrid}>
-                {WEEKDAY_LABELS.map((weekday, index) => (
-                  <Text
-                    key={`${weekday}-cancel-${index}`}
-                    style={styles.addPatientCalendarWeekday}>
-                    {weekday}
-                  </Text>
-                ))}
-                {cancelCalendarDays.map((date, index) => {
-                  if (!date) {
-                    return (
-                      <View
-                        key={`cancel-empty-${index}`}
-                        style={styles.addPatientCalendarDayPlaceholder}
-                      />
-                    );
-                  }
-
-                  const dateValue = toDateInputValue(date);
-                  const isSelected = cancelNewVisitDate === dateValue;
-                  const today = new Date();
-                  today.setHours(0, 0, 0, 0);
-                  const isPastDate = date < today;
-
-                  return (
-                    <TouchableOpacity
-                      key={`cancel-${dateValue}`}
-                      activeOpacity={0.85}
-                      style={[
-                        styles.addPatientCalendarDay,
-                        isSelected && styles.addPatientCalendarDaySelected,
-                        isPastDate && styles.addPatientCalendarDayDisabled,
-                      ]}
-                      onPress={() => handleCancelDateSelect(date)}
-                      disabled={isPastDate}>
-                      <Text
-                        style={[
-                          styles.addPatientCalendarDayText,
-                          isSelected &&
-                            styles.addPatientCalendarDayTextSelected,
-                          isPastDate &&
-                            styles.addPatientCalendarDayTextDisabled,
-                        ]}>
-                        {date.getDate()}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-          </View>
-        </View>
-      </Modal>
+        eyebrow="New Visit Date"
+        title={cancelNewVisitDate || 'Select date'}
+        calendarMonth={cancelCalendarMonth}
+        calendarDays={cancelCalendarDays}
+        selectedDateValue={cancelNewVisitDate}
+        onClose={() => setIsCancelCalendarVisible(false)}
+        onMoveMonth={moveCancelCalendarMonth}
+        onSelectDate={handleCancelDateSelect}
+        disableDate={date => {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          return date < today;
+        }}
+        emptyKeyPrefix="cancel-empty"
+        dateKeyPrefix="cancel"
+      />
+      <AppAlertModal
+        alert={appAlert}
+        styles={styles}
+        onClose={closeAppAlert}
+      />
     </>
   );
 }
 
 export default React.memo(AppointmentDetailsScreen);
-

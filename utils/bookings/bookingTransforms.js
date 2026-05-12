@@ -307,6 +307,13 @@ const normalizePatientTests = source => {
 
       return {
         id: `${code || 'test'}-${index}`,
+        bookingTestId: toDisplayString(
+          test?.booking_test_id ||
+            test?.bookingTestId ||
+            test?.bookingTestID ||
+            test?.booking_test ||
+            test?.id,
+        ),
         code: code || 'N/A',
         name: name || 'Unnamed Test',
         compCatId: toDisplayString(
@@ -646,6 +653,12 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
             patient?.isReportCourier ??
             patient?.report_delivery ??
             patient?.reportDelivery,
+        ),
+        testBookingStatus: toDisplayString(
+          patient?.test_booking_status ||
+            patient?.testBookingStatus ||
+            patient?.test_booking_status_label ||
+            patient?.testBookingStatusLabel,
         ),
         bookingPatientStatusCode: toBookingStatusCode(
           patient?.booking_patient_status ??

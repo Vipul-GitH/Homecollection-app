@@ -1,12 +1,12 @@
 import React from 'react';
 import {
   ActivityIndicator,
-  SafeAreaView,
   StatusBar,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import {SafeAreaView} from 'react-native-safe-area-context';
 import {BRAND} from '../../styles/appStyles';
 
 export default function LocationRequiredScreen({

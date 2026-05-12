@@ -9,7 +9,13 @@ const getTestCode = test =>
   );
 
 const getSpecimenName = test =>
-  toStableValue(test?.specimen_name || test?.specimenName);
+  toStableValue(
+    test?.specimen_name ||
+      test?.specimenName ||
+      test?.specimen ||
+      test?.tube_name ||
+      test?.tubeName,
+  );
 
 const tubeDisplayPriority = new Map(
   ['EDTA', 'None', 'Flu-F', 'Flu-PP', 'Plain'].map((tube, index) => [
@@ -40,7 +46,9 @@ const orderTubesForDisplay = tubes =>
 const isProfileTest = test =>
   Boolean(
     test?.is_profile ||
+      test?.isprofile ||
       test?.isProfile ||
+      test?.IsProfile ||
       test?.has_children ||
       test?.hasChildren ||
       Number(test?.profile || test?.Profile || 0) === 1,

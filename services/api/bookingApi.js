@@ -377,6 +377,80 @@ export const addAssignedBookingPatientApi = async ({
   bookingId,
   patient,
 }) => {
+  if (patient?.existing_patient_id) {
+    const response = await secureFetch(getAssignedBookingPatientsApiUrl(bookingId), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        existing_patient_id: Number(patient.existing_patient_id),
+      }),
+    });
+
+    const responseData = await parseJsonResponse(response, '[Add Existing Patient]');
+    const errorMessage = getApiErrorMessage(
+      response,
+      responseData,
+      'Unable to add patient right now.',
+    );
+
+    if (errorMessage) {
+      throw new Error(errorMessage);
+    }
+
+    return responseData;
+  }
+
+  const documents = Array.isArray(patient?.patient_documents)
+    ? patient.patient_documents
+    : [];
+
+  if (!documents.length) {
+    const response = await secureFetch(getAssignedBookingPatientsApiUrl(bookingId), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        title: String(patient?.title || ''),
+        full_name: String(patient?.full_name || ''),
+        gender: String(patient?.gender || ''),
+        primary_mobile: String(patient?.primary_mobile || patient?.contact_mobile || ''),
+        age_years: Number(patient?.age_years || 0) || 0,
+        ...(patient?.date_of_birth
+          ? {date_of_birth: String(patient.date_of_birth)}
+          : {}),
+        ...(patient?.alternate_mobile
+          ? {alternate_mobile: String(patient.alternate_mobile)}
+          : {}),
+        ...(patient?.email ? {email: String(patient.email)} : {}),
+        ...(patient?.labmate_pid
+          ? {labmate_pid: String(patient.labmate_pid)}
+          : {}),
+        ...(patient?.panel_company
+          ? {panel_company: String(patient.panel_company)}
+          : {}),
+        ...(patient?.tag ? {tag: String(patient.tag)} : {}),
+      }),
+    });
+
+    const responseData = await parseJsonResponse(response, '[Add Patient]');
+    const errorMessage = getApiErrorMessage(
+      response,
+      responseData,
+      'Unable to add patient right now.',
+    );
+
+    if (errorMessage) {
+      throw new Error(errorMessage);
+    }
+
+    return responseData;
+  }
+
   const formData = new FormData();
 
   formData.append('title', String(patient?.title || ''));
@@ -397,9 +471,6 @@ export const addAssignedBookingPatientApi = async ({
   formData.append('panel_company', String(patient?.panel_company || ''));
   formData.append('tag', String(patient?.tag || ''));
 
-  const documents = Array.isArray(patient?.patient_documents)
-    ? patient.patient_documents
-    : [];
   documents.forEach(document => {
     if (!document?.uri) {
       return;

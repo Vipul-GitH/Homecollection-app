@@ -154,7 +154,12 @@ export const buildApiPanelCompaniesFromPatient = patient => {
     patient?.selectedPanelCompanies || patient?.selected_panel_companies,
   ).split(',');
   const chargeModes = normalizeFormText(
-    patient?.selectedChargeModes || patient?.selected_charge_modes,
+    patient?.selectedChargeModes ||
+      patient?.selected_charge_modes ||
+      patient?.selectedChargeMode ||
+      patient?.selected_charge_mode ||
+      patient?.billingChargeMode ||
+      patient?.chargeMode,
   ).split(',');
 
   return compCatIds

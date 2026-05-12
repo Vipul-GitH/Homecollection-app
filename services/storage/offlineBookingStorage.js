@@ -7,6 +7,7 @@ const PENDING_BOOKING_ACTIONS_KEY = 'pending_booking_actions';
 const PENDING_PATIENT_ACTIONS_KEY = 'pending_patient_actions';
 const PENDING_LOCAL_ACTIONS_KEY = 'pending_local_actions';
 const APPOINTMENT_DETAIL_STATE_KEY = 'cached_appointment_detail_state';
+const APPOINTMENT_DETAIL_DRAFTS_KEY = 'cached_appointment_detail_drafts';
 
 const safelyParseJson = (value, fallbackValue) => {
   if (!value) {
@@ -404,6 +405,34 @@ export const getCachedAppointmentDetailState = async () => {
   return parsedValue && typeof parsedValue === 'object' ? parsedValue : {};
 };
 
+export const persistAppointmentDetailDrafts = async drafts => {
+  await AsyncStorage.setItem(
+    APPOINTMENT_DETAIL_DRAFTS_KEY,
+    JSON.stringify(drafts && typeof drafts === 'object' ? drafts : {}),
+  );
+};
+
+export const getCachedAppointmentDetailDrafts = async () => {
+  const value = await AsyncStorage.getItem(APPOINTMENT_DETAIL_DRAFTS_KEY);
+  const parsedValue = safelyParseJson(value, {});
+  return parsedValue && typeof parsedValue === 'object' ? parsedValue : {};
+};
+
+export const clearAppointmentDetailDraft = async bookingId => {
+  const normalizedBookingId = String(bookingId || '').trim();
+  if (!normalizedBookingId) {
+    return;
+  }
+
+  const drafts = await getCachedAppointmentDetailDrafts();
+  if (!Object.prototype.hasOwnProperty.call(drafts, normalizedBookingId)) {
+    return;
+  }
+
+  delete drafts[normalizedBookingId];
+  await persistAppointmentDetailDrafts(drafts);
+};
+
 export const clearOfflineBookingStorage = async () => {
   await AsyncStorage.multiRemove([
     CACHED_ASSIGNED_BOOKINGS_KEY,
@@ -413,6 +442,7 @@ export const clearOfflineBookingStorage = async () => {
     PENDING_PATIENT_ACTIONS_KEY,
     PENDING_LOCAL_ACTIONS_KEY,
     APPOINTMENT_DETAIL_STATE_KEY,
+    APPOINTMENT_DETAIL_DRAFTS_KEY,
   ]);
 };
 
@@ -422,5 +452,6 @@ export const clearOfflineBookingViewCache = async () => {
     CACHED_COMPLETED_BOOKINGS_KEY,
     CACHED_BOOKING_DETAILS_KEY,
     APPOINTMENT_DETAIL_STATE_KEY,
+    APPOINTMENT_DETAIL_DRAFTS_KEY,
   ]);
 };

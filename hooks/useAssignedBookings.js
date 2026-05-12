@@ -33,7 +33,6 @@ import {
   getStatusFromAction,
   isLikelyOfflineError,
 } from '../utils/app/runtimeHelpers';
-import {filterBookingsForToday} from '../utils/bookings/bookingDateFilters';
 import {logDebug, warnDebug} from '../utils/app/logger';
 import {showPlatformMessage} from '../utils/ui/notifications';
 
@@ -60,70 +59,97 @@ const buildLocalPatientFromPayload = ({
   existingPatient,
   patientId,
   isOfflinePending,
-}) => ({
-  ...existingPatient,
-  id: toDisplayValue(patientId) || existingPatient?.id,
-  bookingPatientId:
-    toDisplayValue(patientId) || existingPatient?.bookingPatientId || '',
-  patientId: existingPatient?.patientId || '',
-  title: toDisplayValue(patient?.title) || existingPatient?.title || 'Mr',
-  name:
-    toDisplayValue(patient?.full_name) ||
-    existingPatient?.name ||
-    'Unsynced Patient',
-  age: toPatientAge(patient?.age_years ?? existingPatient?.age),
-  dob: toDisplayValue(patient?.date_of_birth) || existingPatient?.dob || 'N/A',
-  panelCompany:
-    toDisplayValue(patient?.panel_company) ||
-    existingPatient?.panelCompany ||
-    'N/A',
-  selectedCompCatIds:
-    toDisplayValue(patient?.selected_comp_cat_ids) ||
-    existingPatient?.selectedCompCatIds ||
-    '',
-  selectedChargeModes:
-    toDisplayValue(patient?.selected_charge_modes) ||
-    existingPatient?.selectedChargeModes ||
-    '',
-  selectedPanelCompanies:
-    toDisplayValue(patient?.selected_panel_companies) ||
-    existingPatient?.selectedPanelCompanies ||
-    '',
-  compCatId:
-    toDisplayValue(patient?.selected_comp_cat_ids)
-      .split(',')
-      .map(value => value.trim())
-      .find(Boolean) ||
-    toDisplayValue(patient?.comp_cat_id || patient?.compCatId) ||
-    existingPatient?.compCatId ||
-    existingPatient?.comp_cat_id ||
-    '',
-  mobileNumber:
-    toDisplayValue(patient?.contact_mobile || patient?.primary_mobile) ||
-    existingPatient?.mobileNumber ||
-    'N/A',
-  alternateMobileNumber:
-    toDisplayValue(patient?.alternate_mobile) ||
-    existingPatient?.alternateMobileNumber ||
-    'N/A',
-  email: toDisplayValue(patient?.email) || existingPatient?.email || '',
-  labmatePid:
-    toDisplayValue(patient?.labmate_pid) || existingPatient?.labmatePid || '',
-  reportCourier:
-    patient?.report_courier === true ||
-    String(patient?.report_courier || '').trim().toLowerCase() === 'yes'
-      ? 'Yes'
-      : 'No',
-  bookingPatientStatusCode: toPatientStatusCode(
-    existingPatient?.bookingPatientStatusCode ?? 1,
-  ),
-  gender: toDisplayValue(patient?.gender) || existingPatient?.gender || 'N/A',
-  tag: toDisplayValue(patient?.tag) || existingPatient?.tag || 'N/A',
-  tests: existingPatient?.tests || [],
-  tubes: existingPatient?.tubes || [],
-  documents: existingPatient?.documents || [],
-  isOfflinePending: Boolean(isOfflinePending),
-});
+}) => {
+  const linkedPatient = patient?.linked_patient || patient?.linkedPatient || {};
+
+  return {
+    ...existingPatient,
+    id: toDisplayValue(patientId) || existingPatient?.id,
+    bookingPatientId:
+      toDisplayValue(patientId) || existingPatient?.bookingPatientId || '',
+    patientId:
+      toDisplayValue(patient?.existing_patient_id || linkedPatient?.id) ||
+      existingPatient?.patientId ||
+      '',
+    title:
+      toDisplayValue(patient?.title || linkedPatient?.title) ||
+      existingPatient?.title ||
+      'Mr',
+    name:
+      toDisplayValue(patient?.full_name || linkedPatient?.name) ||
+      existingPatient?.name ||
+      'Unsynced Patient',
+    age: toPatientAge(patient?.age_years ?? linkedPatient?.age ?? existingPatient?.age),
+    dob:
+      toDisplayValue(patient?.date_of_birth || linkedPatient?.dob) ||
+      existingPatient?.dob ||
+      'N/A',
+    panelCompany:
+      toDisplayValue(patient?.panel_company || linkedPatient?.panelCompany) ||
+      existingPatient?.panelCompany ||
+      'N/A',
+    selectedCompCatIds:
+      toDisplayValue(patient?.selected_comp_cat_ids) ||
+      existingPatient?.selectedCompCatIds ||
+      '',
+    selectedChargeModes:
+      toDisplayValue(patient?.selected_charge_modes) ||
+      existingPatient?.selectedChargeModes ||
+      '',
+    selectedPanelCompanies:
+      toDisplayValue(patient?.selected_panel_companies) ||
+      existingPatient?.selectedPanelCompanies ||
+      '',
+    compCatId:
+      toDisplayValue(patient?.selected_comp_cat_ids)
+        .split(',')
+        .map(value => value.trim())
+        .find(Boolean) ||
+      toDisplayValue(patient?.comp_cat_id || patient?.compCatId) ||
+      existingPatient?.compCatId ||
+      existingPatient?.comp_cat_id ||
+      '',
+    mobileNumber:
+      toDisplayValue(
+        patient?.contact_mobile ||
+          patient?.primary_mobile ||
+          linkedPatient?.mobileNumber,
+      ) ||
+      existingPatient?.mobileNumber ||
+      'N/A',
+    alternateMobileNumber:
+      toDisplayValue(
+        patient?.alternate_mobile || linkedPatient?.alternateMobileNumber,
+      ) ||
+      existingPatient?.alternateMobileNumber ||
+      'N/A',
+    email: toDisplayValue(patient?.email) || existingPatient?.email || '',
+    labmatePid:
+      toDisplayValue(patient?.labmate_pid || linkedPatient?.patientCode) ||
+      existingPatient?.labmatePid ||
+      '',
+    reportCourier:
+      patient?.report_courier === true ||
+      String(patient?.report_courier || '').trim().toLowerCase() === 'yes'
+        ? 'Yes'
+        : 'No',
+    bookingPatientStatusCode: toPatientStatusCode(
+      existingPatient?.bookingPatientStatusCode ?? 1,
+    ),
+    gender:
+      toDisplayValue(patient?.gender || linkedPatient?.gender) ||
+      existingPatient?.gender ||
+      'N/A',
+    tag:
+      toDisplayValue(patient?.tag || linkedPatient?.tag) ||
+      existingPatient?.tag ||
+      'N/A',
+    tests: existingPatient?.tests || [],
+    tubes: existingPatient?.tubes || [],
+    documents: existingPatient?.documents || [],
+    isOfflinePending: Boolean(isOfflinePending),
+  };
+};
 
 const getPatientMutationId = patient =>
   toDisplayValue(
@@ -194,10 +220,8 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       try {
         const cachedBookings = await getCachedAssignedBookings();
 
-        const todayBookings = filterBookingsForToday(cachedBookings);
-
-        if (todayBookings.length) {
-          setAssignedAppointments(todayBookings);
+        if (cachedBookings.length) {
+          setAssignedAppointments(cachedBookings);
         }
       } catch (error) {
         warnDebug('Assigned appointments cache restore error:', error);
@@ -454,10 +478,9 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         accessToken,
         loggedInUser,
       });
-      const todayBookings = filterBookingsForToday(normalizedBookings);
-      setAssignedAppointments(todayBookings);
-      await persistAssignedBookings(todayBookings);
-      warmAssignedBookingDetailsCache(todayBookings).catch(error => {
+      setAssignedAppointments(normalizedBookings);
+      await persistAssignedBookings(normalizedBookings);
+      warmAssignedBookingDetailsCache(normalizedBookings).catch(error => {
         warnDebug('Assigned booking detail background cache error:', error);
       });
     } catch (error) {
@@ -469,10 +492,8 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
 
       const cachedBookings = await getCachedAssignedBookings();
 
-      const todayBookings = filterBookingsForToday(cachedBookings);
-
-      if (todayBookings.length) {
-        setAssignedAppointments(todayBookings);
+      if (cachedBookings.length) {
+        setAssignedAppointments(cachedBookings);
         setAssignedAppointmentsError('');
         showPlatformMessage(
           'Offline Mode',
@@ -488,12 +509,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     } finally {
       setIsLoadingAssignedAppointments(false);
     }
-  }, [
-    accessToken,
-    loggedInUser,
-    syncPendingOfflineWork,
-    warmAssignedBookingDetailsCache,
-  ]);
+  }, [accessToken, loggedInUser, syncPendingOfflineWork, warmAssignedBookingDetailsCache]);
 
   const fetchCompletedAppointments = useCallback(async () => {
     try {
@@ -502,9 +518,8 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       const normalizedBookings = await fetchAssignedBookingHistoryApi({
         accessToken,
       });
-      const todayBookings = filterBookingsForToday(normalizedBookings);
-      setCompletedAppointments(todayBookings);
-      await persistCompletedBookings(todayBookings);
+      setCompletedAppointments(normalizedBookings);
+      await persistCompletedBookings(normalizedBookings);
     } catch (error) {
       logDebug('[Assigned History] Network or fetch error', {
         message: error?.message,
@@ -514,10 +529,8 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
 
       const cachedBookings = await getCachedCompletedBookings();
 
-      const todayBookings = filterBookingsForToday(cachedBookings);
-
-      if (todayBookings.length) {
-        setCompletedAppointments(todayBookings);
+      if (cachedBookings.length) {
+        setCompletedAppointments(cachedBookings);
         setCompletedAppointmentsError('');
         showPlatformMessage(
           'Offline Mode',
@@ -677,7 +690,11 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         setBookingActionLoading('');
       }
     },
-    [accessToken, applyBookingStatusLocally, assignedAppointments],
+    [
+      accessToken,
+      applyBookingStatusLocally,
+      assignedAppointments,
+    ],
   );
 
   const submitAssignedBookingPatient = useCallback(
@@ -754,7 +771,11 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         setIsAddingPatient(false);
       }
     },
-    [accessToken, applyPatientMutationLocally, persistUpdatedBookingDetail],
+    [
+      accessToken,
+      applyPatientMutationLocally,
+      persistUpdatedBookingDetail,
+    ],
   );
 
   const updateAssignedBookingPatient = useCallback(
@@ -835,7 +856,11 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         setIsUpdatingPatient(false);
       }
     },
-    [accessToken, applyPatientMutationLocally, persistUpdatedBookingDetail],
+    [
+      accessToken,
+      applyPatientMutationLocally,
+      persistUpdatedBookingDetail,
+    ],
   );
 
   const cancelAssignedBookingPatient = useCallback(
@@ -921,7 +946,11 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         setCancellingPatientId('');
       }
     },
-    [accessToken, applyPatientMutationLocally, persistUpdatedBookingDetail],
+    [
+      accessToken,
+      applyPatientMutationLocally,
+      persistUpdatedBookingDetail,
+    ],
   );
 
   const addTestForPatient = useCallback(

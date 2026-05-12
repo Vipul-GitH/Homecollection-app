@@ -10,6 +10,7 @@ class SecureApiPackage : ReactPackage {
     listOf(
       SecureApiModule(reactContext),
       LocalDocumentPickerModule(reactContext),
+      LocalGeoCameraModule(reactContext),
       CatalogDatabaseModule(reactContext),
     )
 

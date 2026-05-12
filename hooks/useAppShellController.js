@@ -10,8 +10,9 @@ import {
 } from '../services/local/panelCatalogLocal';
 import {getSpecimenNameForTestCode} from '../services/local/panelCatalogSpecimenLookup';
 import {
-  getCachedAppointmentDetailState,
-  persistAppointmentDetailState,
+  clearAppointmentDetailDraft,
+  getCachedAppointmentDetailDrafts,
+  persistAppointmentDetailDrafts,
   queuePendingLocalAction,
 } from '../services/storage/offlineBookingStorage';
 import {useAssignedBookings} from './useAssignedBookings';
@@ -20,6 +21,15 @@ import {useSessionAuth} from './useSessionAuth';
 
 const toStableValue = value =>
   value === null || value === undefined ? '' : String(value).trim();
+
+const getAppointmentDetailDraftKey = booking =>
+  toStableValue(
+    booking?.id ||
+      booking?.bookingId ||
+      booking?.booking_id ||
+      booking?.appointmentId ||
+      booking?.appointment_id,
+  );
 
 const getTestDedupeKey = test =>
   toStableValue(
@@ -98,6 +108,8 @@ const buildSeededPatientTests = (patient, panelCompany = null) =>
         test?.panelCompanyName ||
         patient?.panelCompany ||
         'Current Panel',
+      panelCompanySource: resolvedPanelCompany?.chipSource || 'API',
+      panelCompanyChipId: resolvedPanelCompany?.chipId || resolvedPanelCompany?.id || '',
       cat_details: test?.cat_details || test?.catDetails || '',
       selected_charge_mode:
         test?.selected_charge_mode ||
@@ -123,6 +135,12 @@ const buildSeededPatientTests = (patient, panelCompany = null) =>
         patient?.panelAbarid ||
         '',
       booked_code: test?.code || test?.booked_code || 'N/A',
+      bookingTestId:
+        test?.bookingTestId ||
+        test?.booking_test_id ||
+        test?.bookingTestID ||
+        test?.booking_test ||
+        '',
       catalog_key:
         test?.catalog_key ||
         [
@@ -180,6 +198,9 @@ const withPanelContextForTests = (tests, patient, panelCompany = null) =>
         panelCompany?.name ||
         patient?.panelCompany ||
         'Current Panel',
+      panelCompanySource: test?.panelCompanySource || panelCompany?.chipSource || '',
+      panelCompanyChipId:
+        test?.panelCompanyChipId || panelCompany?.chipId || panelCompany?.id || '',
       cat_details: test?.cat_details || test?.catDetails || '',
       selected_charge_mode:
         test?.selected_charge_mode || test?.selectedChargeMode || '',
@@ -293,6 +314,16 @@ const buildEmptyAppointmentDetailState = () => ({
   patientReportCourierMap: {},
   patientSampleCollectionMap: {},
   patientTestBookingStatusMap: {},
+  patientCghsEnabledMap: {},
+  patientCghsIdMap: {},
+  patientCghsDocumentsMap: {},
+  completePayments: [],
+  isAdditionalDiscountEnabled: false,
+  completeAdditionalDiscountMode: 'amount',
+  completeAdditionalDiscount: '',
+  appliedAdditionalDiscountMode: '',
+  appliedAdditionalDiscount: '',
+  selectedPatientKey: '',
 });
 
 const buildAppointmentDetailStateFromBooking = booking => {
@@ -307,6 +338,56 @@ const buildAppointmentDetailStateFromBooking = booking => {
   });
 
   return state;
+};
+
+const mergeAppointmentDetailStateWithDraft = (seedState, draftState) => {
+  const seed = seedState || buildEmptyAppointmentDetailState();
+  const draft = draftState && typeof draftState === 'object' ? draftState : {};
+
+  return {
+    ...seed,
+    ...draft,
+    patientApiPanelCompaniesMap: {
+      ...(seed.patientApiPanelCompaniesMap || {}),
+      ...(draft.patientApiPanelCompaniesMap || {}),
+    },
+    patientPanelCompaniesMap: {
+      ...(seed.patientPanelCompaniesMap || {}),
+      ...(draft.patientPanelCompaniesMap || {}),
+    },
+    activePatientPanelCompanyMap: {
+      ...(seed.activePatientPanelCompanyMap || {}),
+      ...(draft.activePatientPanelCompanyMap || {}),
+    },
+    patientSelectedTestsMap: {
+      ...(seed.patientSelectedTestsMap || {}),
+      ...(draft.patientSelectedTestsMap || {}),
+    },
+    patientReportCourierMap: {
+      ...(seed.patientReportCourierMap || {}),
+      ...(draft.patientReportCourierMap || {}),
+    },
+    patientSampleCollectionMap: {
+      ...(seed.patientSampleCollectionMap || {}),
+      ...(draft.patientSampleCollectionMap || {}),
+    },
+    patientTestBookingStatusMap: {
+      ...(seed.patientTestBookingStatusMap || {}),
+      ...(draft.patientTestBookingStatusMap || {}),
+    },
+    patientCghsEnabledMap: {
+      ...(seed.patientCghsEnabledMap || {}),
+      ...(draft.patientCghsEnabledMap || {}),
+    },
+    patientCghsIdMap: {
+      ...(seed.patientCghsIdMap || {}),
+      ...(draft.patientCghsIdMap || {}),
+    },
+    patientCghsDocumentsMap: {
+      ...(seed.patientCghsDocumentsMap || {}),
+      ...(draft.patientCghsDocumentsMap || {}),
+    },
+  };
 };
 
 const buildBookingTestPriceRequests = booking =>
@@ -494,10 +575,12 @@ export const useAppShellController = () => {
   const [appointmentDetailState, setAppointmentDetailState] = useState(
     buildEmptyAppointmentDetailState,
   );
+  const [appointmentDetailDrafts, setAppointmentDetailDrafts] = useState({});
   const [appointmentsViewMode, setAppointmentsViewMode] = useState('default');
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [isShowingSplash, setIsShowingSplash] = useState(true);
   const isAppointmentDetailStateHydratedRef = useRef(false);
+  const clearedAppointmentDraftKeysRef = useRef(new Set());
   const lastAppointmentsViewModeRef = useRef('assigned');
   const {width, height} = useWindowDimensions();
   const session = useSessionAuth();
@@ -507,10 +590,10 @@ export const useAppShellController = () => {
     loggedInUser: session.loggedInUser,
   });
 
-  const isTinyPhone = width < 340;
-  const isSmallPhone = width < 370;
+  const isTinyPhone = width < 350;
+  const isSmallPhone = width < 390;
   const isLargePhone = width >= 430;
-  const horizontalPadding = isTinyPhone ? 10 : isSmallPhone ? 14 : isLargePhone ? 22 : 18;
+  const horizontalPadding = isTinyPhone ? 8 : isSmallPhone ? 12 : isLargePhone ? 22 : 18;
   const contentWidth = Math.min(width - horizontalPadding * 2, 460);
   const homeContentWidth = Math.min(width - horizontalPadding * 2, 520);
   const loginTopSpacing = height < 700 ? 28 : 40;
@@ -565,44 +648,15 @@ export const useAppShellController = () => {
 
     const restoreAppointmentDetailState = async () => {
       try {
-        const cachedState = await getCachedAppointmentDetailState();
-        if (!isMounted || !Object.keys(cachedState).length) {
+        const cachedDrafts = await getCachedAppointmentDetailDrafts();
+        if (!isMounted) {
           isAppointmentDetailStateHydratedRef.current = true;
           return;
         }
 
-        setAppointmentDetailState(previousState => ({
-          ...previousState,
-          ...cachedState,
-          patientApiPanelCompaniesMap: {
-            ...(previousState?.patientApiPanelCompaniesMap || {}),
-            ...(cachedState?.patientApiPanelCompaniesMap || {}),
-          },
-          patientPanelCompaniesMap: {
-            ...(previousState?.patientPanelCompaniesMap || {}),
-            ...(cachedState?.patientPanelCompaniesMap || {}),
-          },
-          activePatientPanelCompanyMap: {
-            ...(previousState?.activePatientPanelCompanyMap || {}),
-            ...(cachedState?.activePatientPanelCompanyMap || {}),
-          },
-          patientSelectedTestsMap: {
-            ...(previousState?.patientSelectedTestsMap || {}),
-            ...(cachedState?.patientSelectedTestsMap || {}),
-          },
-          patientReportCourierMap: {
-            ...(previousState?.patientReportCourierMap || {}),
-            ...(cachedState?.patientReportCourierMap || {}),
-          },
-          patientSampleCollectionMap: {
-            ...(previousState?.patientSampleCollectionMap || {}),
-            ...(cachedState?.patientSampleCollectionMap || {}),
-          },
-          patientTestBookingStatusMap: {
-            ...(previousState?.patientTestBookingStatusMap || {}),
-            ...(cachedState?.patientTestBookingStatusMap || {}),
-          },
-        }));
+        if (Object.keys(cachedDrafts).length) {
+          setAppointmentDetailDrafts(cachedDrafts);
+        }
       } catch (error) {
         // Local cache restore is best-effort; the screen can continue without it.
       } finally {
@@ -622,8 +676,35 @@ export const useAppShellController = () => {
       return;
     }
 
-    persistAppointmentDetailState(appointmentDetailState).catch(() => {});
-  }, [appointmentDetailState]);
+    const persistTimer = setTimeout(() => {
+      persistAppointmentDetailDrafts(appointmentDetailDrafts).catch(() => {});
+    }, 350);
+
+    return () => clearTimeout(persistTimer);
+  }, [appointmentDetailDrafts]);
+
+  useEffect(() => {
+    const draftKey = getAppointmentDetailDraftKey(selectedBooking);
+
+    if (!isAppointmentDetailStateHydratedRef.current || !draftKey) {
+      return;
+    }
+
+    if (clearedAppointmentDraftKeysRef.current.has(draftKey)) {
+      return;
+    }
+
+    setAppointmentDetailDrafts(previousDrafts => {
+      if (previousDrafts[draftKey] === appointmentDetailState) {
+        return previousDrafts;
+      }
+
+      return {
+        ...previousDrafts,
+        [draftKey]: appointmentDetailState,
+      };
+    });
+  }, [appointmentDetailState, selectedBooking]);
 
   useEffect(() => {
     if (['assigned', 'started', 'completed'].includes(appointmentsViewMode)) {
@@ -781,6 +862,12 @@ export const useAppShellController = () => {
             booking?.appointment_id ||
             '',
         };
+        const draftKey = getAppointmentDetailDraftKey(finalBooking);
+        const cachedDraft = draftKey ? appointmentDetailDrafts[draftKey] : null;
+
+        if (draftKey) {
+          clearedAppointmentDraftKeysRef.current.delete(draftKey);
+        }
 
         setSelectedBooking({
           ...finalBooking,
@@ -795,7 +882,12 @@ export const useAppShellController = () => {
         setSelectedBookingScreen('details');
         setSelectedSamplePatient(null);
         setSelectedSamplePanelCompany(null);
-        setAppointmentDetailState(buildAppointmentDetailStateFromBooking(finalBooking));
+        setAppointmentDetailState(
+          mergeAppointmentDetailStateWithDraft(
+            buildAppointmentDetailStateFromBooking(finalBooking),
+            cachedDraft,
+          ),
+        );
 
         getLocalBookingTestPricesResponse(
           buildBookingTestPriceRequests(finalBooking),
@@ -814,15 +906,17 @@ export const useAppShellController = () => {
                 ? pricedBooking
                 : previousBooking,
             );
-            setAppointmentDetailState(previousState => ({
-              ...previousState,
-              ...buildAppointmentDetailStateFromBooking(pricedBooking),
-            }));
+            setAppointmentDetailState(previousState =>
+              mergeAppointmentDetailStateWithDraft(
+                buildAppointmentDetailStateFromBooking(pricedBooking),
+                previousState,
+              ),
+            );
           })
           .catch(() => {});
       }
     },
-    [bookings],
+    [appointmentDetailDrafts, bookings],
   );
 
   const handleOpenSampleCollection = useCallback(
@@ -944,6 +1038,8 @@ export const useAppShellController = () => {
       const nextEntry = {
         key,
         panelCompanyName: panelCompany?.name || 'Selected Panel',
+        panelCompanySource: panelCompany?.chipSource || '',
+        panelCompanyChipId: panelCompany?.chipId || panelCompany?.id || '',
         cat_details: panelCompany?.details || panelCompany?.CatDetails || '',
         selected_charge_mode:
           panelCompany?.billingChargeMode ||
@@ -1084,7 +1180,17 @@ export const useAppShellController = () => {
     }).catch(() => {});
   }, [selectedBooking?.id]);
 
-  const handleCollectSample = useCallback(({patient, selectedCount = 0}) => {
+  const handleCollectSample = useCallback(({
+    patient,
+    selectedCount = 0,
+    pendingChildTests = [],
+    tubeSelectionSummary = [],
+    selectedTubes = [],
+    selectedSpecimens = {},
+    selectedSpecimenTests = {},
+    unselectedTubes = [],
+    unselectedTests = [],
+  }) => {
     const patientId = getPatientMutationId(patient);
     if (!patientId) {
       return;
@@ -1095,9 +1201,31 @@ export const useAppShellController = () => {
       patientSampleCollectionMap: {
         ...(previousState?.patientSampleCollectionMap || {}),
         [patientId]: {
+          ...(previousState?.patientSampleCollectionMap?.[patientId] || {}),
           collected: true,
           selectedCount,
           collectedAt: new Date().toISOString(),
+          pendingChildTests: Array.isArray(pendingChildTests)
+            ? pendingChildTests
+            : [],
+          tubeSelectionSummary: Array.isArray(tubeSelectionSummary)
+            ? tubeSelectionSummary
+            : [],
+          selectedTubes: Array.isArray(selectedTubes) ? selectedTubes : [],
+          selectedSpecimens:
+            selectedSpecimens && typeof selectedSpecimens === 'object'
+              ? selectedSpecimens
+              : {},
+          selectedSpecimenTests:
+            selectedSpecimenTests && typeof selectedSpecimenTests === 'object'
+              ? selectedSpecimenTests
+              : {},
+          unselectedTubes: Array.isArray(unselectedTubes)
+            ? unselectedTubes
+            : [],
+          unselectedTests: Array.isArray(unselectedTests)
+            ? unselectedTests
+            : [],
         },
       },
     }));
@@ -1110,7 +1238,7 @@ export const useAppShellController = () => {
         return;
       }
 
-      return bookings.submitBookingAction({
+      const didUpdate = await bookings.submitBookingAction({
         booking: selectedBooking,
         action,
         statusPayload,
@@ -1126,6 +1254,30 @@ export const useAppShellController = () => {
           );
         },
       });
+
+      if (
+        didUpdate &&
+        ['complete', 'completed', 'cancel', 'cancelled'].includes(
+          toStableValue(action).toLowerCase(),
+        )
+      ) {
+        const draftKey = getAppointmentDetailDraftKey(selectedBooking);
+        if (draftKey) {
+          clearedAppointmentDraftKeysRef.current.add(draftKey);
+          setAppointmentDetailDrafts(previousDrafts => {
+            if (!Object.prototype.hasOwnProperty.call(previousDrafts, draftKey)) {
+              return previousDrafts;
+            }
+
+            const nextDrafts = {...previousDrafts};
+            delete nextDrafts[draftKey];
+            return nextDrafts;
+          });
+          clearAppointmentDetailDraft(draftKey).catch(() => {});
+        }
+      }
+
+      return didUpdate;
     },
     [bookings, selectedBooking],
   );

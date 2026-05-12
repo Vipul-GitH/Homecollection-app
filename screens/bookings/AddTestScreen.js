@@ -8,7 +8,6 @@ import React, {
 } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   ScrollView,
   Text,
   TextInput,
@@ -16,6 +15,7 @@ import {
   View,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import AppAlertModal from '../../components/common/AppAlertModal';
 import {
   normalizePanelCompanyItems,
 } from './appointmentDetails/helpers';
@@ -216,20 +216,23 @@ function AddTestScreen({
   selectedPatient,
   selectedPanelCompany,
   selectedTests,
+  sampleCollectionDraft,
   styles,
   onAddTestPatient,
   onPanelCompanySelect,
   onToggleSelectedTest,
   onRemoveSelectedTest,
+  onSampleCollectionReset,
   onLocalDatabaseLoadingChange,
 }) {
+  const [appAlert, setAppAlert] = useState(null);
   const [isLoadingCompanies, setIsLoadingCompanies] = useState(false);
+  const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
   const [panelCompanies, setPanelCompanies] = useState([]);
   const [activePanelCompany, setActivePanelCompany] = useState(null);
   const [groups, setGroups] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [selectedSubgroup, setSelectedSubgroup] = useState(null);
-  const [catalogMode, setCatalogMode] = useState('search');
   const [expandedTests, setExpandedTests] = useState({});
   const [searchText, setSearchText] = useState('');
   const [visibleItemCount, setVisibleItemCount] = useState(CATALOG_PAGE_SIZE);
@@ -361,6 +364,7 @@ function AddTestScreen({
   useEffect(() => {
     autoOpenedPanelKeyRef.current = '';
     setActivePanelCompany(null);
+    setIsLoadingCatalog(false);
     setGroups([]);
     setSelectedGroup(null);
     setSelectedSubgroup(null);
@@ -421,18 +425,6 @@ function AddTestScreen({
   const activeItems = useMemo(() => {
     const normalizedSearch = deferredSearchText.trim().toLowerCase();
 
-    if (catalogMode === 'search' && !selectedGroup && !selectedSubgroup) {
-      if (!normalizedSearch) {
-        return flattenedCompanyTests;
-      }
-
-      return sortCatalogTestsByCode(
-        flattenedCompanyTests.filter(test =>
-          test.__searchKey?.includes(normalizedSearch),
-        ),
-      );
-    }
-
     if (selectedSubgroup) {
       const tests = Array.isArray(selectedSubgroup.tests)
         ? selectedSubgroup.tests
@@ -452,20 +444,19 @@ function AddTestScreen({
       );
     }
 
-    if (!normalizedSearch) {
-      return sortCatalogGroups(groups);
+    if (normalizedSearch) {
+      return sortCatalogTestsByCode(
+        flattenedCompanyTests.filter(test =>
+          test.__searchKey?.includes(normalizedSearch),
+        ),
+      );
     }
 
-    return sortCatalogTestsByCode(
-      flattenedCompanyTests.filter(test =>
-        test.__searchKey?.includes(normalizedSearch),
-      ),
-    );
+    return sortCatalogGroups(groups);
   }, [
     dedupeTests,
     deferredSearchText,
     flattenedCompanyTests,
-    catalogMode,
     groups,
     selectedGroup,
     selectedSubgroup,
@@ -480,7 +471,6 @@ function AddTestScreen({
     setVisibleItemCount(CATALOG_PAGE_SIZE);
   }, [
     activePanelCompany?.compCatId,
-    catalogMode,
     deferredSearchText,
     selectedGroup?.group_id,
     selectedGroup?.gcode,
@@ -527,33 +517,45 @@ function AddTestScreen({
         return;
       }
 
-      const catalogResponse = await onPanelCompanySelect({
-        patient: selectedPatient,
-        compCatId: panelCompany.compCatId,
-        panelCompany,
-      });
-
-      const nextGroups = sortCatalogGroups(catalogResponse?.groups);
-
-      if (!nextGroups.length) {
-        Alert.alert(
-          'No Groups Found',
-          'No groups were returned for the selected panel company.',
-        );
-        return;
-      }
-
       setActivePanelCompany(panelCompany);
-      setGroups(nextGroups);
+      setGroups([]);
       setSelectedGroup(null);
       setSelectedSubgroup(null);
-      setCatalogMode('search');
       setExpandedTests({});
       setSearchText('');
+      setIsLoadingCatalog(true);
+      onLocalDatabaseLoadingChange?.('Loading test catalog...');
+
+      try {
+        const catalogResponse = await onPanelCompanySelect({
+          patient: selectedPatient,
+          compCatId: panelCompany.compCatId,
+          panelCompany,
+        });
+
+        const nextGroups = sortCatalogGroups(catalogResponse?.groups);
+
+        if (!nextGroups.length) {
+          setAppAlert({
+            title: 'No Groups Found',
+            message:
+              'No groups were returned for the selected panel company.',
+            actions: [{text: 'OK'}],
+            cancelable: false,
+          });
+          return;
+        }
+
+        setGroups(nextGroups);
+      } finally {
+        setIsLoadingCatalog(false);
+        onLocalDatabaseLoadingChange?.('');
+      }
     },
     [
       activePanelCompany,
       groups.length,
+      onLocalDatabaseLoadingChange,
       onPanelCompanySelect,
       selectedPatient,
     ],
@@ -604,9 +606,35 @@ function AddTestScreen({
 
     setActivePanelCompany(null);
     setGroups([]);
-    setCatalogMode('search');
     setSearchText('');
   };
+  const confirmSampleCollectionReset = useCallback(
+    onConfirm => {
+      if (!sampleCollectionDraft?.collected) {
+        onConfirm?.();
+        return;
+      }
+
+      setAppAlert({
+        title: 'Reset Sample Collection?',
+        message:
+          'Is patient ka sample collect ho chuka hai. Test change karne par sample collection reset ho jayega aur tubes phir se select karni padegi.',
+        actions: [
+          {text: 'Cancel', style: 'cancel'},
+          {
+            text: 'Reset & Continue',
+            style: 'destructive',
+            onPress: () => {
+              onSampleCollectionReset?.();
+              onConfirm?.();
+            },
+          },
+        ],
+        cancelable: true,
+      });
+    },
+    [onSampleCollectionReset, sampleCollectionDraft?.collected],
+  );
 
   return (
     <>
@@ -670,10 +698,12 @@ function AddTestScreen({
                       activeOpacity={0.85}
                       style={styles.addTestSelectedRemoveButton}
                       onPress={() =>
-                        onRemoveSelectedTest({
+                        confirmSampleCollectionReset(() =>
+                          onRemoveSelectedTest({
                           patient: selectedPatient,
                           testKey: test.key,
-                        })
+                          }),
+                        )
                       }>
                       <Ionicons
                         name="close"
@@ -744,92 +774,27 @@ function AddTestScreen({
         {activePanelCompany ? (
           <View style={styles.sampleCollectionSection}>
             {!selectedGroup && !selectedSubgroup ? (
-              <>
-                <View style={styles.testPickerToolbar}>
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    style={[
-                      styles.testPickerModeButton,
-                      catalogMode === 'search' && styles.testPickerModeButtonActive,
-                    ]}
-                    onPress={() => {
-                      setCatalogMode('search');
-                      setSelectedGroup(null);
-                      setSelectedSubgroup(null);
-                    }}>
-                    <Ionicons
-                      name="search-outline"
-                      size={15}
-                      style={[
-                        styles.testPickerModeIcon,
-                        catalogMode === 'search' &&
-                          styles.testPickerModeIconActive,
-                      ]}
-                    />
-                    <Text
-                      style={[
-                        styles.testPickerModeText,
-                        catalogMode === 'search' &&
-                          styles.testPickerModeTextActive,
-                      ]}>
-                      Search
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    style={[
-                      styles.testPickerModeButton,
-                      catalogMode === 'browse' && styles.testPickerModeButtonActive,
-                    ]}
-                    onPress={() => {
-                      setCatalogMode('browse');
-                      setSearchText('');
-                    }}>
-                    <Ionicons
-                      name="albums-outline"
-                      size={15}
-                      style={[
-                        styles.testPickerModeIcon,
-                        catalogMode === 'browse' &&
-                          styles.testPickerModeIconActive,
-                      ]}
-                    />
-                    <Text
-                      style={[
-                        styles.testPickerModeText,
-                        catalogMode === 'browse' &&
-                          styles.testPickerModeTextActive,
-                      ]}>
-                      Browse
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-                {catalogMode === 'search' ? (
-                  <View style={styles.panelCompanySearchWrap}>
-                    <Ionicons
-                      name="search-outline"
-                      size={18}
-                      style={styles.panelCompanySearchIcon}
-                    />
-                    <TextInput
-                      value={searchText}
-                      onChangeText={setSearchText}
-                      placeholder="Search test, profile, code, or specimen"
-                      placeholderTextColor="#6D7C80"
-                      style={styles.panelCompanySearchInput}
-                    />
-                  </View>
-                ) : null}
-              </>
+              <View style={styles.panelCompanySearchWrap}>
+                <Ionicons
+                  name="search-outline"
+                  size={18}
+                  style={styles.panelCompanySearchIcon}
+                />
+                <TextInput
+                  value={searchText}
+                  onChangeText={setSearchText}
+                  placeholder="Search test, profile, code, or specimen"
+                  placeholderTextColor="#6D7C80"
+                  style={styles.panelCompanySearchInput}
+                />
+              </View>
             ) : null}
             <View style={styles.sampleCollectionSectionHeader}>
               <Text style={styles.sampleCollectionSectionTitle}>
                 {selectedSubgroup
                   ? `Tests in ${getCatalogSubgroupTitle(selectedSubgroup)}`
-                  : !selectedGroup && catalogMode === 'search'
-                  ? searchText.trim().length > 0
-                    ? `Search Results in ${activePanelCompany.name}`
-                    : `Tests in ${activePanelCompany.name}`
+                  : !selectedGroup && searchText.trim().length > 0
+                  ? `Search Results in ${activePanelCompany.name}`
                   : selectedGroup
                   ? `Subgroups in ${getCatalogGroupTitle(selectedGroup)}`
                   : `Groups in ${activePanelCompany.name}`}
@@ -857,12 +822,19 @@ function AddTestScreen({
               scrollEventThrottle={16}
               onScroll={handleCatalogScroll}
               contentContainerStyle={styles.sampleCollectionCatalogList}>
-              {activeItems.length ? (
+              {isLoadingCatalog ? (
+                <View style={styles.sampleCollectionLoadingCard}>
+                  <ActivityIndicator color="#1557B7" />
+                  <Text style={styles.sampleCollectionLoadingText}>
+                    Loading test catalog...
+                  </Text>
+                </View>
+              ) : activeItems.length ? (
                 visibleActiveItems.map((item, index) => {
                   const isSearchResultsList =
                     !selectedGroup &&
                     !selectedSubgroup &&
-                    catalogMode === 'search';
+                    searchText.trim().length > 0;
                   const isGroupList =
                     !isSearchResultsList && !selectedGroup && !selectedSubgroup;
                   const isSubgroupList =
@@ -968,11 +940,13 @@ function AddTestScreen({
                               }) && styles.sampleCollectionAddButtonActive,
                             ]}
                             onPress={() =>
-                              onToggleSelectedTest?.({
+                              confirmSampleCollectionReset(() =>
+                                onToggleSelectedTest?.({
                                 patient: selectedPatient,
                                 panelCompany: activePanelCompany,
                                 test: item,
-                              })
+                                }),
+                              )
                             }>
                             <Text
                               style={[
@@ -1046,7 +1020,9 @@ function AddTestScreen({
                 })
               ) : (
                 <Text style={styles.sectionText}>
-                  Select a panel company to browse its catalog.
+                  {searchText.trim().length
+                    ? 'No tests match your search.'
+                    : 'Select a panel company to browse its catalog.'}
                 </Text>
               )}
               {hasMoreActiveItems ? (
@@ -1058,7 +1034,7 @@ function AddTestScreen({
                 </View>
               ) : null}
             </ScrollView>
-            {catalogMode === 'search' && !selectedGroup && !selectedSubgroup ? (
+            {!selectedGroup && !selectedSubgroup ? (
               <View style={styles.testPickerSelectedBar}>
                 <Text style={styles.testPickerSelectedText}>
                   {selectedTests.length} selected
@@ -1071,6 +1047,11 @@ function AddTestScreen({
           </View>
         ) : null}
       </View>
+      <AppAlertModal
+        alert={appAlert}
+        styles={styles}
+        onClose={() => setAppAlert(null)}
+      />
     </>
   );
 }
