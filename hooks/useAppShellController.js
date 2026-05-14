@@ -11,6 +11,8 @@ import {
 import {getSpecimenNameForTestCode} from '../services/local/panelCatalogSpecimenLookup';
 import {
   clearAppointmentDetailDraft,
+  clearOfflineBookingStorage,
+  getPendingOfflineActionCount,
   getCachedAppointmentDetailDrafts,
   persistAppointmentDetailDrafts,
   queuePendingLocalAction,
@@ -123,20 +125,66 @@ const buildApiPanelCompaniesFromPatient = patient => {
     .filter(Boolean);
 };
 
+const findApiPanelCompanyForTest = (patient, test, fallbackPanelCompany = null) => {
+  if (fallbackPanelCompany?.compCatId || fallbackPanelCompany?.name) {
+    return fallbackPanelCompany;
+  }
+
+  const apiPanelCompanies = buildApiPanelCompaniesFromPatient(patient);
+  if (!apiPanelCompanies.length) {
+    return null;
+  }
+
+  const testCompCatId = toStableValue(
+    test?.panelCompanyId || test?.compCatId || test?.comp_cat_id,
+  );
+  const testPanelName = toStableValue(
+    test?.panelCompanyName || test?.panel_company || test?.panelCompany,
+  ).toLowerCase();
+
+  if (testCompCatId) {
+    const compCatMatch = apiPanelCompanies.find(
+      company => toStableValue(company?.compCatId) === testCompCatId,
+    );
+
+    if (compCatMatch) {
+      return compCatMatch;
+    }
+  }
+
+  if (testPanelName) {
+    const nameMatch = apiPanelCompanies.find(
+      company => toStableValue(company?.name).toLowerCase() === testPanelName,
+    );
+
+    if (nameMatch) {
+      return nameMatch;
+    }
+  }
+
+  return apiPanelCompanies[0] || null;
+};
+
 const getPrimaryApiPanelCompany = patient =>
   buildApiPanelCompaniesFromPatient(patient)[0] || null;
 
 const buildSeededPatientTests = (patient, panelCompany = null) =>
   (Array.isArray(patient?.tests) ? patient.tests : []).map(test => {
-    const resolvedPanelCompany = panelCompany || getPrimaryApiPanelCompany(patient);
+    const resolvedPanelCompany = findApiPanelCompanyForTest(
+      patient,
+      test,
+      panelCompany,
+    );
 
     return {
       key: `seed|${test?.code || test?.booked_code || 'na'}|${
         test?.name || test?.test_name || 'na'
       }`,
       panelCompanyName:
-        resolvedPanelCompany?.name ||
         test?.panelCompanyName ||
+        test?.panel_company ||
+        test?.panelCompany ||
+        resolvedPanelCompany?.name ||
         patient?.panelCompany ||
         'Current Panel',
       panelCompanySource: resolvedPanelCompany?.chipSource || 'API',
@@ -149,9 +197,9 @@ const buildSeededPatientTests = (patient, panelCompany = null) =>
         resolvedPanelCompany?.chargeMode ||
         '',
       panelCompanyId:
-        resolvedPanelCompany?.compCatId ||
         test?.compCatId ||
         test?.comp_cat_id ||
+        resolvedPanelCompany?.compCatId ||
         patient?.compCatId ||
         patient?.comp_cat_id ||
         '',
@@ -353,17 +401,22 @@ const buildEmptyAppointmentDetailState = () => ({
   activePatientPanelCompanyMap: {},
   patientSelectedTestsMap: {},
   patientReportCourierMap: {},
+  patientReportScheduleMap: {},
   patientSampleCollectionMap: {},
   patientTestBookingStatusMap: {},
   patientCghsEnabledMap: {},
   patientCghsIdMap: {},
   patientCghsDocumentsMap: {},
+  patientAdditionalDiscountMap: {},
   completePayments: [],
   isAdditionalDiscountEnabled: false,
-  completeAdditionalDiscountMode: 'amount',
-  completeAdditionalDiscount: '',
-  appliedAdditionalDiscountMode: '',
-  appliedAdditionalDiscount: '',
+  isLinkedAppointmentSelected: false,
+  linkedAppointmentDate: '',
+  linkedAppointmentTimeSlot: '',
+  samplePickCount: '',
+  samplePickPatientIds: [],
+  sampleCollectionEasyTough: '',
+  sampleCollectionEasyToughPatientIds: [],
   pendingPaymentPatientId: '',
   selectedPatientKey: '',
 });
@@ -377,6 +430,18 @@ const buildAppointmentDetailStateFromBooking = booking => {
     }
 
     state.patientSelectedTestsMap[patientId] = buildSeededPatientTests(patient);
+    const patientAdditionalDiscount = toCurrencyNumber(
+      patient?.additionalDiscountAmount ||
+        patient?.additional_discount_amount ||
+        patient?.ad_dis ||
+        patient?.Ad_Dis,
+    );
+
+    if (patientAdditionalDiscount > 0) {
+      state.patientAdditionalDiscountMap[patientId] = String(
+        patientAdditionalDiscount,
+      );
+    }
   });
 
   return state;
@@ -517,6 +582,10 @@ const mergeAppointmentDetailStateWithDraft = (seedState, draftState) => {
       ...(seed.patientReportCourierMap || {}),
       ...(draft.patientReportCourierMap || {}),
     },
+    patientReportScheduleMap: {
+      ...(seed.patientReportScheduleMap || {}),
+      ...(draft.patientReportScheduleMap || {}),
+    },
     patientSampleCollectionMap: {
       ...(seed.patientSampleCollectionMap || {}),
       ...(draft.patientSampleCollectionMap || {}),
@@ -537,6 +606,10 @@ const mergeAppointmentDetailStateWithDraft = (seedState, draftState) => {
       ...(seed.patientCghsDocumentsMap || {}),
       ...(draft.patientCghsDocumentsMap || {}),
     },
+    patientAdditionalDiscountMap: {
+      ...(seed.patientAdditionalDiscountMap || {}),
+      ...(draft.patientAdditionalDiscountMap || {}),
+    },
     completePayments: Array.isArray(draft.completePayments)
       ? draft.completePayments
       : seed.completePayments,
@@ -544,18 +617,25 @@ const mergeAppointmentDetailStateWithDraft = (seedState, draftState) => {
       draft.isAdditionalDiscountEnabled === undefined
         ? seed.isAdditionalDiscountEnabled
         : draft.isAdditionalDiscountEnabled,
-    completeAdditionalDiscountMode:
-      draft.completeAdditionalDiscountMode || seed.completeAdditionalDiscountMode,
-    completeAdditionalDiscount:
-      draft.completeAdditionalDiscount === undefined
-        ? seed.completeAdditionalDiscount
-        : draft.completeAdditionalDiscount,
-    appliedAdditionalDiscountMode:
-      draft.appliedAdditionalDiscountMode || seed.appliedAdditionalDiscountMode,
-    appliedAdditionalDiscount:
-      draft.appliedAdditionalDiscount === undefined
-        ? seed.appliedAdditionalDiscount
-        : draft.appliedAdditionalDiscount,
+    isLinkedAppointmentSelected:
+      draft.isLinkedAppointmentSelected === undefined
+        ? seed.isLinkedAppointmentSelected
+        : draft.isLinkedAppointmentSelected,
+    linkedAppointmentDate:
+      draft.linkedAppointmentDate || seed.linkedAppointmentDate || '',
+    linkedAppointmentTimeSlot:
+      draft.linkedAppointmentTimeSlot || seed.linkedAppointmentTimeSlot || '',
+    samplePickCount: draft.samplePickCount || seed.samplePickCount || '',
+    samplePickPatientIds: Array.isArray(draft.samplePickPatientIds)
+      ? draft.samplePickPatientIds
+      : seed.samplePickPatientIds,
+    sampleCollectionEasyTough:
+      draft.sampleCollectionEasyTough || seed.sampleCollectionEasyTough || '',
+    sampleCollectionEasyToughPatientIds: Array.isArray(
+      draft.sampleCollectionEasyToughPatientIds,
+    )
+      ? draft.sampleCollectionEasyToughPatientIds
+      : seed.sampleCollectionEasyToughPatientIds,
     pendingPaymentPatientId:
       draft.pendingPaymentPatientId || seed.pendingPaymentPatientId || '',
     selectedPatientKey: draft.selectedPatientKey || seed.selectedPatientKey,
@@ -595,17 +675,28 @@ const buildAppointmentDetailDraftForStorage = ({state, selectedBooking}) => {
       activePatientPanelCompanyMap: safeState.activePatientPanelCompanyMap || {},
       patientSelectedTestsMap: draftSelectedTestsMap,
       patientReportCourierMap: safeState.patientReportCourierMap || {},
+      patientReportScheduleMap: safeState.patientReportScheduleMap || {},
       patientSampleCollectionMap: safeState.patientSampleCollectionMap || {},
       patientTestBookingStatusMap: safeState.patientTestBookingStatusMap || {},
       patientCghsEnabledMap: safeState.patientCghsEnabledMap || {},
       patientCghsIdMap: safeState.patientCghsIdMap || {},
       patientCghsDocumentsMap: safeState.patientCghsDocumentsMap || {},
+      patientAdditionalDiscountMap: safeState.patientAdditionalDiscountMap || {},
       completePayments: safeState.completePayments || [],
       isAdditionalDiscountEnabled: safeState.isAdditionalDiscountEnabled,
-      completeAdditionalDiscountMode: safeState.completeAdditionalDiscountMode,
-      completeAdditionalDiscount: safeState.completeAdditionalDiscount,
-      appliedAdditionalDiscountMode: safeState.appliedAdditionalDiscountMode,
-      appliedAdditionalDiscount: safeState.appliedAdditionalDiscount,
+      isLinkedAppointmentSelected: Boolean(safeState.isLinkedAppointmentSelected),
+      linkedAppointmentDate: safeState.linkedAppointmentDate || '',
+      linkedAppointmentTimeSlot: safeState.linkedAppointmentTimeSlot || '',
+      samplePickCount: safeState.samplePickCount || '',
+      samplePickPatientIds: Array.isArray(safeState.samplePickPatientIds)
+        ? safeState.samplePickPatientIds
+        : [],
+      sampleCollectionEasyTough: safeState.sampleCollectionEasyTough || '',
+      sampleCollectionEasyToughPatientIds: Array.isArray(
+        safeState.sampleCollectionEasyToughPatientIds,
+      )
+        ? safeState.sampleCollectionEasyToughPatientIds
+        : [],
       pendingPaymentPatientId: safeState.pendingPaymentPatientId || '',
       selectedPatientKey: safeState.selectedPatientKey,
     },
@@ -1696,6 +1787,38 @@ export const useAppShellController = () => {
     await Promise.all([session.resetSession(), bookings.clearAssignedState()]);
   }, [bookings, resetHomeNavigation, session]);
 
+  const handleClearAppCache = useCallback(async () => {
+    const pendingActionCount = await getPendingOfflineActionCount();
+    if (pendingActionCount > 0) {
+      throw new Error(
+        `${pendingActionCount} pending offline action${
+          pendingActionCount > 1 ? 's are' : ' is'
+        } still waiting to sync. Please sync them before clearing cache.`,
+      );
+    }
+
+    await bookings.clearAssignedState();
+    setSelectedBooking(null);
+    setSelectedBookingScreen('details');
+    setSelectedSamplePatient(null);
+    setSelectedSamplePanelCompany(null);
+    setAppointmentDetailState(buildEmptyAppointmentDetailState());
+    setAppointmentDetailDrafts({});
+    clearedAppointmentDraftKeysRef.current.clear();
+  }, [bookings]);
+
+  const handleClearAllAppData = useCallback(async () => {
+    try {
+      await clearOfflineBookingStorage();
+    } finally {
+      await bookings.clearAssignedState();
+      resetHomeNavigation();
+      setAppointmentDetailDrafts({});
+      clearedAppointmentDraftKeysRef.current.clear();
+      await session.resetSession();
+    }
+  }, [bookings, resetHomeNavigation, session]);
+
   const handleGoBack = useCallback(() => {
     if (selectedBooking && selectedBookingScreen !== 'details') {
       setSelectedSamplePatient(null);
@@ -1765,6 +1888,8 @@ export const useAppShellController = () => {
       handleCancelPatient,
       handleCompletedCardPress,
       handleCollectSample,
+      handleClearAllAppData,
+      handleClearAppCache,
       handleGoBack,
       handleLoginSubmit,
       handleOpenAddTest,
@@ -1779,6 +1904,7 @@ export const useAppShellController = () => {
       setShowLogoutModal,
       setAppointmentDetailState,
       setLocalDatabaseLoadingMessage,
+      setSelectedBookingScreen,
     },
   };
 };

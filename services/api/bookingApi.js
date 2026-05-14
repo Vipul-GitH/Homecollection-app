@@ -21,6 +21,8 @@ import {
   getLocalPanelCompaniesResponse,
 } from '../local/panelCatalogLocal';
 
+const WRITE_REQUEST_TIMEOUT_MS = 10000;
+
 const parseJsonResponse = async response => {
   try {
     const responseData = await response.json();
@@ -50,30 +52,36 @@ const isPatientBookingMappingError = message =>
     String(message || ''),
   );
 
-const buildMasterPatientDocumentMap = (bookingDetail, patientDocumentsMap) => {
-  const mappedDocuments = {};
+const getMappedMasterPatientId = (bookingDetail, sourcePatientId) => {
+  if (!sourcePatientId) {
+    return '';
+  }
+
   const patients = Array.isArray(bookingDetail?.patients) ? bookingDetail.patients : [];
 
-  Object.entries(patientDocumentsMap || {}).forEach(([sourcePatientId, documents]) => {
-    if (!sourcePatientId) {
-      return;
-    }
+  const matchedPatient = patients.find(patient =>
+    [
+      patient?.bookingPatientId,
+      patient?.booking_patient_id,
+      patient?.patientId,
+      patient?.patient_id,
+      patient?.id,
+    ]
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+      .includes(String(sourcePatientId).trim()),
+  );
 
-    const matchedPatient = patients.find(patient =>
-      [
-        patient?.bookingPatientId,
-        patient?.booking_patient_id,
-        patient?.patientId,
-        patient?.patient_id,
-        patient?.id,
-      ]
-        .map(value => String(value || '').trim())
-        .filter(Boolean)
-        .includes(String(sourcePatientId).trim()),
-    );
-    const masterPatientId = String(
-      matchedPatient?.patientId || matchedPatient?.patient_id || '',
-    ).trim();
+  return String(
+    matchedPatient?.patientId || matchedPatient?.patient_id || '',
+  ).trim();
+};
+
+const buildMasterPatientDocumentMap = (bookingDetail, patientDocumentsMap) => {
+  const mappedDocuments = {};
+
+  Object.entries(patientDocumentsMap || {}).forEach(([sourcePatientId, documents]) => {
+    const masterPatientId = getMappedMasterPatientId(bookingDetail, sourcePatientId);
 
     if (!masterPatientId) {
       return;
@@ -85,35 +93,137 @@ const buildMasterPatientDocumentMap = (bookingDetail, patientDocumentsMap) => {
   return mappedDocuments;
 };
 
+const buildMasterPatientSectionMap = (bookingDetail, patientSectionMap) => {
+  const mappedSections = {};
+
+  Object.entries(patientSectionMap || {}).forEach(([sourcePatientId, sections]) => {
+    const masterPatientId = getMappedMasterPatientId(bookingDetail, sourcePatientId);
+
+    if (!masterPatientId || !sections || typeof sections !== 'object') {
+      return;
+    }
+
+    mappedSections[masterPatientId] = sections;
+  });
+
+  return mappedSections;
+};
+
+const isUploadableDocument = document => {
+  const uri = String(document?.uri || '').trim();
+
+  if (!uri) {
+    return false;
+  }
+
+  return /^(file|content):\/\//i.test(uri);
+};
+
+const hasDocumentsWithUri = documents =>
+  (Array.isArray(documents) ? documents : []).some(isUploadableDocument);
+
+const hasCompleteBookingAttachments = ({
+  patientDocumentsMap,
+  manualSlipDocumentsMap,
+  paymentProofs,
+  patientCghsDocumentsMap,
+}) => {
+  const hasPatientDocuments = Object.values(patientDocumentsMap || {}).some(
+    hasDocumentsWithUri,
+  );
+  const hasManualSlipDocuments = Object.values(manualSlipDocumentsMap || {}).some(
+    hasDocumentsWithUri,
+  );
+  const hasPaymentProofDocuments = (Array.isArray(paymentProofs)
+    ? paymentProofs
+    : []
+  ).some(paymentProof => hasDocumentsWithUri(paymentProof?.documents));
+  const hasCghsDocuments = Object.values(patientCghsDocumentsMap || {}).some(
+    sectionDocuments =>
+      hasDocumentsWithUri(sectionDocuments?.patientPhotos) ||
+      hasDocumentsWithUri(sectionDocuments?.cghsCard),
+  );
+
+  return (
+    hasPatientDocuments ||
+    hasManualSlipDocuments ||
+    hasPaymentProofDocuments ||
+    hasCghsDocuments
+  );
+};
+
+const fetchWithTimeout = async (url, options = {}, timeoutMs = WRITE_REQUEST_TIMEOUT_MS) => {
+  const supportsAbortController = typeof AbortController === 'function';
+
+  if (!supportsAbortController || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return fetch(url, options);
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (
+      error?.name === 'AbortError' ||
+      String(error?.message || '').toLowerCase().includes('abort')
+    ) {
+      throw new Error(`Request timed out after ${timeoutMs}ms`);
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
 const postCompleteBookingStatus = async ({
   accessToken,
   bookingId,
   payload,
   patientDocumentsMap,
+  manualSlipDocumentsMap,
+  paymentProofs,
+  patientCghsDocumentsMap,
 }) => {
-  const formData = new FormData();
-  formData.append('payload', JSON.stringify(payload));
-
-  Object.entries(patientDocumentsMap).forEach(([patientId, documents]) => {
-    (Array.isArray(documents) ? documents : []).forEach(document => {
-      if (!document?.uri || !patientId) {
-        return;
-      }
-
-      formData.append(`patient_documents_${patientId}`, {
-        uri: document.uri,
-        name: document.name || `patient-document-${Date.now()}`,
-        type: document.type || 'application/octet-stream',
-      });
-    });
+  const apiUrl = getAssignedBookingStatusApiUrl(bookingId);
+  const hasUploadableAttachments = hasCompleteBookingAttachments({
+    patientDocumentsMap,
+    manualSlipDocumentsMap,
+    paymentProofs,
+    patientCghsDocumentsMap,
   });
 
-  const response = await fetch(getAssignedBookingStatusApiUrl(bookingId), {
+  logAppointmentDetailDebug('[Complete Booking API Request]', {
+    url: apiUrl,
+    transport: 'json-secure',
+    hasUploadableAttachments,
+    payload,
+    patientDocumentPatientIds: Object.keys(patientDocumentsMap || {}),
+    manualSlipPatientIds: Object.keys(manualSlipDocumentsMap || {}),
+    paymentProofCount: Array.isArray(paymentProofs) ? paymentProofs.length : 0,
+    cghsPatientIds: Object.keys(patientCghsDocumentsMap || {}),
+  });
+
+  const response = await secureFetch(apiUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
     },
-    body: formData,
+    body: JSON.stringify(payload),
+    timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
+  });
+  logAppointmentDetailDebug('[Complete Booking API HTTP Status]', {
+    status: response.status,
+    ok: response.ok,
+    transport: 'json-secure',
   });
 
   const responseData = await parseJsonResponse(response, '[Booking Status]');
@@ -240,16 +350,38 @@ export const updateAssignedBookingStatusApi = async ({
   const {
     patient_documents_map: patientDocumentsMapFromSnakeCase,
     patientDocumentsMap: patientDocumentsMapFromCamelCase,
+    manual_slip_documents_map: manualSlipDocumentsMapFromSnakeCase,
+    manualSlipDocumentsMap: manualSlipDocumentsMapFromCamelCase,
+    payment_proofs: paymentProofsFromSnakeCase,
+    paymentProofs: paymentProofsFromCamelCase,
+    patient_cghs_documents_map: patientCghsDocumentsMapFromSnakeCase,
+    patientCghsDocumentsMap: patientCghsDocumentsMapFromCamelCase,
     ...statusPayloadFields
   } = statusPayload || {};
   const patientDocumentsMap =
     patientDocumentsMapFromSnakeCase || patientDocumentsMapFromCamelCase || {};
+  const manualSlipDocumentsMap =
+    manualSlipDocumentsMapFromSnakeCase ||
+    manualSlipDocumentsMapFromCamelCase ||
+    {};
+  const paymentProofs =
+    paymentProofsFromSnakeCase || paymentProofsFromCamelCase || [];
+  const patientCghsDocumentsMap =
+    patientCghsDocumentsMapFromSnakeCase ||
+    patientCghsDocumentsMapFromCamelCase ||
+    {};
   const payload = {
     ...statusPayloadFields,
-    action: action === 'completed' ? 'complete' : action,
+    action: action === 'complete' ? 'completed' : action,
   };
 
-  if (payload.action === 'complete') {
+  if (payload.action === 'completed') {
+    logAppointmentDetailDebug('[Complete Booking Flow Started]', {
+      bookingId,
+      appointmentId: normalizedAppointmentId,
+      sourceType: normalizedSourceType,
+      payload,
+    });
     const numericAppointmentId = Number(normalizedAppointmentId);
     payload.appointment_id =
       normalizedSourceType === 'APPOINTMENT' && normalizedAppointmentId
@@ -270,13 +402,35 @@ export const updateAssignedBookingStatusApi = async ({
       latestBookingDetail,
       patientDocumentsMap,
     );
+    let resolvedManualSlipDocumentsMap = buildMasterPatientDocumentMap(
+      latestBookingDetail,
+      manualSlipDocumentsMap,
+    );
+    let resolvedPatientCghsDocumentsMap = buildMasterPatientSectionMap(
+      latestBookingDetail,
+      patientCghsDocumentsMap,
+    );
 
-    let {response, responseData} = await postCompleteBookingStatus({
-      accessToken,
-      bookingId,
-      payload,
-      patientDocumentsMap: resolvedPatientDocumentsMap,
-    });
+    let response;
+    let responseData;
+    try {
+      ({response, responseData} = await postCompleteBookingStatus({
+        accessToken,
+        bookingId,
+        payload,
+        patientDocumentsMap: resolvedPatientDocumentsMap,
+        manualSlipDocumentsMap: resolvedManualSlipDocumentsMap,
+        paymentProofs,
+        patientCghsDocumentsMap: resolvedPatientCghsDocumentsMap,
+      }));
+    } catch (error) {
+      logAppointmentDetailDebug('[Complete Booking API Error]', {
+        message: error?.message,
+        name: error?.name,
+      });
+      throw error;
+    }
+    logAppointmentDetailDebug('[Complete Booking API Response]', responseData);
     let errorMessage = getApiErrorMessage(
       response,
       responseData,
@@ -292,13 +446,28 @@ export const updateAssignedBookingStatusApi = async ({
         refreshedBookingDetail,
         patientDocumentsMap,
       );
+      resolvedManualSlipDocumentsMap = buildMasterPatientDocumentMap(
+        refreshedBookingDetail,
+        manualSlipDocumentsMap,
+      );
+      resolvedPatientCghsDocumentsMap = buildMasterPatientSectionMap(
+        refreshedBookingDetail,
+        patientCghsDocumentsMap,
+      );
 
       ({response, responseData} = await postCompleteBookingStatus({
         accessToken,
         bookingId,
         payload,
         patientDocumentsMap: resolvedPatientDocumentsMap,
+        manualSlipDocumentsMap: resolvedManualSlipDocumentsMap,
+        paymentProofs,
+        patientCghsDocumentsMap: resolvedPatientCghsDocumentsMap,
       }));
+      logAppointmentDetailDebug(
+        '[Complete Booking API Retry Response]',
+        responseData,
+      );
       errorMessage = getApiErrorMessage(
         response,
         responseData,
@@ -458,7 +627,7 @@ export const addAssignedBookingPatientApi = async ({
 
   // SecureApiModule currently accepts string bodies only, so multipart upload
   // must use native fetch for this endpoint.
-  const response = await fetch(getAssignedBookingPatientsApiUrl(bookingId), {
+  const response = await fetchWithTimeout(getAssignedBookingPatientsApiUrl(bookingId), {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -560,13 +729,16 @@ export const updateAssignedBookingPatientApi = async ({
 
   // SecureApiModule currently accepts string bodies only, so multipart upload
   // must use native fetch for this endpoint.
-  const response = await fetch(getAssignedBookingPatientApiUrl(bookingId, patientId), {
+  const response = await fetchWithTimeout(
+    getAssignedBookingPatientApiUrl(bookingId, patientId),
+    {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
     body: formData,
-  });
+    },
+  );
 
   const responseData = await parseJsonResponse(response, '[Update Patient]');
   const errorMessage = getApiErrorMessage(

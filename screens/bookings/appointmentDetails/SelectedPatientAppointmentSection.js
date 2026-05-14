@@ -5,7 +5,6 @@ import PatientSampleCollectionSection from '../../../components/bookings/appoint
 import PatientTestsAccordion from '../../../components/bookings/patient/PatientTestsAccordion';
 import {
   buildPatientDisplayTests,
-  getDisplayTestPrice,
   getPatientCceTestBookingStatus,
   getPatientDisplayTubes,
 } from './patientDisplay';
@@ -68,7 +67,7 @@ function SelectedPatientAppointmentSection({
   const canUseThisPatientActions =
     canUsePatientActions && !isThisPatientCancelled;
   const canUseThisPatientTestActions =
-    !isTerminalBooking && !isThisPatientCancelled;
+    canUsePatientActions && !isThisPatientCancelled;
   const patientId = getPatientMutationId(patient);
   const activePanelCompanyId = patientId
     ? activePatientPanelCompanyMap[patientId] || ''
@@ -88,9 +87,10 @@ function SelectedPatientAppointmentSection({
     patient,
     selectedTests,
     selectedTestsSourceReady: Boolean(hasSelectedTestsOverride),
+    panelCompanies: companyChips,
   });
   const testsSubtotal = displayTests.reduce(
-    (total, test) => total + getDisplayTestPrice(test),
+    (total, test) => total + Number(test?.charge || 0),
     0,
   );
   const displayTubes = getPatientDisplayTubes({

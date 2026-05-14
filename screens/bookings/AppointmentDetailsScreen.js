@@ -648,6 +648,8 @@ function AppointmentDetailsScreen({
   appointmentDetailState,
   onAppointmentDetailStateChange,
   onLocalDatabaseLoadingChange,
+  selectedBookingScreen = 'details',
+  onBookingScreenChange,
 }) {
   const {width} = useWindowDimensions();
   const isNarrowScreen = width < 390;
@@ -689,43 +691,38 @@ function AppointmentDetailsScreen({
   const [linkedAppointmentTimeSlot, setLinkedAppointmentTimeSlot] =
     useState('');
   const [isLinkedAppointmentSelected, setIsLinkedAppointmentSelected] =
-    useState(false);
-  const [samplePickCount, setSamplePickCount] = useState('');
-  const [samplePickPatientIds, setSamplePickPatientIds] = useState([]);
+    useState(() => Boolean(appointmentDetailState?.isLinkedAppointmentSelected));
+  const [samplePickCount, setSamplePickCount] = useState(
+    () => appointmentDetailState?.samplePickCount || '',
+  );
+  const [samplePickPatientIds, setSamplePickPatientIds] = useState(
+    () =>
+      Array.isArray(appointmentDetailState?.samplePickPatientIds)
+        ? appointmentDetailState.samplePickPatientIds
+        : [],
+  );
   const [sampleCollectionEasyTough, setSampleCollectionEasyTough] =
-    useState('');
+    useState(() => appointmentDetailState?.sampleCollectionEasyTough || '');
   const [
     sampleCollectionEasyToughPatientIds,
     setSampleCollectionEasyToughPatientIds,
-  ] = useState([]);
+  ] = useState(
+    () =>
+      Array.isArray(appointmentDetailState?.sampleCollectionEasyToughPatientIds)
+        ? appointmentDetailState.sampleCollectionEasyToughPatientIds
+        : [],
+  );
   const [cancelCalendarMonth, setCancelCalendarMonth] = useState(
     () => new Date(),
   );
   const [linkedAppointmentCalendarMonth, setLinkedAppointmentCalendarMonth] =
     useState(() => new Date());
-  const [isAdditionalDiscountEnabled, setIsAdditionalDiscountEnabled] =
-    useState(() => Boolean(appointmentDetailState?.isAdditionalDiscountEnabled));
-  const [completeAdditionalDiscountMode, setCompleteAdditionalDiscountMode] =
-    useState(
-      () => appointmentDetailState?.completeAdditionalDiscountMode || 'amount',
-    );
-  const [completeAdditionalDiscount, setCompleteAdditionalDiscount] = useState(
-    () =>
-      appointmentDetailState?.completeAdditionalDiscount === undefined
-        ? ''
-        : String(appointmentDetailState.completeAdditionalDiscount),
-  );
-  const [appliedAdditionalDiscountMode, setAppliedAdditionalDiscountMode] =
-    useState(() => appointmentDetailState?.appliedAdditionalDiscountMode || '');
-  const [appliedAdditionalDiscount, setAppliedAdditionalDiscount] = useState(
-    () =>
-      appointmentDetailState?.appliedAdditionalDiscount === undefined
-        ? ''
-        : String(appointmentDetailState.appliedAdditionalDiscount),
-  );
+  const [isAdditionalDiscountEnabled] = useState(true);
   const [completePayments, setCompletePayments] = useState(() =>
     normalizeCompletePaymentDrafts(appointmentDetailState?.completePayments),
   );
+  const [patientAdditionalDiscountDraftMap, setPatientAdditionalDiscountDraftMap] =
+    useState({});
   const [pendingPaymentPatientId, setPendingPaymentPatientId] = useState(
     () => appointmentDetailState?.pendingPaymentPatientId || '',
   );
@@ -783,6 +780,10 @@ function AppointmentDetailsScreen({
     () => appointmentDetailState?.patientReportScheduleMap || {},
     [appointmentDetailState?.patientReportScheduleMap],
   );
+  const patientAdditionalDiscountMap = useMemo(
+    () => appointmentDetailState?.patientAdditionalDiscountMap || {},
+    [appointmentDetailState?.patientAdditionalDiscountMap],
+  );
   const patientSampleCollectionMap = useMemo(
     () => appointmentDetailState?.patientSampleCollectionMap || {},
     [appointmentDetailState?.patientSampleCollectionMap],
@@ -804,13 +805,35 @@ function AppointmentDetailsScreen({
     [appointmentDetailState?.patientCghsDocumentsMap],
   );
   useEffect(() => {
+    setPatientAdditionalDiscountDraftMap(previousDraftMap => {
+      const nextDraftMap = {};
+
+      Object.entries(patientAdditionalDiscountMap || {}).forEach(([patientId, value]) => {
+        const normalizedPatientId = normalizeFormText(patientId);
+        if (!normalizedPatientId) {
+          return;
+        }
+
+        nextDraftMap[normalizedPatientId] =
+          previousDraftMap[normalizedPatientId] !== undefined
+            ? previousDraftMap[normalizedPatientId]
+            : String(value || '');
+      });
+
+      Object.entries(previousDraftMap || {}).forEach(([patientId, value]) => {
+        if (!Object.prototype.hasOwnProperty.call(nextDraftMap, patientId)) {
+          nextDraftMap[patientId] = value;
+        }
+      });
+
+      return nextDraftMap;
+    });
+  }, [patientAdditionalDiscountMap]);
+  useEffect(() => {
     appointmentDetailStateRef.current = appointmentDetailState;
   }, [appointmentDetailState]);
   useEffect(() => {
     const currentDraft = appointmentDetailStateRef.current || {};
-    const backendAdditionalDiscount = toCurrencyNumber(
-      selectedBooking?.amountFields?.additionalDiscount,
-    );
     const backendAmountReceived = toCurrencyNumber(
       selectedBooking?.amountFields?.amountReceived,
     );
@@ -821,53 +844,11 @@ function AppointmentDetailsScreen({
       COMPLETE_PAYMENT_MODE_OPTIONS.find(
         mode => mode.toLowerCase() === backendPaymentMode.toLowerCase(),
       ) || COMPLETE_PAYMENT_MODE_OPTIONS[0];
-    const hasDraftAdditionalDiscount =
-      normalizeFormText(currentDraft?.completeAdditionalDiscount) ||
-      normalizeFormText(currentDraft?.appliedAdditionalDiscount);
     const hasDraftPayments =
       Array.isArray(currentDraft?.completePayments) &&
       currentDraft.completePayments.some(payment =>
         normalizeFormText(payment?.amount),
       );
-    const initialAdditionalDiscount =
-      hasDraftAdditionalDiscount
-        ? normalizeFormText(currentDraft?.completeAdditionalDiscount)
-          ? currentDraft?.completeAdditionalDiscount
-          : currentDraft?.appliedAdditionalDiscount
-        : backendAdditionalDiscount <= 0
-        ? currentDraft?.completeAdditionalDiscount
-        : String(backendAdditionalDiscount);
-    const initialAppliedAdditionalDiscount =
-      hasDraftAdditionalDiscount
-        ? currentDraft?.appliedAdditionalDiscount
-        : backendAdditionalDiscount > 0
-        ? String(backendAdditionalDiscount)
-        : '';
-
-    setIsAdditionalDiscountEnabled(
-      Boolean(currentDraft?.isAdditionalDiscountEnabled) ||
-        backendAdditionalDiscount > 0,
-    );
-    setCompleteAdditionalDiscountMode(
-      currentDraft?.completeAdditionalDiscountMode || 'amount',
-    );
-    setCompleteAdditionalDiscount(
-      initialAdditionalDiscount === undefined
-        ? ''
-        : String(initialAdditionalDiscount),
-    );
-    setAppliedAdditionalDiscountMode(
-      hasDraftAdditionalDiscount
-        ? currentDraft?.appliedAdditionalDiscountMode || ''
-        : backendAdditionalDiscount > 0
-        ? 'amount'
-        : '',
-    );
-    setAppliedAdditionalDiscount(
-      initialAppliedAdditionalDiscount === undefined
-        ? ''
-        : String(initialAppliedAdditionalDiscount),
-    );
     setCompletePayments(
       hasDraftPayments || backendAmountReceived <= 0
         ? normalizeCompletePaymentDrafts(currentDraft?.completePayments)
@@ -883,6 +864,18 @@ function AppointmentDetailsScreen({
     );
     setLinkedAppointmentDate(currentDraft?.linkedAppointmentDate || '');
     setLinkedAppointmentTimeSlot(currentDraft?.linkedAppointmentTimeSlot || '');
+    setSamplePickCount(currentDraft?.samplePickCount || '');
+    setSamplePickPatientIds(
+      Array.isArray(currentDraft?.samplePickPatientIds)
+        ? currentDraft.samplePickPatientIds
+        : [],
+    );
+    setSampleCollectionEasyTough(currentDraft?.sampleCollectionEasyTough || '');
+    setSampleCollectionEasyToughPatientIds(
+      Array.isArray(currentDraft?.sampleCollectionEasyToughPatientIds)
+        ? currentDraft.sampleCollectionEasyToughPatientIds
+        : [],
+    );
     setSelectedPatientKey(currentDraft?.selectedPatientKey || '');
     setPendingPaymentPatientId(currentDraft?.pendingPaymentPatientId || '');
   }, [
@@ -901,21 +894,17 @@ function AppointmentDetailsScreen({
       ...previousState,
       completePayments,
       isAdditionalDiscountEnabled,
-      completeAdditionalDiscountMode,
-      completeAdditionalDiscount,
-      appliedAdditionalDiscountMode,
-      appliedAdditionalDiscount,
       isLinkedAppointmentSelected,
       linkedAppointmentDate,
       linkedAppointmentTimeSlot,
+      samplePickCount,
+      samplePickPatientIds,
+      sampleCollectionEasyTough,
+      sampleCollectionEasyToughPatientIds,
       selectedPatientKey,
       pendingPaymentPatientId,
     }));
   }, [
-    appliedAdditionalDiscount,
-    appliedAdditionalDiscountMode,
-    completeAdditionalDiscount,
-    completeAdditionalDiscountMode,
     completePayments,
     isAdditionalDiscountEnabled,
     isLinkedAppointmentSelected,
@@ -923,6 +912,10 @@ function AppointmentDetailsScreen({
     linkedAppointmentTimeSlot,
     onAppointmentDetailStateChange,
     pendingPaymentPatientId,
+    sampleCollectionEasyTough,
+    sampleCollectionEasyToughPatientIds,
+    samplePickCount,
+    samplePickPatientIds,
     selectedBooking?.id,
     selectedPatientKey,
   ]);
@@ -977,6 +970,17 @@ function AppointmentDetailsScreen({
         patientReportScheduleMap:
           typeof updater === 'function'
             ? updater(previousState?.patientReportScheduleMap || {})
+            : updater,
+      })),
+    [onAppointmentDetailStateChange],
+  );
+  const setPatientAdditionalDiscountMap = useCallback(
+    updater =>
+      onAppointmentDetailStateChange?.(previousState => ({
+        ...previousState,
+        patientAdditionalDiscountMap:
+          typeof updater === 'function'
+            ? updater(previousState?.patientAdditionalDiscountMap || {})
             : updater,
       })),
     [onAppointmentDetailStateChange],
@@ -1635,6 +1639,7 @@ function AppointmentDetailsScreen({
             key:
               normalizeFormText(test?.key) ||
               `${normalizeFormText(test?.booked_code || test?.code)}-${patientId}`,
+            patientId,
             patientName: normalizeFormText(patient?.name),
             code: normalizeFormText(test?.booked_code || test?.code),
             description:
@@ -1683,22 +1688,27 @@ function AppointmentDetailsScreen({
       (total, test) => total + toCurrencyNumber(test?.mrp),
       0,
     );
+    const creditSubtotal = creditTests.reduce(
+      (total, test) => total + toCurrencyNumber(test?.mrp),
+      0,
+    );
+    const freeSubtotal = freeTests.reduce(
+      (total, test) => total + toCurrencyNumber(test?.mrp),
+      0,
+    );
     const creditTotal = creditTests.reduce(
-      (total, test) => total + toCurrencyNumber(test?.charge),
+      (total, test) => total + toCurrencyNumber(test?.mrp),
       0,
     );
     const freeTotal = freeTests.reduce(
-      (total, test) => total + toCurrencyNumber(test?.charge),
-      0,
-    );
-    const baseDiscount = completeBillingTests.reduce(
-      (total, test) => total + toCurrencyNumber(test?.standard_discount_amount),
+      (total, test) => total + toCurrencyNumber(test?.mrp),
       0,
     );
     const payingBaseDiscount = payingTests.reduce(
       (total, test) => total + toCurrencyNumber(test?.standard_discount_amount),
       0,
     );
+    const baseDiscount = payingBaseDiscount;
     const maxTotalDiscount = payingTests.reduce(
       (total, test) =>
         total +
@@ -1708,16 +1718,86 @@ function AppointmentDetailsScreen({
         ),
       0,
     );
-    const maxAdditionalAllowed = Math.max(0, maxTotalDiscount - payingBaseDiscount);
-    const additionalValue = toCurrencyNumber(appliedAdditionalDiscount);
-    const requestedAdditional =
-      appliedAdditionalDiscountMode === 'percent'
-        ? (payingSubtotal * additionalValue) / 100
-        : appliedAdditionalDiscountMode === 'amount'
-        ? additionalValue
-        : 0;
-    const effectiveAdditional =
-      requestedAdditional > maxAdditionalAllowed ? 0 : requestedAdditional;
+    const patientSummaryMap = new Map();
+
+    completeBillingTests.forEach(test => {
+      const patientId = normalizeFormText(test?.patientId);
+      if (!patientId) {
+        return;
+      }
+
+      if (!patientSummaryMap.has(patientId)) {
+        patientSummaryMap.set(patientId, {
+          patientId,
+          patientName: normalizeFormText(test?.patientName) || 'Patient',
+          subtotal: 0,
+          payingSubtotal: 0,
+          baseDiscount: 0,
+          maxTotalDiscount: 0,
+          requestedAdditional: 0,
+          effectiveAdditional: 0,
+          maxAdditionalAllowed: 0,
+          payingTestCount: 0,
+        });
+      }
+
+      const entry = patientSummaryMap.get(patientId);
+      entry.subtotal += toCurrencyNumber(test?.mrp);
+
+      if (test.billingBucket === 'paying') {
+        entry.payingSubtotal += toCurrencyNumber(test?.mrp);
+        entry.baseDiscount += toCurrencyNumber(test?.standard_discount_amount);
+        entry.maxTotalDiscount += Math.max(
+          toCurrencyNumber(test?.max_allowed_discount),
+          toCurrencyNumber(test?.max_discount),
+        );
+        entry.payingTestCount += 1;
+      }
+    });
+
+    const patientAdditionalDiscountRows = Array.from(patientSummaryMap.values())
+      .map(entry => {
+        const enteredValue = toCurrencyNumber(
+          patientAdditionalDiscountMap[entry.patientId],
+        );
+        const maxAdditionalAllowed = Math.max(
+          0,
+          entry.maxTotalDiscount - entry.baseDiscount,
+        );
+        const effectiveAdditional = Math.min(enteredValue, maxAdditionalAllowed);
+
+        return {
+          ...entry,
+          enteredAdditional: normalizeFormText(
+            patientAdditionalDiscountMap[entry.patientId],
+          ),
+          requestedAdditional: enteredValue,
+          maxAdditionalAllowed,
+          effectiveAdditional,
+          hasOverflow: enteredValue > maxAdditionalAllowed,
+        };
+      })
+      .filter(
+        entry =>
+          entry.payingTestCount > 0 &&
+          entry.maxAdditionalAllowed > 0.009,
+      )
+      .sort((leftItem, rightItem) =>
+        leftItem.patientName.localeCompare(rightItem.patientName),
+      );
+
+    const maxAdditionalAllowed = patientAdditionalDiscountRows.reduce(
+      (total, patient) => total + patient.maxAdditionalAllowed,
+      0,
+    );
+    const requestedAdditional = patientAdditionalDiscountRows.reduce(
+      (total, patient) => total + patient.requestedAdditional,
+      0,
+    );
+    const effectiveAdditional = patientAdditionalDiscountRows.reduce(
+      (total, patient) => total + patient.effectiveAdditional,
+      0,
+    );
     const finalDiscount = baseDiscount + effectiveAdditional;
     const nonPayingTotal = creditTotal + freeTotal;
     const finalAmount = Math.max(0, subtotal - finalDiscount - nonPayingTotal);
@@ -1725,6 +1805,8 @@ function AppointmentDetailsScreen({
     return {
       subtotal,
       payingSubtotal,
+      creditSubtotal,
+      freeSubtotal,
       creditTotal,
       freeTotal,
       nonPayingTotal,
@@ -1736,53 +1818,101 @@ function AppointmentDetailsScreen({
       effectiveAdditional,
       finalDiscount,
       finalAmount,
+      patientAdditionalDiscountRows,
       payingTestCount: payingTests.length,
       creditTestCount: creditTests.length,
       freeTestCount: freeTests.length,
     };
   }, [
-    appliedAdditionalDiscount,
-    appliedAdditionalDiscountMode,
     completeBillingTests,
+    patientAdditionalDiscountMap,
   ]);
-  const preloadedAdditionalDiscount = toCurrencyNumber(
-    bookingAmountFields.additionalDiscount,
+  const patientSeedAdditionalDiscountTotal = useMemo(
+    () =>
+      (Array.isArray(selectedBooking?.patients) ? selectedBooking.patients : []).reduce(
+        (total, patient) =>
+          total +
+          toCurrencyNumber(
+            patient?.additionalDiscountAmount ||
+              patient?.additional_discount_amount ||
+              patient?.ad_dis ||
+              patient?.Ad_Dis,
+          ),
+        0,
+      ),
+    [selectedBooking?.patients],
   );
-  const preloadedBillingTotal = toCurrencyNumber(bookingAmountFields.subtotal);
-  const preloadedBaseDiscount = toCurrencyNumber(bookingAmountFields.baseDiscount);
-  const preloadedNetAmount = toCurrencyNumber(bookingAmountFields.totalAmount);
-  const hasLiveBillingSelectionState = patients.some(patient => {
-    const patientId = getPatientMutationId(patient);
-    return (
-      patientId &&
-      Object.prototype.hasOwnProperty.call(patientSelectedTestsMap, patientId)
+  const hasBackendPatientLevelAdditionalDiscount = useMemo(
+    () =>
+      (Array.isArray(selectedBooking?.patients) ? selectedBooking.patients : []).some(
+        patient =>
+          toCurrencyNumber(
+            patient?.additionalDiscountAmount ||
+              patient?.additional_discount_amount ||
+              patient?.ad_dis ||
+              patient?.Ad_Dis,
+          ) > 0,
+      ),
+    [selectedBooking?.patients],
+  );
+  const explicitPreloadedAdditionalDiscount = toCurrencyNumber(
+    bookingAmountFields.additionalDiscount ||
+      selectedBooking?.Ad_Dis ||
+      selectedBooking?.ad_dis ||
+      selectedBooking?.additional_discount ||
+      selectedBooking?.additionalDiscount ||
+      selectedBooking?.additional_discount_amount ||
+      selectedBooking?.additionalDiscountAmount ||
+      selectedBooking?.billing_summary?.Ad_Dis ||
+      selectedBooking?.billing_summary?.ad_dis ||
+      selectedBooking?.billingSummary?.Ad_Dis ||
+      selectedBooking?.billingSummary?.ad_dis ||
+      patientSeedAdditionalDiscountTotal,
+  );
+  const derivedPreloadedAdditionalDiscount = Math.max(
+    0,
+    toCurrencyNumber(bookingAmountFields.baseDiscount) -
+      localBillingSummary.baseDiscount,
+  );
+  const preloadedAdditionalDiscount =
+    explicitPreloadedAdditionalDiscount > 0
+      ? explicitPreloadedAdditionalDiscount
+      : derivedPreloadedAdditionalDiscount;
+  const hasPatientAdditionalDiscountEntry =
+    localBillingSummary.patientAdditionalDiscountRows.some(
+      patient => patient.requestedAdditional > 0,
     );
-  });
-  const shouldUsePreloadedBillingDisplay = !hasLiveBillingSelectionState;
-  const completeBillingTotal =
-    shouldUsePreloadedBillingDisplay && preloadedBillingTotal > 0
-      ? preloadedBillingTotal
-      : localBillingSummary.subtotal;
-  const completeAdditionalDiscountAmount = localBillingSummary.effectiveAdditional;
-  const calculatedBaseDiscountAmount =
-    shouldUsePreloadedBillingDisplay && preloadedBaseDiscount > 0
-      ? Math.max(0, preloadedBaseDiscount - completeAdditionalDiscountAmount)
-      : localBillingSummary.baseDiscount;
-  const completeBaseDiscountAmount = calculatedBaseDiscountAmount;
+  const patientAdditionalDiscountUiRows = useMemo(
+    () =>
+      localBillingSummary.patientAdditionalDiscountRows.map(patient => ({
+        ...patient,
+        enteredAdditional:
+          patientAdditionalDiscountDraftMap[patient.patientId] !== undefined
+            ? patientAdditionalDiscountDraftMap[patient.patientId]
+            : patient.enteredAdditional,
+      })),
+    [
+      localBillingSummary.patientAdditionalDiscountRows,
+      patientAdditionalDiscountDraftMap,
+    ],
+  );
+  const completeBillingTotal = localBillingSummary.subtotal;
+  const completeAdditionalDiscountAmount =
+    hasBackendPatientLevelAdditionalDiscount
+      ? localBillingSummary.effectiveAdditional
+      : preloadedAdditionalDiscount > 0 && !hasPatientAdditionalDiscountEntry
+      ? preloadedAdditionalDiscount
+      : localBillingSummary.effectiveAdditional;
+  const completeBaseDiscountAmount = localBillingSummary.baseDiscount;
   const completeDiscountAmount =
     completeBaseDiscountAmount + completeAdditionalDiscountAmount;
   const completeCreditAmount = localBillingSummary.creditTotal;
-  const completeNetAmount =
-    shouldUsePreloadedBillingDisplay &&
-    preloadedNetAmount > 0 &&
-    completeAdditionalDiscountAmount === preloadedAdditionalDiscount
-      ? preloadedNetAmount
-      : Math.max(
-          0,
-          completeBillingTotal -
-            completeDiscountAmount -
-            localBillingSummary.nonPayingTotal,
-        );
+  const completeNetAmount = Math.max(
+    0,
+    completeBillingTotal -
+      completeDiscountAmount -
+      localBillingSummary.nonPayingTotal,
+  );
   const completeAmountReceived = useMemo(
     () =>
       completePayments.reduce(
@@ -1837,44 +1967,16 @@ function AppointmentDetailsScreen({
     pendingPaymentPatientId,
     shouldCollectPendingPaymentPatient,
   ]);
-  useEffect(() => {
-    if (!appliedAdditionalDiscountMode) {
-      return;
-    }
-
-    if (
-      localBillingSummary.requestedAdditional <=
-      localBillingSummary.maxAdditionalAllowed
-    ) {
-      additionalDiscountLimitAlertKeyRef.current = '';
-      return;
-    }
-
-    const message = `You can apply additional discount up to ${localBillingSummary.maxAdditionalAllowed.toFixed(
-      2,
-    )} only. Current applied discount ${localBillingSummary.requestedAdditional.toFixed(
-      2,
-    )} has been removed.`;
-
-    setAppliedAdditionalDiscountMode('');
-    setAppliedAdditionalDiscount('');
-
-    if (additionalDiscountLimitAlertKeyRef.current !== message) {
-      additionalDiscountLimitAlertKeyRef.current = message;
-      showAppAlert(message);
-    }
-  }, [
-    appliedAdditionalDiscountMode,
-    localBillingSummary.maxAdditionalAllowed,
-    localBillingSummary.requestedAdditional,
-    showAppAlert,
-  ]);
 
   const completeBookingPayload = useMemo(() => {
-    const additionalDiscountValue =
-      appliedAdditionalDiscountMode === 'percent'
-        ? toCurrencyNumber(appliedAdditionalDiscount)
-        : completeAdditionalDiscountAmount;
+    const patientAdditionalDiscountMapForPayload =
+      localBillingSummary.patientAdditionalDiscountRows.reduce(
+        (accumulator, patientDiscount) => ({
+          ...accumulator,
+          [patientDiscount.patientId]: patientDiscount,
+        }),
+        {},
+      );
     const testsPayload = patients
       .map(patient => {
         const patientId = getPatientMutationId(patient);
@@ -1973,10 +2075,18 @@ function AppointmentDetailsScreen({
         const testBookingStatus =
           patientTestBookingStatusMap[patientId] ||
           DEFAULT_TEST_BOOKING_STATUS;
+        const patientAdditionalDiscount =
+          patientAdditionalDiscountMapForPayload[patientId] || null;
 
         return {
-        patient_id: payloadPatientId,
-        test_booking_status: testBookingStatus,
+          patient_id: payloadPatientId,
+          test_booking_status: testBookingStatus,
+          additional_discount_mode:
+            patientAdditionalDiscount?.effectiveAdditional > 0 ? 'amount' : '',
+          additional_discount_value:
+            patientAdditionalDiscount?.effectiveAdditional || 0,
+          requested_additional_discount_value:
+            patientAdditionalDiscount?.requestedAdditional || 0,
           report_delivery: normalizeReportDeliveryValues(
             patientReportCourierMap[patientId],
           ).join(','),
@@ -2022,8 +2132,9 @@ function AppointmentDetailsScreen({
     );
 
     return {
-      additional_discount_mode: appliedAdditionalDiscountMode || 'amount',
-      additional_discount_value: additionalDiscountValue,
+      additional_discount_mode:
+        completeAdditionalDiscountAmount > 0 ? 'amount' : '',
+      additional_discount_value: completeAdditionalDiscountAmount,
       amount_received: completeAmountReceived,
       pending_amount: pendingPaymentAmount,
       pending_payment_patient_option_id: pendingPaymentPatient?.id || '',
@@ -2064,12 +2175,21 @@ function AppointmentDetailsScreen({
         .filter(payment => payment.documents.length),
       tests_payload: testsPayload,
       pending_child_tests: pendingChildTestsPayload,
+      patient_additional_discounts: localBillingSummary.patientAdditionalDiscountRows
+        .filter(item => item.requestedAdditional > 0 || item.effectiveAdditional > 0)
+        .map(item => ({
+          patient_id: item.patientId,
+          patient_name: item.patientName,
+          additional_discount_mode: 'amount',
+          requested_additional_discount_value: item.requestedAdditional,
+          additional_discount_value: item.effectiveAdditional,
+          max_additional_discount_allowed: item.maxAdditionalAllowed,
+        })),
       patient_documents_map: patientCompletionDocumentsMap,
       manual_slip_documents_map: patientManualSlipDocumentsMap,
+      patient_cghs_documents_map: patientCghsDocumentsMap,
     };
   }, [
-    appliedAdditionalDiscount,
-    appliedAdditionalDiscountMode,
     completeBookingPatientOptions,
     completePaymentPatientOptions,
     completeAdditionalDiscountAmount,
@@ -2080,6 +2200,7 @@ function AppointmentDetailsScreen({
     linkedAppointmentDate,
     linkedAppointmentTimeSlot,
     patientCompletionDocumentsMap,
+    patientCghsDocumentsMap,
     patientManualSlipDocumentsMap,
     patientReportCourierMap,
     patientReportScheduleMap,
@@ -2094,6 +2215,7 @@ function AppointmentDetailsScreen({
     sampleCollectionEasyToughPatientIds,
     samplePickCount,
     samplePickPatientIds,
+    localBillingSummary.patientAdditionalDiscountRows,
   ]);
 
   const rawBookingStatusCode = Number(selectedBooking.bookingStatusCode || 0);
@@ -2119,6 +2241,12 @@ function AppointmentDetailsScreen({
     : isPartialCompleteBooking
     ? 'This booking is partially completed. No further action is available.'
     : 'This booking has already been completed. No further action is available.';
+  const showBookingStartRequiredAlert = useCallback(() => {
+    showAppAlert(
+      'Start Booking First',
+      'Please start the booking before using this action.',
+    );
+  }, [showAppAlert]);
   const deferredPanelCompanySearch = useDeferredValue(panelCompanySearch);
   const deferredPatientFormPanelCompanySearch = useDeferredValue(
     patientForm.panelCompany,
@@ -2450,11 +2578,21 @@ function AppointmentDetailsScreen({
   };
 
   const handleAddPatientPress = () => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     resetAddPatientForm();
     setIsAddPatientModalVisible(true);
   };
 
   const handleEditPatientPress = patient => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     const title = normalizeOptionValue(
       patient.title,
       TITLE_OPTIONS,
@@ -2508,6 +2646,11 @@ function AppointmentDetailsScreen({
   };
 
   const handleUseLinkedPatient = async () => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     if (!selectedLinkedPatient) {
       showAppAlert(
         'Select Linked Patient',
@@ -2543,12 +2686,22 @@ function AppointmentDetailsScreen({
   }, []);
 
   const handlePatientCancelBooking = patient => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     resetCancelForm();
     setCancelTargetPatient(patient);
     setIsCancelBookingModalVisible(true);
   };
 
   const handleReportCourierChange = (patient, nextValue) => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     const patientId = patient?.id || getPatientMutationId(patient);
 
     if (!patientId) {
@@ -2572,6 +2725,11 @@ function AppointmentDetailsScreen({
   };
 
   const handleReportScheduleChange = (patient, nextValue) => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     const patientId = patient?.id || getPatientMutationId(patient);
 
     if (!patientId) {
@@ -2587,6 +2745,11 @@ function AppointmentDetailsScreen({
   };
 
   const handleTestBookingStatusChange = (patient, nextValue) => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     const patientId = getPatientMutationId(patient);
 
     if (!patientId) {
@@ -2600,6 +2763,11 @@ function AppointmentDetailsScreen({
   };
 
   const handlePatientCghsEnabledChange = (patient, isEnabled) => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     const patientId = getPatientMutationId(patient);
 
     if (!patientId) {
@@ -2613,6 +2781,11 @@ function AppointmentDetailsScreen({
   };
 
   const handlePatientCghsIdChange = (patient, nextValue) => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     const patientId = getPatientMutationId(patient);
 
     if (!patientId) {
@@ -2626,6 +2799,11 @@ function AppointmentDetailsScreen({
   };
 
   const handlePatientCghsDocumentsChange = (patient, sectionKey, documents) => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     const patientId = getPatientMutationId(patient);
 
     if (!patientId || !sectionKey) {
@@ -2642,6 +2820,11 @@ function AppointmentDetailsScreen({
   };
 
   const handlePatientPaymentProofDocumentsChange = useCallback((patient, documents) => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     const patientId = getPatientMutationId(patient);
 
     if (!patientId) {
@@ -2661,9 +2844,14 @@ function AppointmentDetailsScreen({
         [patientId]: nextDocuments,
       };
     });
-  }, []);
+  }, [canUsePatientActions, showBookingStartRequiredAlert]);
 
   const handlePatientManualSlipDocumentsChange = useCallback((patient, documents) => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     const patientId = getPatientMutationId(patient);
 
     if (!patientId) {
@@ -2674,7 +2862,7 @@ function AppointmentDetailsScreen({
       ...previousMap,
       [patientId]: Array.isArray(documents) ? documents : EMPTY_UPLOAD_DOCUMENTS,
     }));
-  }, []);
+  }, [canUsePatientActions, showBookingStartRequiredAlert]);
 
   const openCancelBookingModal = () => {
     resetCancelForm();
@@ -2700,7 +2888,13 @@ function AppointmentDetailsScreen({
   };
 
   const openCompleteBookingScreen = () => {
+    if (!shouldShowProgressActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     setIsCompleteBookingScreenVisible(true);
+    onBookingScreenChange?.('billing-summary');
     setIsLinkedAppointmentCalendarVisible(false);
     setIsLinkedAppointmentTimeSlotSelectVisible(false);
 
@@ -2716,9 +2910,23 @@ function AppointmentDetailsScreen({
     }
 
     setIsCompleteBookingScreenVisible(false);
+    onBookingScreenChange?.('details');
     setIsLinkedAppointmentCalendarVisible(false);
     setIsLinkedAppointmentTimeSlotSelectVisible(false);
   };
+
+  useEffect(() => {
+    if (
+      selectedBookingScreen === 'billing-summary' ||
+      !isCompleteBookingScreenVisible
+    ) {
+      return;
+    }
+
+    setIsCompleteBookingScreenVisible(false);
+    setIsLinkedAppointmentCalendarVisible(false);
+    setIsLinkedAppointmentTimeSlotSelectVisible(false);
+  }, [isCompleteBookingScreenVisible, selectedBookingScreen]);
 
   const handleLinkedAppointmentChange = useCallback(isSelected => {
     setIsLinkedAppointmentSelected(isSelected);
@@ -2817,78 +3025,93 @@ function AppointmentDetailsScreen({
     }
   };
 
-  const validateAdditionalDiscountLimit = ({
-    mode = completeAdditionalDiscountMode,
-    value = completeAdditionalDiscount,
-    showAlert = true,
-  } = {}) => {
-    if (!mode) {
+  const validatePatientAdditionalDiscounts = useCallback(() => {
+    const invalidDiscount = localBillingSummary.patientAdditionalDiscountRows.find(
+      item =>
+        item.requestedAdditional > 0 &&
+        item.requestedAdditional > item.maxAdditionalAllowed,
+    );
+
+    if (!invalidDiscount) {
+      additionalDiscountLimitAlertKeyRef.current = '';
       return true;
     }
 
-    const enteredValue = toCurrencyNumber(value);
-    const enteredAmount =
-      mode === 'percent'
-        ? (localBillingSummary.subtotal * enteredValue) / 100
-        : enteredValue;
+    const message = `${invalidDiscount.patientName} ke liye additional discount max Rs. ${invalidDiscount.maxAdditionalAllowed.toFixed(
+      2,
+    )} tak hi allowed hai.`;
+    if (additionalDiscountLimitAlertKeyRef.current !== message) {
+      additionalDiscountLimitAlertKeyRef.current = message;
+      showAppAlert('Additional Discount Limit', message);
+    }
+    return false;
+  }, [localBillingSummary.patientAdditionalDiscountRows, showAppAlert]);
 
-    if (enteredAmount > localBillingSummary.maxAdditionalAllowed) {
-      if (showAlert) {
-        const message = `You can apply additional discount up to ${localBillingSummary.maxAdditionalAllowed.toFixed(
-          2,
-        )} only. You have entered ${enteredAmount.toFixed(2)}.`;
-        if (additionalDiscountLimitAlertKeyRef.current !== message) {
-          additionalDiscountLimitAlertKeyRef.current = message;
-          showAppAlert(message);
-        }
+  const handlePatientAdditionalDiscountChange = useCallback(
+    (patientId, nextValue) => {
+      const normalizedPatientId = normalizeFormText(patientId);
+      if (!normalizedPatientId) {
+        return;
       }
-      return false;
-    }
 
-    additionalDiscountLimitAlertKeyRef.current = '';
-    return true;
-  };
+      const sanitizedValue = String(nextValue || '').replace(/[^0-9.]/g, '');
+      setPatientAdditionalDiscountDraftMap(previousMap => ({
+        ...previousMap,
+        [normalizedPatientId]: sanitizedValue,
+      }));
+    },
+    [],
+  );
+  const handleApplyPatientAdditionalDiscount = useCallback(
+    patientId => {
+      const normalizedPatientId = normalizeFormText(patientId);
+      if (!normalizedPatientId) {
+        return;
+      }
 
-  const handleApplyAdditionalDiscount = () => {
-    if (
-      !validateAdditionalDiscountLimit({
-        mode: completeAdditionalDiscountMode,
-        value: completeAdditionalDiscount,
-      })
-    ) {
-      return;
-    }
+      const patientDiscount = patientAdditionalDiscountUiRows.find(
+        item => item.patientId === normalizedPatientId,
+      );
+      if (!patientDiscount) {
+        return;
+      }
 
-    setAppliedAdditionalDiscountMode(completeAdditionalDiscountMode);
-    setAppliedAdditionalDiscount(completeAdditionalDiscount);
-    showAppAlert(
-      'Additional Discount Applied',
-      `Additional discount ${completeAdditionalDiscountMode === 'percent' ? `${completeAdditionalDiscount || 0}%` : `Rs. ${toCurrencyNumber(completeAdditionalDiscount).toFixed(2)}`} has been applied.`,
-    );
-  };
+      const requestedAdditional = toCurrencyNumber(
+        patientAdditionalDiscountDraftMap[normalizedPatientId],
+      );
 
-  const handleAdditionalDiscountToggle = () => {
-    if (localBillingSummary.payingTestCount <= 0) {
-      return;
-    }
+      if (requestedAdditional > patientDiscount.maxAdditionalAllowed) {
+        const message = `${patientDiscount.patientName} ke liye additional discount max Rs. ${patientDiscount.maxAdditionalAllowed.toFixed(
+          2,
+        )} tak hi allowed hai.`;
+        additionalDiscountLimitAlertKeyRef.current = message;
+        showAppAlert('Additional Discount Limit', message);
+        return;
+      }
 
-    if (isAdditionalDiscountEnabled) {
-      setIsAdditionalDiscountEnabled(false);
-      return;
-    }
-
-    const currentAdditionalDiscount = completeAdditionalDiscountAmount;
-    const currentAdditionalDiscountText =
-      currentAdditionalDiscount > 0 ? String(currentAdditionalDiscount) : '';
-
-    setCompleteAdditionalDiscountMode('amount');
-    setCompleteAdditionalDiscount(currentAdditionalDiscountText);
-    setAppliedAdditionalDiscountMode(
-      currentAdditionalDiscount > 0 ? 'amount' : '',
-    );
-    setAppliedAdditionalDiscount(currentAdditionalDiscountText);
-    setIsAdditionalDiscountEnabled(true);
-  };
+      additionalDiscountLimitAlertKeyRef.current = '';
+      setPatientAdditionalDiscountDraftMap(previousMap => ({
+        ...previousMap,
+        [normalizedPatientId]:
+          requestedAdditional > 0
+            ? String(patientAdditionalDiscountDraftMap[normalizedPatientId] || '')
+            : '',
+      }));
+      setPatientAdditionalDiscountMap(previousMap => ({
+        ...previousMap,
+        [normalizedPatientId]:
+          requestedAdditional > 0
+            ? String(patientAdditionalDiscountDraftMap[normalizedPatientId] || '')
+            : '',
+      }));
+    },
+    [
+      patientAdditionalDiscountDraftMap,
+      patientAdditionalDiscountUiRows,
+      setPatientAdditionalDiscountMap,
+      showAppAlert,
+    ],
+  );
 
   const confirmCompleteBooking = async () => {
     if (!samplePickCount) {
@@ -3130,12 +3353,7 @@ function AppointmentDetailsScreen({
       return;
     }
 
-    if (
-      !validateAdditionalDiscountLimit({
-        mode: appliedAdditionalDiscountMode,
-        value: appliedAdditionalDiscount,
-      })
-    ) {
+    if (!validatePatientAdditionalDiscounts()) {
       return;
     }
 
@@ -3157,7 +3375,7 @@ function AppointmentDetailsScreen({
         `Amount received: Rs. ${toCurrencyNumber(completeAmountReceived).toFixed(2)}`,
         `Pending amount: Rs. ${pendingPaymentAmount.toFixed(2)}`,
         `Extra amount: Rs. ${extraPaymentAmount.toFixed(2)}`,
-        `Additional discount: Rs. ${completeAdditionalDiscountAmount.toFixed(2)}`,
+        `Additional discount total: Rs. ${completeAdditionalDiscountAmount.toFixed(2)}`,
       ].join('\n'),
     );
   };
@@ -3463,9 +3681,10 @@ function AppointmentDetailsScreen({
     [showAppAlert],
   );
 
-  const closePanelCompanyModal = () => {
+  const closePanelCompanyModal = useCallback(() => {
     setIsPanelCompanyModalVisible(false);
     setIsPanelCatalogVisible(false);
+    onBookingScreenChange?.('details');
     setPanelCatalogGroups([]);
     setSelectedCatalogGroup(null);
     setSelectedCatalogSubgroup(null);
@@ -3475,7 +3694,23 @@ function AppointmentDetailsScreen({
     setSelectedPanelCompany(null);
     setPanelCompanySearch('');
     setCatalogVisibleCount(CATALOG_ITEM_PAGE_SIZE);
-  };
+  }, [onBookingScreenChange]);
+
+  useEffect(() => {
+    if (
+      selectedBookingScreen === 'panel-company' ||
+      (!isPanelCompanyModalVisible && !isPanelCatalogVisible)
+    ) {
+      return;
+    }
+
+    closePanelCompanyModal();
+  }, [
+    isPanelCatalogVisible,
+    isPanelCompanyModalVisible,
+    closePanelCompanyModal,
+    selectedBookingScreen,
+  ]);
 
   const openPanelCompanyCatalog = useCallback(
     async ({patient, panelCompany}) => {
@@ -3509,9 +3744,10 @@ function AppointmentDetailsScreen({
       setCatalogVisibleCount(CATALOG_ITEM_PAGE_SIZE);
       setIsPanelCompanyModalVisible(false);
       setIsPanelCatalogVisible(true);
+      onBookingScreenChange?.('panel-company');
       return true;
     },
-    [onPanelCompanySelect, showAppAlert],
+    [onBookingScreenChange, onPanelCompanySelect, showAppAlert],
   );
 
   const handleSelectPanelCompany = async panelCompany => {
@@ -3576,6 +3812,11 @@ function AppointmentDetailsScreen({
   };
 
   const openPanelCompanyTests = async ({patient, panelCompany}) => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     confirmSampleCollectionReset(patient, async () => {
     const resolvedPanelCompany =
       await resolvePanelCompanyChargeMode(panelCompany);
@@ -3602,6 +3843,11 @@ function AppointmentDetailsScreen({
   };
 
   const handlePatientAddPanelCompany = async patient => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     confirmSampleCollectionReset(patient, async () => {
     setPanelFlowMode('panel-only');
     setSelectedPanelPatient(patient);
@@ -3669,6 +3915,7 @@ function AppointmentDetailsScreen({
     setCatalogVisibleCount(CATALOG_ITEM_PAGE_SIZE);
     setIsPanelCatalogVisible(false);
     setIsPanelCompanyModalVisible(true);
+    onBookingScreenChange?.('panel-company');
     });
   };
 
@@ -3709,6 +3956,11 @@ function AppointmentDetailsScreen({
   };
 
   const handlePrimaryPanelCompanyPress = async patient => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     const apiMatchedCompanies = await ensureApiPanelCompanyMatch(patient);
 
     if (!apiMatchedCompanies.length) {
@@ -3733,6 +3985,11 @@ function AppointmentDetailsScreen({
   };
 
   const handleRemovePatientPanelCompany = (patient, panelCompanyToRemove) => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     confirmRemovePanelCompany({
       patient,
       panelCompany: panelCompanyToRemove,
@@ -3839,6 +4096,11 @@ function AppointmentDetailsScreen({
 
   const handleRemoveSelectedTestWithSampleReset = useCallback(
     payload => {
+      if (!canUsePatientActions) {
+        showBookingStartRequiredAlert();
+        return;
+      }
+
       const patientId = getPatientMutationId(payload?.patient);
       const patientTests = patientId ? patientSelectedTestsMap[patientId] || [] : [];
       const selectedTest = patientTests.find(test => test?.key === payload?.testKey);
@@ -3855,7 +4117,13 @@ function AppointmentDetailsScreen({
         },
       });
     },
-    [confirmRemoveSelectedTest, onRemovePatientSelectedTest, patientSelectedTestsMap],
+    [
+      canUsePatientActions,
+      confirmRemoveSelectedTest,
+      onRemovePatientSelectedTest,
+      patientSelectedTestsMap,
+      showBookingStartRequiredAlert,
+    ],
   );
 
   const calendarDays = getCalendarDays(dobCalendarMonth);
@@ -4278,6 +4546,11 @@ function AppointmentDetailsScreen({
   }
 
   const handleSubmitAddPatient = async () => {
+    if (!canUsePatientActions) {
+      showBookingStartRequiredAlert();
+      return;
+    }
+
     const fullName = patientForm.fullName.trim();
     const primaryMobile = patientForm.primaryMobile.trim();
     const alternateMobile = patientForm.alternateMobile.trim();
@@ -4431,8 +4704,7 @@ function AppointmentDetailsScreen({
           completeNetAmount={completeNetAmount}
           localBillingSummary={localBillingSummary}
           isAdditionalDiscountEnabled={isAdditionalDiscountEnabled}
-          completeAdditionalDiscountMode={completeAdditionalDiscountMode}
-          completeAdditionalDiscount={completeAdditionalDiscount}
+          patientAdditionalDiscountRows={patientAdditionalDiscountUiRows}
           completePayments={completePayments}
           completePaymentModeOptions={COMPLETE_PAYMENT_MODE_OPTIONS}
           paymentPatientOptions={completeBookingPatientOptions}
@@ -4441,10 +4713,12 @@ function AppointmentDetailsScreen({
           pendingPaymentPatientId={pendingPaymentPatientId}
           shouldCollectPendingPaymentPatient={shouldCollectPendingPaymentPatient}
           handlePendingPaymentPatientSelect={handlePendingPaymentPatientSelect}
-          handleAdditionalDiscountToggle={handleAdditionalDiscountToggle}
-          setCompleteAdditionalDiscountMode={setCompleteAdditionalDiscountMode}
-          setCompleteAdditionalDiscount={setCompleteAdditionalDiscount}
-          handleApplyAdditionalDiscount={handleApplyAdditionalDiscount}
+          handlePatientAdditionalDiscountChange={
+            handlePatientAdditionalDiscountChange
+          }
+          handleApplyPatientAdditionalDiscount={
+            handleApplyPatientAdditionalDiscount
+          }
           handleCompletePaymentChange={handleCompletePaymentChange}
           handleRemoveCompletePayment={handleRemoveCompletePayment}
           handleAddCompletePayment={handleAddCompletePayment}

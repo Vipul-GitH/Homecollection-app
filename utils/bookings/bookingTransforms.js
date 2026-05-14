@@ -728,6 +728,14 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
         ),
         gender: toDisplayString(patient?.gender) || 'N/A',
         tag: toDisplayString(patient?.tag) || 'N/A',
+        additionalDiscountAmount: toNumberValue(
+          firstNonEmptyValue(
+            patient?.additional_discount_amount,
+            patient?.additionalDiscountAmount,
+            patient?.ad_dis,
+            patient?.Ad_Dis,
+          ),
+        ),
         tests: normalizePatientTests(
           patient?.tests || patient?.test_list || booking?.tests,
         ),

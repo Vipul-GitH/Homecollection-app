@@ -15,7 +15,7 @@ const getPaymentDueText = booking => {
 const getBookingTags = booking => {
   const tags = Array.isArray(booking.tags) ? booking.tags : [];
 
-  return tags.slice(0, 2);
+  return tags;
 };
 
 const getStatusTone = status => {
@@ -107,10 +107,23 @@ function QueueMetaRow({styles, icon, label, value, active = false}) {
         style={[
           styles.assignedQueueMetaText,
           active && styles.assignedQueueMetaTextActive,
-        ]}
-        numberOfLines={1}>
-        {label ? `${label}: ` : ''}
-        {value}
+        ]}>
+        {label ? (
+          <Text
+            style={[
+              styles.assignedQueueMetaLabel,
+              active && styles.assignedQueueMetaLabelActive,
+            ]}>
+            {label}:{' '}
+          </Text>
+        ) : null}
+        <Text
+          style={[
+            styles.assignedQueueMetaValue,
+            active && styles.assignedQueueMetaValueActive,
+          ]}>
+          {value}
+        </Text>
       </Text>
     </View>
   );
@@ -227,6 +240,15 @@ function AssignedAppointmentsScreen({
                   value={activeBooking.patientCount || activeBooking.patients?.length || 1}
                   active
                 />
+                {activeBooking.patientNames ? (
+                  <QueueMetaRow
+                    styles={styles}
+                    icon="person-outline"
+                    label="Patient Names"
+                    value={activeBooking.patientNames}
+                    active
+                  />
+                ) : null}
               </View>
               <View style={getActiveStatusChipStyle(styles, activeBooking.status)}>
                 <Text style={getActiveStatusTextStyle(styles, activeBooking.status)}>
@@ -309,17 +331,21 @@ function AssignedAppointmentsScreen({
                     {dueText ? (
                       <Text style={styles.assignedQueueDueText}>{dueText}</Text>
                     ) : null}
-                  </View>
 
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    style={styles.assignedQueueOpenButton}
-                    onPress={() => onAssignedViewTests(booking)}
-                    disabled={loadingAssignedBookingId === booking.id}>
-                    <Text style={styles.assignedQueueOpenButtonText}>
-                      {loadingAssignedBookingId === booking.id ? '...' : 'OPEN'}
-                    </Text>
-                  </TouchableOpacity>
+                    <View style={styles.assignedQueueActionRow}>
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        style={styles.assignedQueueOpenButton}
+                        onPress={() => onAssignedViewTests(booking)}
+                        disabled={loadingAssignedBookingId === booking.id}>
+                        <Text style={styles.assignedQueueOpenButtonText}>
+                          {loadingAssignedBookingId === booking.id
+                            ? 'OPENING...'
+                            : 'OPEN'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
                 </View>
               );
             })

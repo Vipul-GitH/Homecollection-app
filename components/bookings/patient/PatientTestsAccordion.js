@@ -86,8 +86,13 @@ const getChargeModeLabel = company => {
 
 const getTestPrice = test =>
   (() => {
+    const resolvedCharge = Number(test?.charge || 0) || 0;
+    if (resolvedCharge > 0) {
+      return resolvedCharge;
+    }
+
     const mrp = Number(test?.mrp || test?.amount || 0) || 0;
-    const charge = Number(test?.charge || 0) || 0;
+    const charge = resolvedCharge;
     const baseMrp = mrp || charge;
     const discountPercent =
       Number(

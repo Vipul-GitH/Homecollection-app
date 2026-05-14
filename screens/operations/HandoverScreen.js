@@ -11,7 +11,12 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 import {BRAND} from '../../styles/appStyles';
-import {getCachedBookingDetailsMap} from '../../services/storage/offlineBookingStorage';
+import {
+  getCachedBookingDetailsMap,
+  getCachedCompletedBookings,
+  getCachedHandoverState,
+  persistCachedHandoverState,
+} from '../../services/storage/offlineBookingStorage';
 
 const toStableValue = value =>
   value === null || value === undefined ? '' : String(value).trim();
@@ -25,6 +30,13 @@ const getPatientTubeNames = patient =>
     )
     .filter(Boolean);
 
+const getTubeSelectionKey = ({bookingId, patientId, tubeName}) =>
+  [
+    toStableValue(bookingId),
+    toStableValue(patientId),
+    toStableValue(tubeName).toLowerCase(),
+  ].join('|');
+
 export default function HandoverScreen({
   styles,
   completedAppointments = [],
@@ -34,6 +46,8 @@ export default function HandoverScreen({
 }) {
   const [expandedBookings, setExpandedBookings] = useState({});
   const [cachedDetailsMap, setCachedDetailsMap] = useState({});
+  const [cachedCompletedBookings, setCachedCompletedBookings] = useState([]);
+  const [handoverState, setHandoverState] = useState({});
   const [selectedTubeKeys, setSelectedTubeKeys] = useState({});
   const [handoverTo, setHandoverTo] = useState('');
   const [riderName, setRiderName] = useState('');
@@ -41,11 +55,25 @@ export default function HandoverScreen({
   useEffect(() => {
     let isMounted = true;
 
-    getCachedBookingDetailsMap()
-      .then(detailsMap => {
-        if (isMounted) {
-          setCachedDetailsMap(detailsMap || {});
+    Promise.all([
+      getCachedBookingDetailsMap(),
+      getCachedCompletedBookings(),
+      getCachedHandoverState(),
+    ])
+      .then(([detailsMap, localCompletedBookings, localHandoverState]) => {
+        if (!isMounted) {
+          return;
         }
+
+        setCachedDetailsMap(detailsMap || {});
+        setCachedCompletedBookings(
+          Array.isArray(localCompletedBookings) ? localCompletedBookings : [],
+        );
+        setHandoverState(
+          localHandoverState && typeof localHandoverState === 'object'
+            ? localHandoverState
+            : {},
+        );
       })
       .catch(() => {});
 
@@ -54,15 +82,49 @@ export default function HandoverScreen({
     };
   }, [completedAppointments]);
 
-  const handoverBookings = useMemo(
-    () =>
-      completedAppointments
-        .map(booking => cachedDetailsMap[String(booking?.id)] || booking)
-        .filter(
-          booking => [3, 5].includes(Number(booking?.bookingStatusCode || 0)),
-        ),
-    [cachedDetailsMap, completedAppointments],
-  );
+  const handoverBookings = useMemo(() => {
+    const sourceBookings = (
+      completedAppointments.length ? completedAppointments : cachedCompletedBookings
+    )
+      .map(booking => cachedDetailsMap[String(booking?.id)] || booking)
+      .filter(booking => [3, 5].includes(Number(booking?.bookingStatusCode || 0)));
+
+    return sourceBookings
+      .map(booking => {
+        const patients = (Array.isArray(booking?.patients) ? booking.patients : [])
+          .map((patient, index) => {
+            const patientKey =
+              patient?.bookingPatientId || patient?.patientId || patient?.id || index;
+            const pendingTubeNames = getPatientTubeNames(patient).filter(tubeName => {
+              const selectionKey = getTubeSelectionKey({
+                bookingId: booking?.id,
+                patientId: patientKey,
+                tubeName,
+              });
+
+              return !handoverState[selectionKey];
+            });
+
+            return {
+              ...patient,
+              handoverPatientKey: patientKey,
+              tubes: pendingTubeNames,
+            };
+          })
+          .filter(patient => Array.isArray(patient?.tubes) && patient.tubes.length);
+
+        return {
+          ...booking,
+          patients,
+        };
+      })
+      .filter(booking => booking.patients.length);
+  }, [
+    cachedCompletedBookings,
+    cachedDetailsMap,
+    completedAppointments,
+    handoverState,
+  ]);
   const handoverSummary = useMemo(() => {
     const selectedEntries = Object.values(selectedTubeKeys).filter(Boolean);
     const bookingIds = new Set();
@@ -102,11 +164,11 @@ export default function HandoverScreen({
     patientName,
     tubeName,
   }) => {
-    const selectionKey = [
-      toStableValue(bookingId),
-      toStableValue(patientId),
-      toStableValue(tubeName).toLowerCase(),
-    ].join('|');
+    const selectionKey = getTubeSelectionKey({
+      bookingId,
+      patientId,
+      tubeName,
+    });
 
     setSelectedTubeKeys(previousState => {
       if (previousState[selectionKey]) {
@@ -152,18 +214,40 @@ export default function HandoverScreen({
         {text: 'Cancel', style: 'cancel'},
         {
           text: 'Save',
-          onPress: () => {
+          onPress: async () => {
+            const nextHandoverState = {
+              ...handoverState,
+            };
+
+            Object.entries(selectedTubeKeys).forEach(([selectionKey, selection]) => {
+              nextHandoverState[selectionKey] = {
+                ...selection,
+                handoverTo,
+                riderName: handoverTo === 'rider' ? toStableValue(riderName) : '',
+                handedOverAt: new Date().toISOString(),
+              };
+            });
+
+            setHandoverState(nextHandoverState);
+            await persistCachedHandoverState(nextHandoverState);
             setSelectedTubeKeys({});
             setHandoverTo('');
             setRiderName('');
-            Alert.alert('Handover Saved', 'Handover summary has been saved locally for now.');
+            Alert.alert(
+              'Handover Saved',
+              'Selected sample tubes have been saved locally and removed from pending handover.',
+            );
           },
         },
       ],
     );
   };
 
-  if (isLoadingCompletedAppointments && !handoverBookings.length) {
+  if (
+    isLoadingCompletedAppointments &&
+    !handoverBookings.length &&
+    !cachedCompletedBookings.length
+  ) {
     return (
       <View style={styles.comingSoonCard}>
         <ActivityIndicator color={BRAND.primaryStrong} size="small" />
@@ -172,7 +256,11 @@ export default function HandoverScreen({
     );
   }
 
-  if (completedAppointmentsError && !handoverBookings.length) {
+  if (
+    completedAppointmentsError &&
+    !handoverBookings.length &&
+    !cachedCompletedBookings.length
+  ) {
     return (
       <View style={styles.comingSoonCard}>
         <View style={styles.comingSoonIconWrap}>
@@ -269,8 +357,7 @@ export default function HandoverScreen({
                   ]
                     .filter(Boolean)
                     .join(' | ');
-                  const patientKey =
-                    patient?.bookingPatientId || patient?.patientId || patient?.id || index;
+                  const patientKey = patient?.handoverPatientKey || index;
 
                   return (
                     <View
@@ -294,11 +381,11 @@ export default function HandoverScreen({
                       {tubeNames.length ? (
                         <View style={styles.handoverTubeRow}>
                           {tubeNames.map(tubeName => {
-                            const selectionKey = [
-                              toStableValue(booking?.id),
-                              toStableValue(patientKey),
-                              toStableValue(tubeName).toLowerCase(),
-                            ].join('|');
+                            const selectionKey = getTubeSelectionKey({
+                              bookingId: booking?.id,
+                              patientId: patientKey,
+                              tubeName,
+                            });
                             const isSelected = Boolean(selectedTubeKeys[selectionKey]);
 
                             return (

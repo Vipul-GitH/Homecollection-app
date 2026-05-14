@@ -18,10 +18,60 @@ export const getStandardDiscountPercent = test =>
       test?.PercentageStandard,
   );
 
-export const getDisplayTestPrice = test => {
+const getBillingChargeMode = source =>
+  normalizeFormText(
+    source?.billingChargeMode ||
+      source?.BillingChargeMode ||
+      source?.billing_charge_mode ||
+      source?.chargeMode ||
+      source?.charge_mode ||
+      source?.selectedChargeMode ||
+      source?.selected_charge_mode ||
+      source?.selectedChargeModes ||
+      source?.selected_charge_modes,
+  ).toUpperCase();
+
+const getDisplayTestBillingMode = ({test, patient, panelCompanies = []}) => {
+  const directMode = getBillingChargeMode(test);
+  if (directMode) {
+    return directMode;
+  }
+
+  const testPanelId = normalizeFormText(test?.panelCompanyId || test?.compCatId);
+  const testPanelName = normalizeFormText(
+    test?.panelCompanyName || test?.panel_company || test?.panelCompany,
+  ).toLowerCase();
+  const matchedPanelCompany = (Array.isArray(panelCompanies) ? panelCompanies : []).find(
+    company => {
+      const companyPanelId = normalizeFormText(company?.compCatId || company?.id);
+      const companyName = normalizeFormText(
+        company?.name || company?.panelCompany,
+      ).toLowerCase();
+
+      return (
+        (testPanelId && companyPanelId && testPanelId === companyPanelId) ||
+        (testPanelName && companyName && testPanelName === companyName)
+      );
+    },
+  );
+
+  return getBillingChargeMode(matchedPanelCompany) || getBillingChargeMode(patient);
+};
+
+export const getDisplayTestPrice = (test, options = {}) => {
   const mrp = toPriceNumber(test?.mrp || test?.MRP || test?.amount);
   const charge = toPriceNumber(test?.charge || test?.Charge);
   const baseMrp = mrp || charge;
+  const billingMode = getDisplayTestBillingMode({
+    test,
+    patient: options.patient,
+    panelCompanies: options.panelCompanies,
+  });
+
+  if (billingMode.includes('C') || billingMode.includes('F')) {
+    return mrp || baseMrp;
+  }
+
   const discountPercent = Math.min(
     100,
     Math.max(0, getStandardDiscountPercent(test)),
@@ -39,6 +89,7 @@ export const buildPatientDisplayTests = ({
   patient,
   selectedTests,
   selectedTestsSourceReady,
+  panelCompanies = [],
 }) => {
   if (selectedTestsSourceReady) {
     return (Array.isArray(selectedTests) ? selectedTests : []).map(test => ({
@@ -54,8 +105,9 @@ export const buildPatientDisplayTests = ({
       panelCompanyId: test.panelCompanyId || '',
       parentDescription: test.parentDescription || '',
       mrp: Number(test?.mrp || test?.charge || 0) || 0,
-      charge: getDisplayTestPrice(test),
+      charge: getDisplayTestPrice(test, {patient, panelCompanies}),
       percentageonstandard: getStandardDiscountPercent(test),
+      chargeMode: getDisplayTestBillingMode({test, patient, panelCompanies}),
     }));
   }
 
@@ -72,8 +124,9 @@ export const buildPatientDisplayTests = ({
     panelCompanyId: patient?.compCatId || patient?.comp_cat_id || '',
     parentDescription: '',
     mrp: Number(test?.mrp || test?.charge || test?.amount || 0) || 0,
-    charge: getDisplayTestPrice(test),
+    charge: getDisplayTestPrice(test, {patient, panelCompanies}),
     percentageonstandard: getStandardDiscountPercent(test),
+    chargeMode: getDisplayTestBillingMode({test, patient, panelCompanies}),
   }));
 };
 

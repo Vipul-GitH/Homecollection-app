@@ -25,6 +25,8 @@ import {
   queuePendingPatientAction,
   removePendingBookingAction,
   removePendingPatientAction,
+  updatePendingBookingAction,
+  updatePendingPatientAction,
   updateCachedBookingPatients,
   updateCachedBookingStatus,
 } from '../services/storage/offlineBookingStorage';
@@ -186,6 +188,30 @@ const isSameBooking = (leftBooking, rightBooking) =>
 const getBookingDisplayCode = booking =>
   toDisplayValue(booking?.bookingCode || booking?.booking_code || booking?.id) ||
   'the active booking';
+
+const MAX_ASSIGNED_BOOKING_DETAIL_WARM_CACHE = 3;
+
+const selectBookingsForWarmCache = bookings => {
+  const sourceBookings = Array.isArray(bookings) ? bookings : [];
+  const prioritizedBookings = [];
+  const seenBookingIds = new Set();
+
+  const appendBooking = booking => {
+    const bookingId = String(booking?.id || '').trim();
+
+    if (!bookingId || seenBookingIds.has(bookingId)) {
+      return;
+    }
+
+    seenBookingIds.add(bookingId);
+    prioritizedBookings.push(booking);
+  };
+
+  sourceBookings.filter(isStartedBooking).forEach(appendBooking);
+  sourceBookings.forEach(appendBooking);
+
+  return prioritizedBookings.slice(0, MAX_ASSIGNED_BOOKING_DETAIL_WARM_CACHE);
+};
 
 export const useAssignedBookings = ({accessToken, loggedInUser}) => {
   const [assignedAppointments, setAssignedAppointments] = useState([]);
@@ -396,9 +422,11 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
           getStatusCodeFromAction(pendingAction.action),
         );
       } catch (error) {
-        if (!isLikelyOfflineError(error)) {
-          await removePendingBookingAction(pendingAction.id);
-        }
+        await updatePendingBookingAction(pendingAction.id, {
+          lastError: error?.message || 'Sync failed',
+          lastTriedAt: new Date().toISOString(),
+          retryCount: Number(pendingAction?.retryCount || 0) + 1,
+        });
       }
     }
   }, [accessToken]);
@@ -443,9 +471,11 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         await removePendingPatientAction(pendingAction.id);
         bookingIdsToRefresh.add(pendingAction.bookingId);
       } catch (error) {
-        if (!isLikelyOfflineError(error)) {
-          await removePendingPatientAction(pendingAction.id);
-        }
+        await updatePendingPatientAction(pendingAction.id, {
+          lastError: error?.message || 'Sync failed',
+          lastTriedAt: new Date().toISOString(),
+          retryCount: Number(pendingAction?.retryCount || 0) + 1,
+        });
       }
     }
 
@@ -480,11 +510,13 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
 
   const warmAssignedBookingDetailsCache = useCallback(
     async bookings => {
-      if (!accessToken || !Array.isArray(bookings) || !bookings.length) {
+      const bookingsToWarm = selectBookingsForWarmCache(bookings);
+
+      if (!accessToken || !bookingsToWarm.length) {
         return;
       }
 
-      for (const booking of bookings) {
+      for (const booking of bookingsToWarm) {
         const bookingId = booking?.id;
 
         if (!bookingId) {
@@ -1191,6 +1223,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     setCancellingPatientId('');
     setAddingTestPatientId('');
     panelCompanyCatalogCacheRef.current.clear();
+    matchedPanelCompanyCacheRef.current.clear();
 
     try {
       await clearOfflineBookingViewCache();

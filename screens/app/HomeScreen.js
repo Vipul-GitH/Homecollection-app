@@ -1,4 +1,9 @@
-import React, {useCallback, useEffect, useState} from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import {
   BackHandler,
   Keyboard,
@@ -150,11 +155,23 @@ function HomeScreen({
   onTogglePatientTestSelection,
   onAppointmentDetailStateChange,
   onLocalDatabaseLoadingChange,
+  onBookingScreenChange,
+  onClearAppCache,
+  onClearAllAppData,
 }) {
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const mainScrollViewRef = useRef(null);
+  const scrollPositionsRef = useRef({});
+  const isRestoringScrollRef = useRef(false);
+  const previousScrollKeyRef = useRef('');
   const safeAreaInsets = useSafeAreaInsets();
   const isBookingDetailScreen =
     activeTab === 'appointments' && Boolean(selectedBooking);
+  const isFullHeightBookingSubScreen =
+    isBookingDetailScreen &&
+    ['billing-summary', 'add-test', 'sample-collection'].includes(
+      selectedBookingScreen,
+    );
   const activeTabConfig = isBookingDetailScreen
     ? {
         label:
@@ -171,6 +188,15 @@ function HomeScreen({
       : activeTab === 'appointments' && appointmentsViewMode === 'completed'
         ? {label: 'Completed Appointments'}
       : bottomTabs.find(tab => tab.key === activeTab);
+  const mainScrollKey = isBookingDetailScreen
+    ? `booking:${selectedBooking?.id || 'unknown'}:${selectedBookingScreen}`
+    : activeTab === 'appointments'
+      ? `appointments:${appointmentsViewMode}`
+      : `tab:${activeTab}`;
+  if (previousScrollKeyRef.current !== mainScrollKey) {
+    previousScrollKeyRef.current = mainScrollKey;
+    isRestoringScrollRef.current = true;
+  }
   const containerSpacingStyle = isBookingDetailScreen
     ? styles.detailScreenContainer
     : isSmallPhone
@@ -263,6 +289,18 @@ function HomeScreen({
     );
   };
 
+  const handleMainScroll = useCallback(
+    event => {
+      if (isRestoringScrollRef.current) {
+        return;
+      }
+
+      scrollPositionsRef.current[mainScrollKey] =
+        event.nativeEvent.contentOffset.y;
+    },
+    [mainScrollKey],
+  );
+
   useEffect(() => {
     const backSubscription = BackHandler.addEventListener(
       'hardwareBackPress',
@@ -292,6 +330,31 @@ function HomeScreen({
       hideSubscription.remove();
     };
   }, []);
+
+  useEffect(() => {
+    const savedScrollY = scrollPositionsRef.current[mainScrollKey] || 0;
+    const restoreScroll = () => {
+      mainScrollViewRef.current?.scrollTo?.({
+        y: savedScrollY,
+        animated: false,
+      });
+    };
+    const timeoutIds = [];
+
+    isRestoringScrollRef.current = true;
+    requestAnimationFrame(restoreScroll);
+    timeoutIds.push(setTimeout(restoreScroll, 60));
+    timeoutIds.push(
+      setTimeout(() => {
+        restoreScroll();
+        isRestoringScrollRef.current = false;
+      }, 180),
+    );
+
+    return () => {
+      timeoutIds.forEach(clearTimeout);
+    };
+  }, [mainScrollKey]);
 
   const renderTabContent = () => {
     if (activeTab === 'appointments') {
@@ -380,6 +443,8 @@ function HomeScreen({
             appointmentDetailState={appointmentDetailState}
             onAppointmentDetailStateChange={onAppointmentDetailStateChange}
             onLocalDatabaseLoadingChange={onLocalDatabaseLoadingChange}
+            selectedBookingScreen={selectedBookingScreen}
+            onBookingScreenChange={onBookingScreenChange}
           />
         );
       }
@@ -451,7 +516,13 @@ function HomeScreen({
     }
 
     if (activeTab === 'profile') {
-      return <EodScreen styles={styles} />;
+      return (
+        <EodScreen
+          styles={styles}
+          onClearAppCache={onClearAppCache}
+          onClearAllAppData={onClearAllAppData}
+        />
+      );
     }
 
     return (
@@ -585,17 +656,24 @@ function HomeScreen({
             ) : null}
 
             <ScrollView
+              ref={mainScrollViewRef}
               contentContainerStyle={[
                 styles.homeScrollContent,
                 isKeyboardVisible && styles.homeScrollContentKeyboardOpen,
                 {
                   paddingBottom:
-                    (isKeyboardVisible ? 120 : 96) +
+                    (isFullHeightBookingSubScreen
+                      ? 0
+                      : isKeyboardVisible
+                      ? 120
+                      : 96) +
                     Math.max(safeAreaInsets.bottom, 8),
                 },
               ]}
               keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
               keyboardShouldPersistTaps="handled"
+              onScroll={handleMainScroll}
+              scrollEventThrottle={16}
               showsVerticalScrollIndicator={false}>
             <View
               style={[

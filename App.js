@@ -123,6 +123,9 @@ function App() {
           onRemovePatientSelectedTest={actions.handleRemovePatientSelectedTest}
           onAppointmentDetailStateChange={actions.setAppointmentDetailState}
           onLocalDatabaseLoadingChange={actions.setLocalDatabaseLoadingMessage}
+          onBookingScreenChange={actions.setSelectedBookingScreen}
+          onClearAppCache={actions.handleClearAppCache}
+          onClearAllAppData={actions.handleClearAllAppData}
         />
         <LogoutConfirmModal
           styles={appStyles}

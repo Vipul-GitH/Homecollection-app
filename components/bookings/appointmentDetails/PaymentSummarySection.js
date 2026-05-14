@@ -21,8 +21,7 @@ function PaymentSummarySection({
   completeNetAmount,
   localBillingSummary,
   isAdditionalDiscountEnabled,
-  completeAdditionalDiscountMode,
-  completeAdditionalDiscount,
+  patientAdditionalDiscountRows = [],
   completePayments,
   completePaymentModeOptions,
   paymentPatientOptions = [],
@@ -33,10 +32,8 @@ function PaymentSummarySection({
   handlePendingPaymentPatientSelect,
   bookingActionLoading,
   shouldShowProgressActions,
-  handleAdditionalDiscountToggle,
-  setCompleteAdditionalDiscountMode,
-  setCompleteAdditionalDiscount,
-  handleApplyAdditionalDiscount,
+  handlePatientAdditionalDiscountChange,
+  handleApplyPatientAdditionalDiscount,
   handleCompletePaymentChange,
   handleRemoveCompletePayment,
   handleAddCompletePayment,
@@ -99,92 +96,67 @@ function PaymentSummarySection({
           </View>
         </View>
         <View style={styles.paymentSummaryDiscountAction}>
-          <TouchableOpacity
-            activeOpacity={0.85}
-            style={[
-              styles.completeSecondaryButton,
-              isAdditionalDiscountEnabled &&
-                styles.completeSecondaryButtonActive,
-            ]}
-            onPress={handleAdditionalDiscountToggle}
-            disabled={localBillingSummary.payingTestCount <= 0}>
-            <Ionicons
-              name="pricetag-outline"
-              size={16}
-              style={[
-                styles.completeSecondaryButtonIcon,
-                isAdditionalDiscountEnabled &&
-                  styles.completeSecondaryButtonIconActive,
-              ]}
-            />
-            <Text
-              style={[
-                styles.completeSecondaryButtonText,
-                isAdditionalDiscountEnabled &&
-                  styles.completeSecondaryButtonTextActive,
-              ]}>
-              Additional Discount
-            </Text>
-          </TouchableOpacity>
-          {isAdditionalDiscountEnabled ? (
+          {isAdditionalDiscountEnabled && patientAdditionalDiscountRows.length ? (
             <>
-              <View style={styles.cancelSegmentedRow}>
-                {[
-                  {label: 'Amount', value: 'amount'},
-                  {label: 'Percent', value: 'percent'},
-                ].map(option => {
-                  const isSelected =
-                    completeAdditionalDiscountMode === option.value;
-
-                  return (
-                    <TouchableOpacity
-                      key={option.value}
-                      activeOpacity={0.85}
-                      style={[
-                        styles.cancelSegmentButton,
-                        isSelected && styles.cancelSegmentButtonActive,
-                      ]}
-                      onPress={() =>
-                        setCompleteAdditionalDiscountMode(option.value)
-                      }>
-                      <Text
-                        style={[
-                          styles.cancelSegmentButtonText,
-                          isSelected && styles.cancelSegmentButtonTextActive,
-                        ]}>
-                        {option.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
+              <View style={styles.sectionTitleRow}>
+                <Ionicons
+                  name="pricetag-outline"
+                  size={15}
+                  style={styles.completeSecondaryButtonIcon}
+                />
+                <Text style={styles.paymentSummarySubTitle}>
+                  Patient-wise Additional Discount
+                </Text>
               </View>
-              <View style={styles.completeAdditionalDiscountRow}>
+              {patientAdditionalDiscountRows.map(patientDiscount => (
                 <View
-                  style={[
-                    styles.completeCashInputWrap,
-                    styles.completeAdditionalDiscountInputWrap,
-                  ]}>
-                  <Text style={styles.completeCashPrefix}>
-                    {completeAdditionalDiscountMode === 'percent' ? '%' : 'Rs.'}
-                  </Text>
-                  <TextInput
-                    value={completeAdditionalDiscount}
-                    onChangeText={setCompleteAdditionalDiscount}
-                    keyboardType="numeric"
-                    placeholder="Enter additional discount"
-                    placeholderTextColor="#7B8AA3"
-                    style={styles.completeCashInput}
-                  />
+                  key={`additional-${patientDiscount.patientId}`}
+                  style={styles.completePaymentEntry}>
+                  <View style={styles.paymentSummaryRow}>
+                    <Text style={styles.paymentSummaryRowLabel}>
+                      {patientDiscount.patientName}
+                    </Text>
+                    <Text style={styles.paymentSummaryRowValue}>
+                      Max Rs. {patientDiscount.maxAdditionalAllowed.toFixed(2)}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.completeCashInputWrap,
+                      styles.completeAdditionalDiscountInputWrap,
+                    ]}>
+                    <Text style={styles.completeCashPrefix}>Rs.</Text>
+                    <TextInput
+                      value={patientDiscount.enteredAdditional}
+                      onChangeText={value =>
+                        handlePatientAdditionalDiscountChange(
+                          patientDiscount.patientId,
+                          value,
+                        )
+                      }
+                      keyboardType="numeric"
+                      placeholder="Enter patient discount"
+                      placeholderTextColor="#7B8AA3"
+                      style={styles.completeCashInput}
+                    />
+                  </View>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.completeSecondaryButton}
+                    onPress={() =>
+                      handleApplyPatientAdditionalDiscount?.(
+                        patientDiscount.patientId,
+                      )
+                    }>
+                    <Ionicons
+                      name="checkmark-circle-outline"
+                      size={16}
+                      style={styles.completeSecondaryButtonIcon}
+                    />
+                    <Text style={styles.completeSecondaryButtonText}>Apply</Text>
+                  </TouchableOpacity>
                 </View>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={styles.completeAdditionalDiscountApplyButton}
-                  onPress={handleApplyAdditionalDiscount}>
-                  <Text style={styles.completeAdditionalDiscountApplyButtonText}>
-                    Apply
-                  </Text>
-                </TouchableOpacity>
-              </View>
+              ))}
             </>
           ) : null}
         </View>

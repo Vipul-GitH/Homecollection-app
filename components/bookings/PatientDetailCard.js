@@ -79,6 +79,20 @@ const getDisplayTestPrice = test => {
   const mrp = toPriceNumber(test?.mrp || test?.MRP || test?.amount);
   const charge = toPriceNumber(test?.charge || test?.Charge);
   const baseMrp = mrp || charge;
+  const billingMode = toStableValue(
+    test?.selected_charge_mode ||
+      test?.selectedChargeMode ||
+      test?.billingChargeMode ||
+      test?.chargeMode ||
+      test?.charge_mode ||
+      test?.selectedChargeModes ||
+      test?.selected_charge_modes,
+  ).toUpperCase();
+
+  if (billingMode.includes('C') || billingMode.includes('F')) {
+    return mrp || baseMrp;
+  }
+
   const discountPercent = Math.min(100, Math.max(0, getStandardDiscountPercent(test)));
   if (discountPercent > 0 && baseMrp > 0) {
     return Math.max(0, baseMrp - (baseMrp * discountPercent) / 100);

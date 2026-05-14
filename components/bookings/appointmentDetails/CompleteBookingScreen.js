@@ -43,8 +43,7 @@ function CompleteBookingScreen({
   completeNetAmount,
   localBillingSummary,
   isAdditionalDiscountEnabled,
-  completeAdditionalDiscountMode,
-  completeAdditionalDiscount,
+  patientAdditionalDiscountRows = [],
   completePayments,
   completePaymentModeOptions,
   paymentPatientOptions = [],
@@ -53,10 +52,8 @@ function CompleteBookingScreen({
   pendingPaymentPatientId = '',
   shouldCollectPendingPaymentPatient = false,
   handlePendingPaymentPatientSelect,
-  handleAdditionalDiscountToggle,
-  setCompleteAdditionalDiscountMode,
-  setCompleteAdditionalDiscount,
-  handleApplyAdditionalDiscount,
+  handlePatientAdditionalDiscountChange,
+  handleApplyPatientAdditionalDiscount,
   handleCompletePaymentChange,
   handleRemoveCompletePayment,
   handleAddCompletePayment,
@@ -140,8 +137,7 @@ function CompleteBookingScreen({
           completeNetAmount={completeNetAmount}
           localBillingSummary={localBillingSummary}
           isAdditionalDiscountEnabled={isAdditionalDiscountEnabled}
-          completeAdditionalDiscountMode={completeAdditionalDiscountMode}
-          completeAdditionalDiscount={completeAdditionalDiscount}
+          patientAdditionalDiscountRows={patientAdditionalDiscountRows}
           completePayments={completePayments}
           completePaymentModeOptions={completePaymentModeOptions}
           paymentPatientOptions={paymentPatientOptions}
@@ -152,10 +148,12 @@ function CompleteBookingScreen({
           handlePendingPaymentPatientSelect={handlePendingPaymentPatientSelect}
           bookingActionLoading={bookingActionLoading}
           shouldShowProgressActions={false}
-          handleAdditionalDiscountToggle={handleAdditionalDiscountToggle}
-          setCompleteAdditionalDiscountMode={setCompleteAdditionalDiscountMode}
-          setCompleteAdditionalDiscount={setCompleteAdditionalDiscount}
-          handleApplyAdditionalDiscount={handleApplyAdditionalDiscount}
+          handlePatientAdditionalDiscountChange={
+            handlePatientAdditionalDiscountChange
+          }
+          handleApplyPatientAdditionalDiscount={
+            handleApplyPatientAdditionalDiscount
+          }
           handleCompletePaymentChange={handleCompletePaymentChange}
           handleRemoveCompletePayment={handleRemoveCompletePayment}
           handleAddCompletePayment={handleAddCompletePayment}

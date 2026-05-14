@@ -8,6 +8,7 @@ const PENDING_PATIENT_ACTIONS_KEY = 'pending_patient_actions';
 const PENDING_LOCAL_ACTIONS_KEY = 'pending_local_actions';
 const APPOINTMENT_DETAIL_STATE_KEY = 'cached_appointment_detail_state';
 const APPOINTMENT_DETAIL_DRAFTS_KEY = 'cached_appointment_detail_drafts';
+const HANDOVER_STATE_KEY = 'cached_handover_state';
 
 const safelyParseJson = (value, fallbackValue) => {
   if (!value) {
@@ -21,6 +22,20 @@ const safelyParseJson = (value, fallbackValue) => {
   }
 };
 
+const toJsonString = value => JSON.stringify(value);
+
+const writeJsonIfChanged = async (storageKey, nextValue) => {
+  const nextSerializedValue = toJsonString(nextValue);
+  const previousSerializedValue = await AsyncStorage.getItem(storageKey);
+
+  if (previousSerializedValue === nextSerializedValue) {
+    return false;
+  }
+
+  await AsyncStorage.setItem(storageKey, nextSerializedValue);
+  return true;
+};
+
 export const getCachedAssignedBookings = async () => {
   const value = await AsyncStorage.getItem(CACHED_ASSIGNED_BOOKINGS_KEY);
   const parsedValue = safelyParseJson(value, []);
@@ -28,9 +43,9 @@ export const getCachedAssignedBookings = async () => {
 };
 
 export const persistAssignedBookings = async bookings => {
-  await AsyncStorage.setItem(
+  await writeJsonIfChanged(
     CACHED_ASSIGNED_BOOKINGS_KEY,
-    JSON.stringify(Array.isArray(bookings) ? bookings : []),
+    Array.isArray(bookings) ? bookings : [],
   );
 };
 
@@ -41,9 +56,9 @@ export const getCachedCompletedBookings = async () => {
 };
 
 export const persistCompletedBookings = async bookings => {
-  await AsyncStorage.setItem(
+  await writeJsonIfChanged(
     CACHED_COMPLETED_BOOKINGS_KEY,
-    JSON.stringify(Array.isArray(bookings) ? bookings : []),
+    Array.isArray(bookings) ? bookings : [],
   );
 };
 
@@ -70,11 +85,18 @@ export const persistBookingDetail = async bookingDetail => {
   }
 
   const detailsMap = await getCachedBookingDetailsMap();
-  detailsMap[String(bookingId)] = bookingDetail;
+  const normalizedBookingId = String(bookingId);
+  const previousBookingDetail = detailsMap[normalizedBookingId];
 
-  await AsyncStorage.setItem(
+  if (toJsonString(previousBookingDetail || null) === toJsonString(bookingDetail)) {
+    return;
+  }
+
+  detailsMap[normalizedBookingId] = bookingDetail;
+
+  await writeJsonIfChanged(
     CACHED_BOOKING_DETAILS_KEY,
-    JSON.stringify(detailsMap),
+    detailsMap,
   );
 };
 
@@ -111,9 +133,9 @@ export const updateCachedBookingStatus = async (
       ...(bookingStatusCode ? {bookingStatusCode} : {}),
     };
 
-    await AsyncStorage.setItem(
+    await writeJsonIfChanged(
       CACHED_BOOKING_DETAILS_KEY,
-      JSON.stringify(detailsMap),
+      detailsMap,
     );
   }
 };
@@ -151,9 +173,9 @@ export const updateCachedBookingPatients = async ({
       ...(Array.isArray(patients) ? {patients} : {}),
     };
 
-    await AsyncStorage.setItem(
+    await writeJsonIfChanged(
       CACHED_BOOKING_DETAILS_KEY,
-      JSON.stringify(detailsMap),
+      detailsMap,
     );
   }
 };
@@ -219,6 +241,33 @@ export const removePendingBookingAction = async actionId => {
     PENDING_BOOKING_ACTIONS_KEY,
     JSON.stringify(nextPendingActions),
   );
+};
+
+export const updatePendingBookingAction = async (actionId, updates = {}) => {
+  if (!actionId) {
+    return null;
+  }
+
+  const pendingActions = await getPendingBookingActions();
+  let updatedAction = null;
+  const nextPendingActions = pendingActions.map(pendingAction => {
+    if (pendingAction.id !== actionId) {
+      return pendingAction;
+    }
+
+    updatedAction = {
+      ...pendingAction,
+      ...updates,
+    };
+    return updatedAction;
+  });
+
+  await AsyncStorage.setItem(
+    PENDING_BOOKING_ACTIONS_KEY,
+    JSON.stringify(nextPendingActions),
+  );
+
+  return updatedAction;
 };
 
 export const getPendingPatientActions = async () => {
@@ -354,6 +403,33 @@ export const removePendingPatientAction = async actionId => {
   );
 };
 
+export const updatePendingPatientAction = async (actionId, updates = {}) => {
+  if (!actionId) {
+    return null;
+  }
+
+  const pendingActions = await getPendingPatientActions();
+  let updatedAction = null;
+  const nextPendingActions = pendingActions.map(pendingAction => {
+    if (pendingAction.id !== actionId) {
+      return pendingAction;
+    }
+
+    updatedAction = {
+      ...pendingAction,
+      ...updates,
+    };
+    return updatedAction;
+  });
+
+  await AsyncStorage.setItem(
+    PENDING_PATIENT_ACTIONS_KEY,
+    JSON.stringify(nextPendingActions),
+  );
+
+  return updatedAction;
+};
+
 export const getPendingLocalActions = async () => {
   const value = await AsyncStorage.getItem(PENDING_LOCAL_ACTIONS_KEY);
   const parsedValue = safelyParseJson(value, []);
@@ -395,9 +471,9 @@ export const queuePendingLocalAction = async ({
 };
 
 export const persistAppointmentDetailState = async state => {
-  await AsyncStorage.setItem(
+  await writeJsonIfChanged(
     APPOINTMENT_DETAIL_STATE_KEY,
-    JSON.stringify(state && typeof state === 'object' ? state : {}),
+    state && typeof state === 'object' ? state : {},
   );
 };
 
@@ -408,9 +484,9 @@ export const getCachedAppointmentDetailState = async () => {
 };
 
 export const persistAppointmentDetailDrafts = async drafts => {
-  await AsyncStorage.setItem(
+  await writeJsonIfChanged(
     APPOINTMENT_DETAIL_DRAFTS_KEY,
-    JSON.stringify(drafts && typeof drafts === 'object' ? drafts : {}),
+    drafts && typeof drafts === 'object' ? drafts : {},
   );
 };
 
@@ -418,6 +494,19 @@ export const getCachedAppointmentDetailDrafts = async () => {
   const value = await AsyncStorage.getItem(APPOINTMENT_DETAIL_DRAFTS_KEY);
   const parsedValue = safelyParseJson(value, {});
   return parsedValue && typeof parsedValue === 'object' ? parsedValue : {};
+};
+
+export const getCachedHandoverState = async () => {
+  const value = await AsyncStorage.getItem(HANDOVER_STATE_KEY);
+  const parsedValue = safelyParseJson(value, {});
+  return parsedValue && typeof parsedValue === 'object' ? parsedValue : {};
+};
+
+export const persistCachedHandoverState = async handoverState => {
+  await writeJsonIfChanged(
+    HANDOVER_STATE_KEY,
+    handoverState && typeof handoverState === 'object' ? handoverState : {},
+  );
 };
 
 export const clearAppointmentDetailDraft = async bookingId => {
@@ -445,6 +534,7 @@ export const clearOfflineBookingStorage = async () => {
     PENDING_LOCAL_ACTIONS_KEY,
     APPOINTMENT_DETAIL_STATE_KEY,
     APPOINTMENT_DETAIL_DRAFTS_KEY,
+    HANDOVER_STATE_KEY,
   ]);
 };
 
@@ -455,5 +545,16 @@ export const clearOfflineBookingViewCache = async () => {
     CACHED_BOOKING_DETAILS_KEY,
     APPOINTMENT_DETAIL_STATE_KEY,
     APPOINTMENT_DETAIL_DRAFTS_KEY,
+    HANDOVER_STATE_KEY,
   ]);
+};
+
+export const getPendingOfflineActionCount = async () => {
+  const [bookingActions, patientActions, localActions] = await Promise.all([
+    getPendingBookingActions(),
+    getPendingPatientActions(),
+    getPendingLocalActions(),
+  ]);
+
+  return bookingActions.length + patientActions.length + localActions.length;
 };

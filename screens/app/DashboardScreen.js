@@ -56,6 +56,13 @@ const isCompletedBooking = booking => {
   );
 };
 
+const isStartedBooking = booking => {
+  const statusCode = Number(booking?.bookingStatusCode || 0);
+  const statusText = String(booking?.status || '').trim().toLowerCase();
+
+  return statusCode === 2 || statusText.includes('start');
+};
+
 function DashboardScreen({
   styles,
   isSmallPhone,
@@ -66,7 +73,9 @@ function DashboardScreen({
   onUpcomingBookingPress,
 }) {
   const upcomingBookings = appointments
-    .filter(booking => !isCompletedBooking(booking))
+    .filter(
+      booking => !isCompletedBooking(booking) && !isStartedBooking(booking),
+    )
     .slice(0, 2);
 
   const renderPreviewStatusStyle = status => {
