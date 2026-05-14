@@ -439,7 +439,15 @@ function HomeScreen({
     }
 
     if (activeTab === 'saved') {
-      return <HandoverScreen styles={styles} />;
+      return (
+        <HandoverScreen
+          styles={styles}
+          completedAppointments={completedAppointments}
+          isLoadingCompletedAppointments={isLoadingCompletedAppointments}
+          completedAppointmentsError={completedAppointmentsError}
+          onCompletedRetry={onCompletedRetry}
+        />
+      );
     }
 
     if (activeTab === 'profile') {

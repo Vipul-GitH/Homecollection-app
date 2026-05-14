@@ -15,20 +15,17 @@ import {
   normalizeAssignedBooking,
   normalizeAssignedBookingDetail,
 } from '../../utils/bookings/bookingTransforms';
-import {logDebug} from '../../utils/app/logger';
 import {
   getLocalPanelCatalogByCompanyResponse,
   getLocalMatchedPanelCompaniesResponse,
   getLocalPanelCompaniesResponse,
 } from '../local/panelCatalogLocal';
 
-const parseJsonResponse = async (response, logPrefix) => {
+const parseJsonResponse = async response => {
   try {
     const responseData = await response.json();
-    logDebug(`${logPrefix} Response body`, JSON.stringify(responseData, null, 2));
     return responseData;
   } catch (parseError) {
-    logDebug(`${logPrefix} Response body is not valid JSON`);
     return null;
   }
 };
@@ -43,12 +40,6 @@ const stringifyForDebugLog = value => {
 
 const logAppointmentDetailDebug = (label, payload) => {
   // Intentionally scoped to appointment/patient detail debugging.
-  if (__DEV__) {
-    console.log(label, stringifyForDebugLog(payload));
-  }
-};
-
-const logCompleteBookingDebug = (label, payload) => {
   if (__DEV__) {
     console.log(label, stringifyForDebugLog(payload));
   }
@@ -117,24 +108,6 @@ const postCompleteBookingStatus = async ({
     });
   });
 
-  logCompleteBookingDebug('[Complete Booking API Request]', {
-    bookingId,
-    method: 'POST',
-    url: getAssignedBookingStatusApiUrl(bookingId),
-    payload,
-    patientDocumentFields: Object.entries(patientDocumentsMap).flatMap(
-      ([patientId, documents]) =>
-        (Array.isArray(documents) ? documents : [])
-          .filter(document => Boolean(document?.uri) && Boolean(patientId))
-          .map(document => ({
-            field: `patient_documents_${patientId}`,
-            name: document.name || '',
-            type: document.type || '',
-            uri: document.uri,
-          })),
-    ),
-  });
-
   const response = await fetch(getAssignedBookingStatusApiUrl(bookingId), {
     method: 'POST',
     headers: {
@@ -144,12 +117,6 @@ const postCompleteBookingStatus = async ({
   });
 
   const responseData = await parseJsonResponse(response, '[Booking Status]');
-  logCompleteBookingDebug('[Complete Booking API Response]', {
-    bookingId,
-    status: response.status,
-    ok: response.ok,
-    response: responseData,
-  });
 
   return {response, responseData};
 };
@@ -183,6 +150,10 @@ export const fetchAssignedBookingsApi = async ({accessToken, loggedInUser}) => {
   });
 
   const responseData = await parseJsonResponse(response, '[Assigned]');
+  if (__DEV__) {
+    console.log('[My Assigned API URL]', MY_ASSIGNED_BOOKINGS_API_URL);
+    console.log('[My Assigned API Response]', stringifyForDebugLog(responseData));
+  }
   const errorMessage = getApiErrorMessage(
     response,
     responseData,
@@ -433,6 +404,7 @@ export const addAssignedBookingPatientApi = async ({
         ...(patient?.panel_company
           ? {panel_company: String(patient.panel_company)}
           : {}),
+        ...(patient?.card_no ? {card_no: String(patient.card_no)} : {}),
         ...(patient?.tag ? {tag: String(patient.tag)} : {}),
       }),
     });
@@ -469,6 +441,7 @@ export const addAssignedBookingPatientApi = async ({
   formData.append('email', String(patient?.email || ''));
   formData.append('labmate_pid', String(patient?.labmate_pid || ''));
   formData.append('panel_company', String(patient?.panel_company || ''));
+  formData.append('card_no', String(patient?.card_no || ''));
   formData.append('tag', String(patient?.tag || ''));
 
   documents.forEach(document => {
@@ -511,14 +484,17 @@ export const cancelAssignedBookingPatientApi = async ({
   accessToken,
   bookingId,
   bookingPatientId,
+  cancelPayload = {},
 }) => {
   const response = await secureFetch(
     getAssignedBookingPatientCancelApiUrl(bookingId, bookingPatientId),
     {
       method: 'POST',
       headers: {
+        'Content-Type': 'application/json',
         Authorization: `Bearer ${accessToken}`,
       },
+      body: JSON.stringify(cancelPayload || {}),
     },
   );
 
@@ -564,6 +540,7 @@ export const updateAssignedBookingPatientApi = async ({
   formData.append('email', String(patient?.email || ''));
   formData.append('labmate_pid', String(patient?.labmate_pid || ''));
   formData.append('panel_company', String(patient?.panel_company || ''));
+  formData.append('card_no', String(patient?.card_no || ''));
   formData.append('tag', String(patient?.tag || ''));
 
   const documents = Array.isArray(patient?.patient_documents)
@@ -609,10 +586,6 @@ export const fetchPanelTestCatalogApi = async ({accessToken}) => {
   const localResponseData = await getLocalPanelCompaniesResponse();
 
   if (localResponseData?.ok && Array.isArray(localResponseData?.items)) {
-    logDebug(
-      '[Panel Test Catalog] Served from local preload catalog',
-      `items=${localResponseData.items.length}`,
-    );
     return localResponseData;
   }
 
@@ -646,10 +619,6 @@ export const fetchMatchedPanelCompaniesForPatientApi = async ({patient}) => {
   const localResponseData = await getLocalMatchedPanelCompaniesResponse(patient);
 
   if (localResponseData?.ok && Array.isArray(localResponseData?.items)) {
-    logDebug(
-      '[Matched Panel Companies] Served from local preload catalog',
-      `items=${localResponseData.items.length}`,
-    );
     return localResponseData;
   }
 
@@ -683,10 +652,6 @@ export const fetchPanelCatalogByCompanyApi = async ({
       }
     }
 
-    logDebug(
-      '[Panel Catalog] Served from local preload catalog',
-      `compCatId=${String(compCatId || '')}, groups=${localResponseData.groups.length}`,
-    );
     return localResponseData;
   }
 

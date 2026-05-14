@@ -17,6 +17,21 @@ const getTestCompanyKey = test =>
     toStableValue(test?.panelCompanyName).toLowerCase(),
   ].join('|');
 
+const getTestIdentity = (test, index = 0) =>
+  toStableValue(test?.id || test?.removeKey || test?.code || `test-${index}`);
+
+const getPanelNameFromTest = (test, patient) =>
+  toStableValue(test?.panelCompanyName || patient?.panelCompany) ||
+  'Current Panel';
+
+const getPanelKeyFromTest = (test, patient) =>
+  [
+    toStableValue(test?.panelCompanyChipId),
+    toStableValue(test?.panelCompanyId || patient?.compCatId || patient?.comp_cat_id),
+    getPanelNameFromTest(test, patient).toLowerCase(),
+    toStableValue(test?.panelCompanySource).toUpperCase(),
+  ].join('|');
+
 const doesTestBelongToCompany = (test, company) => {
   const companyChipId = toStableValue(company?.chipId || company?.id);
   const testChipId = toStableValue(test?.panelCompanyChipId);
@@ -69,6 +84,30 @@ const getChargeModeLabel = company => {
   return mode || '';
 };
 
+const getTestPrice = test =>
+  (() => {
+    const mrp = Number(test?.mrp || test?.amount || 0) || 0;
+    const charge = Number(test?.charge || 0) || 0;
+    const baseMrp = mrp || charge;
+    const discountPercent =
+      Number(
+        test?.percentageonstandard ||
+          test?.percentageOnStandard ||
+          test?.percentage_on_standard ||
+          test?.PercentageOnStandard ||
+          test?.percentagestandard ||
+          test?.percentageStandard ||
+          test?.percentage_standard ||
+          0,
+      ) || 0;
+
+    if (discountPercent > 0 && baseMrp > 0) {
+      return Math.max(0, baseMrp - (baseMrp * discountPercent) / 100);
+    }
+
+    return charge || baseMrp;
+  })();
+
 const buildFallbackCompanyFromTests = ({patient, tests}) => {
   const firstTestWithPanel = (Array.isArray(tests) ? tests : []).find(
     test =>
@@ -108,6 +147,34 @@ const buildFallbackCompanyFromTests = ({patient, tests}) => {
   };
 };
 
+const buildTestDerivedPanelGroups = ({patient, tests, consumedTestIds}) => {
+  const groupMap = new Map();
+
+  tests.forEach((test, index) => {
+    const testIdentity = getTestIdentity(test, index);
+    if (consumedTestIds.has(testIdentity)) {
+      return;
+    }
+
+    const groupKey = getPanelKeyFromTest(test, patient);
+    const groupName = getPanelNameFromTest(test, patient);
+
+    if (!groupMap.has(groupKey)) {
+      groupMap.set(groupKey, {
+        key: groupKey || `panel-from-test-${groupMap.size}`,
+        company: buildFallbackCompanyFromTests({patient, tests: [test]}),
+        name: groupName,
+        tests: [],
+      });
+    }
+
+    groupMap.get(groupKey).tests.push(test);
+    consumedTestIds.add(testIdentity);
+  });
+
+  return Array.from(groupMap.values());
+};
+
 const buildPanelGroups = ({patient, tests, panelCompanies}) => {
   const groups = [];
   const consumedTestIds = new Set();
@@ -119,7 +186,7 @@ const buildPanelGroups = ({patient, tests, panelCompanies}) => {
       const isMatch = doesTestBelongToCompany(test, company);
 
       if (isMatch) {
-        consumedTestIds.add(test.id);
+        consumedTestIds.add(getTestIdentity(test));
       }
       return isMatch;
     });
@@ -132,7 +199,16 @@ const buildPanelGroups = ({patient, tests, panelCompanies}) => {
     });
   });
 
-  const unmappedTests = tests.filter(test => !consumedTestIds.has(test.id));
+  const testDerivedGroups = buildTestDerivedPanelGroups({
+    patient,
+    tests,
+    consumedTestIds,
+  });
+  groups.push(...testDerivedGroups);
+
+  const unmappedTests = tests.filter((test, index) =>
+    !consumedTestIds.has(getTestIdentity(test, index)),
+  );
   if (unmappedTests.length || (!groups.length && tests.length)) {
     const currentPanelTests = unmappedTests.length ? unmappedTests : tests;
     const fallbackCompany = buildFallbackCompanyFromTests({
@@ -186,17 +262,6 @@ function PatientTestsAccordion({
           </Text>
         </View>
         <View style={styles.patientTestsHeaderActions}>
-          {panelGroups.length
-            ? panelGroups.map(group => (
-                <View key={`header-${group.key}`} style={styles.patientTestsMappedBadge}>
-                  <Text
-                    style={styles.patientTestsMappedBadgeText}
-                    numberOfLines={2}>
-                    {group.name}
-                  </Text>
-                </View>
-              ))
-            : null}
           {onAddPanelCompany ? (
             <TouchableOpacity
               activeOpacity={0.85}
@@ -224,61 +289,93 @@ function PatientTestsAccordion({
         <View style={styles.patientTestsPanelList}>
           {panelGroups.map(group => {
             const chargeModeLabel = getChargeModeLabel(group.company);
+            const groupSubtotal = group.tests.reduce(
+              (total, test) => total + getTestPrice(test),
+              0,
+            );
 
             return (
               <View key={group.key} style={styles.patientTestsPanelCard}>
-                <View style={styles.patientTestsPanelActions}>
-                  {chargeModeLabel ? (
-                    <View
-                      style={[
-                        styles.patientTestsPanelModeChip,
-                        chargeModeLabel === 'Credit' &&
-                          styles.patientTestsPanelModeChipCredit,
-                      ]}>
-                      <Text
-                        style={[
-                          styles.patientTestsPanelModeText,
-                          chargeModeLabel === 'Credit' &&
-                            styles.patientTestsPanelModeTextCredit,
-                        ]}>
-                        {chargeModeLabel}
-                      </Text>
-                    </View>
-                  ) : null}
-                  <View style={styles.patientTestsPanelCountChip}>
-                    <Text style={styles.patientTestsPanelCountText}>
-                      {group.tests.length} tests
+                <View
+                  style={[
+                    styles.patientTestsPanelHeader,
+                    isNarrow && styles.patientTestsPanelHeaderStacked,
+                  ]}>
+                  <View style={styles.patientTestsPanelTitleRow}>
+                    <Text
+                      style={styles.patientTestsPanelTitle}
+                      numberOfLines={2}>
+                      {group.name}
                     </Text>
                   </View>
-                  {group.company && onSelectPanelCompany ? (
-                    <TouchableOpacity
-                      activeOpacity={0.85}
-                      style={styles.patientTestsSmallButton}
-                      disabled={!canOpenPanelCompanyTests}
-                      onPress={() =>
-                        onSelectPanelCompany({
-                          patient,
-                          panelCompany: group.company,
-                        })
-                      }>
-                      <Text style={styles.patientTestsSmallButtonText}>
-                        + Add Test
-                      </Text>
-                    </TouchableOpacity>
-                  ) : null}
-                  {group.company && onRemovePanelCompany ? (
-                    <TouchableOpacity
-                      activeOpacity={0.85}
-                      style={styles.patientTestsSmallButton}
-                      onPress={() =>
-                        onRemovePanelCompany(patient, group.company)
-                      }>
-                      <Text style={styles.patientTestsSmallButtonText}>
-                        Remove
-                      </Text>
-                    </TouchableOpacity>
-                  ) : null}
                 </View>
+
+                  <View style={styles.patientTestsPanelActions}>
+                    {chargeModeLabel ? (
+                      <View
+                        style={[
+                          styles.patientTestsPanelModeChip,
+                          chargeModeLabel === 'Credit' &&
+                            styles.patientTestsPanelModeChipCredit,
+                        ]}>
+                        <Text
+                          style={[
+                            styles.patientTestsPanelModeText,
+                            chargeModeLabel === 'Credit' &&
+                              styles.patientTestsPanelModeTextCredit,
+                          ]}>
+                          {chargeModeLabel}
+                        </Text>
+                      </View>
+                    ) : null}
+                    <View style={styles.patientTestsPanelAmountChip}>
+                      <Text style={styles.patientTestsPanelAmountText}>
+                        Rs. {groupSubtotal.toFixed(2)}
+                      </Text>
+                    </View>
+                    {group.company && onSelectPanelCompany ? (
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        style={[
+                          styles.patientTestsSmallButton,
+                          styles.patientTestsAddTestButtonHighlight,
+                        ]}
+                        disabled={!canOpenPanelCompanyTests}
+                        onPress={() =>
+                          onSelectPanelCompany({
+                            patient,
+                            panelCompany: group.company,
+                          })
+                        }>
+                        <Text
+                          style={[
+                            styles.patientTestsSmallButtonText,
+                            styles.patientTestsAddTestButtonHighlightText,
+                          ]}>
+                          + Add Test
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    {group.company && onRemovePanelCompany ? (
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        style={[
+                          styles.patientTestsSmallButton,
+                          styles.patientTestsRemovePanelButton,
+                        ]}
+                        onPress={() =>
+                          onRemovePanelCompany(patient, group.company)
+                        }>
+                        <Text
+                          style={[
+                            styles.patientTestsSmallButtonText,
+                            styles.patientTestsRemovePanelButtonText,
+                          ]}>
+                          Remove
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
 
                 {group.tests.length ? (
                   <View style={styles.patientTestsCardList}>
@@ -296,6 +393,11 @@ function PatientTestsAccordion({
                               Child of {test.parentDescription}
                             </Text>
                           ) : null}
+                        </View>
+                        <View style={styles.patientTestsPricePill}>
+                          <Text style={styles.patientTestsPriceText}>
+                            Rs. {getTestPrice(test).toFixed(2)}
+                          </Text>
                         </View>
                         {test.isAppAdded && onRemoveSelectedTest ? (
                           <TouchableOpacity

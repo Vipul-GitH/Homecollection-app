@@ -197,6 +197,7 @@ const buildAddressParts = booking => {
       'address.pincode',
       'address.zipcode',
       'address.pin_code',
+      'pincode_snapshot',
       'pincode',
     ),
   ];
@@ -339,6 +340,16 @@ const normalizePatientTests = source => {
         ),
         mrp: toNumberValue(test?.mrp || test?.MRP || test?.amount),
         charge: toNumberValue(test?.charge || test?.Charge || test?.mrp || test?.MRP),
+        percentageonstandard: toNumberValue(
+          test?.percentageonstandard ||
+            test?.percentageOnStandard ||
+            test?.percentage_on_standard ||
+            test?.PercentageOnStandard ||
+            test?.percentagestandard ||
+            test?.percentageStandard ||
+            test?.percentage_standard ||
+            test?.PercentageStandard,
+        ),
         max_discount: toNumberValue(
           test?.max_discount || test?.maxDiscount || test?.MaxDiscount,
         ),
@@ -448,6 +459,15 @@ export const normalizeAssignedBooking = (booking, index) => {
   const sourceType = toDisplayString(
     booking?.source_type || booking?.sourceType,
   );
+  const patientNamesText = toDisplayString(
+    booking?.patient_names || booking?.patientNames,
+  );
+  const patientNames = patientNamesText
+    ? patientNamesText
+        .split(',')
+        .map(name => toDisplayString(name))
+        .filter(Boolean)
+    : [];
 
   return {
     id:
@@ -464,8 +484,15 @@ export const normalizeAssignedBooking = (booking, index) => {
     appointmentId:
       toDisplayString(booking?.appointment_id || booking?.appointmentId) || '',
     sourceType: sourceType || 'BOOKING',
-    patients: [],
-    patientCount: Number.isNaN(patientCount) || patientCount < 1 ? 1 : patientCount,
+    patients: patientNames.map((name, patientIndex) => ({
+      id: `assigned-patient-${index}-${patientIndex}`,
+      name,
+    })),
+    patientNames: patientNamesText,
+    patientCount:
+      Number.isNaN(patientCount) || patientCount < 1
+        ? Math.max(1, patientNames.length || 1)
+        : patientCount,
     preferredVisitDate: preferredVisitDate || 'Date not available',
     visitDate: preferredVisitDate || 'Date not available',
     bookingStatusCode,
@@ -480,6 +507,12 @@ export const normalizeAssignedBooking = (booking, index) => {
 };
 
 export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
+  const billingSummary =
+    booking?.billing_summary ||
+    booking?.billingSummary ||
+    booking?.billing ||
+    booking?.amountFields ||
+    {};
   const bookingStatusCode = toBookingStatusCode(
     booking?.booking_status ??
       booking?.bookingStatus ??
@@ -586,6 +619,13 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
           toDisplayString(
             patient?.panelCompany || patient?.panel_company || patient?.panel,
           ) || 'N/A',
+        cardNo:
+          toDisplayString(
+            patient?.card_no ||
+              patient?.cardNo ||
+              patient?.cghs_card_no ||
+              patient?.cghsCardNo,
+          ) || '',
         panelCode: toDisplayString(
           patient?.panelCode || patient?.panel_code || patient?.code,
         ),
@@ -635,7 +675,16 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
               patient?.referBy ||
               patient?.doctor_name ||
               patient?.doctorName ||
-              patient?.referrer,
+              patient?.referrer ||
+              booking?.referred_by ||
+              booking?.referredBy ||
+              booking?.refer_by ||
+              booking?.referBy ||
+              booking?.doctor_name ||
+              booking?.doctorName ||
+              booking?.referrer ||
+              fallbackBooking?.referred_by ||
+              fallbackBooking?.referredBy,
           ) || 'N/A',
         internalReferencedBy:
           toDisplayString(
@@ -644,7 +693,18 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
               patient?.internal_reference_by ||
               patient?.internalReferenceBy ||
               patient?.internal_refer_by ||
-              patient?.internalReferBy,
+              patient?.internalReferBy ||
+              patient?.intrnl_rfrncd_by ||
+              booking?.internal_referenced_by ||
+              booking?.internalReferencedBy ||
+              booking?.internal_reference_by ||
+              booking?.internalReferenceBy ||
+              booking?.internal_refer_by ||
+              booking?.internalReferBy ||
+              booking?.intrnl_rfrncd_by ||
+              fallbackBooking?.internal_referenced_by ||
+              fallbackBooking?.internalReferencedBy ||
+              fallbackBooking?.intrnl_rfrncd_by,
           ) || 'N/A',
         reportCourier: normalizeYesNoValue(
           patient?.report_courier ??
@@ -674,6 +734,12 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
         tubes: extractTestsList(patient?.tubes || patient?.tube_list),
         documents: extractTestsList(
           patient?.documents || patient?.document_list || patient?.docs,
+        ),
+        patientDocumentUrls: normalizeUrlList(
+          patient?.patient_document_urls ||
+            patient?.patientDocumentUrls ||
+            patient?.patient_document_url ||
+            patient?.patientDocumentUrl,
         ),
         prescriptionUrls: normalizeUrlList(
           patient?.prescription_urls ||
@@ -739,28 +805,76 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
     bookingStatusCode,
     amountFields: {
       subtotal: toNumberValue(
-        booking?.F_Apt_Am ||
-          booking?.f_apt_am ||
-          booking?.subtotal ||
+        firstNonEmptyValue(
+          booking?.F_Apt_Am,
+          booking?.f_apt_am,
+          booking?.subtotal,
           booking?.sub_total,
+          billingSummary?.F_Apt_Am,
+          billingSummary?.f_apt_am,
+          billingSummary?.subtotal,
+          billingSummary?.sub_total,
+        ),
       ),
       baseDiscount: toNumberValue(
-        booking?.F_dis ||
-          booking?.f_dis ||
-          booking?.base_discount ||
+        firstNonEmptyValue(
+          booking?.F_dis,
+          booking?.f_dis,
+          booking?.base_discount,
           booking?.baseDiscount,
+          billingSummary?.F_dis,
+          billingSummary?.f_dis,
+          billingSummary?.base_discount,
+          billingSummary?.baseDiscount,
+        ),
       ),
       additionalDiscount: toNumberValue(
-        booking?.Ad_Dis ||
-          booking?.ad_dis ||
-          booking?.additional_discount ||
+        firstNonEmptyValue(
+          booking?.Ad_Dis,
+          booking?.ad_dis,
+          booking?.additional_discount,
           booking?.additionalDiscount,
+          booking?.additionalDiscountAmount,
+          booking?.additional_discount_amount,
+          billingSummary?.Ad_Dis,
+          billingSummary?.ad_dis,
+          billingSummary?.additional_discount,
+          billingSummary?.additionalDiscount,
+          billingSummary?.additionalDiscountAmount,
+          billingSummary?.additional_discount_amount,
+        ),
       ),
       totalAmount: toNumberValue(
-        booking?.total_amount ||
-          booking?.totalAmount ||
-          booking?.final_amount ||
+        firstNonEmptyValue(
+          booking?.total_amount,
+          booking?.totalAmount,
+          booking?.final_amount,
           booking?.finalAmount,
+          billingSummary?.total_amount,
+          billingSummary?.totalAmount,
+          billingSummary?.final_amount,
+          billingSummary?.finalAmount,
+        ),
+      ),
+      amountReceived: toNumberValue(
+        firstNonEmptyValue(
+          booking?.amount_received,
+          booking?.amountReceived,
+          booking?.received_amount,
+          booking?.receivedAmount,
+          booking?.payment?.amount,
+          billingSummary?.amount_received,
+          billingSummary?.amountReceived,
+          billingSummary?.received_amount,
+          billingSummary?.receivedAmount,
+        ),
+      ),
+      paymentMode: firstNonEmptyValue(
+        booking?.payment_mode,
+        booking?.paymentMode,
+        booking?.payment?.mode,
+        billingSummary?.payment_mode,
+        billingSummary?.paymentMode,
       ),
     },
     patientCount:
@@ -810,6 +924,7 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
           'address.pincode',
           'address.zipcode',
           'address.pin_code',
+          'pincode_snapshot',
           'pincode',
         ) || 'N/A',
       routeNumber: 'N/A',
@@ -832,6 +947,18 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
       fullAddress: buildFullAddress(booking, fallbackFullAddress),
       latitude: latitude || 'N/A',
       longitude: longitude || 'N/A',
+      locationUrl: firstNonEmptyValue(
+        booking?.location_url,
+        booking?.locationUrl,
+        booking?.location,
+        getAddressValue(
+          booking,
+          'address.location_url',
+          'address.locationUrl',
+          'address.map_url',
+          'address.mapUrl',
+        ),
+      ),
     },
     phoneNumber:
       toDisplayString(

@@ -44,6 +44,7 @@ function BookingLocationCard({
   styles,
   address,
   accessNotes,
+  hasLocationUrl,
   disabled,
   onOpenLocation,
 }) {
@@ -74,13 +75,7 @@ function BookingLocationCard({
       <View style={styles.bookingDetailLocationActionGroup}>
         <LocationStatusIcon
           styles={styles}
-          variant="success"
-          onPress={onOpenLocation}
-          disabled={disabled}
-        />
-        <LocationStatusIcon
-          styles={styles}
-          variant="error"
+          variant={hasLocationUrl ? 'success' : 'error'}
           onPress={onOpenLocation}
           disabled={disabled}
         />

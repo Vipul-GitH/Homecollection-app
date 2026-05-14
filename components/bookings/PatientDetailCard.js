@@ -1,5 +1,6 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
+  ActivityIndicator,
   Linking,
   Modal,
   NativeModules,
@@ -16,8 +17,9 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import GetLocation from 'react-native-get-location';
 import {getAddressFromCoords} from '../../utils/location/getAddressFromCoords';
+import {BRAND} from '../../styles/appStyles';
 import PatientDocumentsList from './patient/PatientDocumentsList';
-import ReportCourierSelector from './patient/ReportCourierSelector';
+import RequiredLabel from './appointmentDetails/RequiredLabel';
 
 const {LocalDocumentPickerModule, LocalGeoCameraModule} = NativeModules;
 const DOCUMENT_ZOOM_MIN = 1;
@@ -25,7 +27,13 @@ const DOCUMENT_ZOOM_MAX = 3;
 const EMPTY_PAYMENT_PROOF_DOCUMENTS = [];
 const EMPTY_MANUAL_SLIP_DOCUMENTS = [];
 const MANUAL_HC_SLIP_STATUS = 'manual_hc_slip';
+const PATIENT_DOCUMENT_BASE_URL = 'https://labmate.bhasinpathlabs.com:2010/';
 const TEST_BOOKING_STATUS_OPTIONS = [
+  {
+    value: 'none',
+    label: 'None',
+    icon: 'remove-circle-outline',
+  },
   {
     value: 'confirmed_booked',
     label: 'Test confirmed & booked',
@@ -38,7 +46,7 @@ const TEST_BOOKING_STATUS_OPTIONS = [
   },
   {
     value: 'incomplete_reg_exec',
-    label: 'Uncomplete Test Booking, registration Executive to complete',
+    label: 'Incomplete Test Booking, registration Executive to complete',
     icon: 'alert-circle-outline',
   },
 ];
@@ -49,6 +57,34 @@ const CGHS_DOCUMENT_SECTIONS = [
 
 const toStableValue = value =>
   value === null || value === undefined ? '' : String(value).trim();
+
+const toPriceNumber = value => {
+  const numericValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
+  return Number.isFinite(numericValue) ? numericValue : 0;
+};
+
+const getStandardDiscountPercent = test =>
+  toPriceNumber(
+    test?.percentageonstandard ||
+      test?.percentageOnStandard ||
+      test?.percentage_on_standard ||
+      test?.PercentageOnStandard ||
+      test?.percentagestandard ||
+      test?.percentageStandard ||
+      test?.percentage_standard ||
+      test?.PercentageStandard,
+  );
+
+const getDisplayTestPrice = test => {
+  const mrp = toPriceNumber(test?.mrp || test?.MRP || test?.amount);
+  const charge = toPriceNumber(test?.charge || test?.Charge);
+  const baseMrp = mrp || charge;
+  const discountPercent = Math.min(100, Math.max(0, getStandardDiscountPercent(test)));
+  if (discountPercent > 0 && baseMrp > 0) {
+    return Math.max(0, baseMrp - (baseMrp * discountPercent) / 100);
+  }
+  return charge || baseMrp;
+};
 
 const getTestDedupeKey = test =>
   toStableValue(
@@ -109,17 +145,17 @@ const getPaymentLabelFromBillingMode = mode => {
   }
 
   const labels = [];
-  if (normalizedMode.includes('F')) {
-    labels.push('Free');
+  if (normalizedMode.includes('C')) {
+    labels.push('Credit');
   }
   if (normalizedMode.includes('P')) {
     labels.push('Paying');
   }
-  if (normalizedMode.includes('C')) {
-    labels.push('Credit');
+  if (normalizedMode.includes('F')) {
+    labels.push('Free');
   }
 
-  return labels.length ? labels.join(' / ') : normalizedMode;
+  return labels.length ? labels.join(' & ') : normalizedMode;
 };
 
 const getTestBillingChargeMode = test =>
@@ -174,6 +210,11 @@ const getBillingModeFromTests = ({tests, panelCompanies, activePanelCompany}) =>
   const sourceTests = Array.isArray(tests) ? tests : [];
   const sourceCompanies = Array.isArray(panelCompanies) ? panelCompanies : [];
   const modes = [];
+  const pushMode = mode => {
+    if (mode && !modes.includes(mode)) {
+      modes.push(mode);
+    }
+  };
 
   sourceTests.forEach(test => {
     const directMode = getTestBillingChargeMode(test);
@@ -185,9 +226,11 @@ const getBillingModeFromTests = ({tests, panelCompanies, activePanelCompany}) =>
       (sourceCompanies.length === 1 ? sourceCompanies[0] : null);
     const resolvedMode = directMode || getBillingChargeMode(matchedCompany);
 
-    if (resolvedMode && !modes.includes(resolvedMode)) {
-      modes.push(resolvedMode);
-    }
+    pushMode(resolvedMode);
+  });
+
+  sourceCompanies.forEach(company => {
+    pushMode(getBillingChargeMode(company));
   });
 
   return modes.join(',');
@@ -197,7 +240,7 @@ const formatTestBookingStatusLabel = value => {
   const normalizedValue = toStableValue(value);
 
   if (!normalizedValue) {
-    return TEST_BOOKING_STATUS_OPTIONS[0].label;
+    return 'None';
   }
 
   return normalizedValue
@@ -278,6 +321,15 @@ const formatPhotoTimestamp = () => {
   });
 };
 
+const normalizePickedDocuments = (pickedFiles, fileNamePrefix) =>
+  (Array.isArray(pickedFiles) ? pickedFiles : [])
+    .filter(file => file?.uri)
+    .map((file, index) => ({
+      uri: file.uri,
+      name: file.name || `${fileNamePrefix}-${Date.now()}-${index}`,
+      type: file.type || getMimeTypeFromFileName(file.name),
+    }));
+
 const getDocumentImageSource = document => {
   if (document?.imageSource) {
     return document.imageSource;
@@ -289,12 +341,78 @@ const getDocumentImageSource = document => {
   return uri ? {uri} : null;
 };
 
+const resolvePatientDocumentUrl = value => {
+  const rawUrl = toStableValue(
+    typeof value === 'string'
+      ? value
+      : value?.url || value?.uri || value?.path || value?.file,
+  );
+
+  if (!rawUrl) {
+    return '';
+  }
+
+  if (/^https?:\/\//i.test(rawUrl)) {
+    return rawUrl;
+  }
+
+  return `${PATIENT_DOCUMENT_BASE_URL}${rawUrl.replace(/^\/+/, '')}`;
+};
+
+const getDisplayNameFromUri = value => {
+  const rawValue = toStableValue(value);
+
+  if (!rawValue) {
+    return '';
+  }
+
+  const withoutQuery = rawValue.split('?')[0].split('#')[0];
+  const decodedValue = (() => {
+    try {
+      return decodeURIComponent(withoutQuery);
+    } catch {
+      return withoutQuery;
+    }
+  })();
+
+  return decodedValue.split(/[\\/]/).filter(Boolean).pop() || rawValue;
+};
+
+const getDocumentDisplayLabel = (document, fallbackLabel) => {
+  if (typeof document === 'string') {
+    return getDisplayNameFromUri(document) || fallbackLabel;
+  }
+
+  return (
+    toStableValue(document?.label || document?.name) ||
+    getDisplayNameFromUri(document?.uri || document?.url || document?.path) ||
+    fallbackLabel
+  );
+};
+
+const buildApiDocumentItems = (items, labelPrefix) =>
+  (Array.isArray(items) ? items : [])
+    .map((item, index) => {
+      const uri = resolvePatientDocumentUrl(item);
+
+      if (!uri) {
+        return null;
+      }
+
+      return {
+        id: `${labelPrefix}-${uri}-${index}`,
+        label: getDocumentDisplayLabel(item, `${labelPrefix} ${index + 1}`),
+        documentType: labelPrefix,
+        uri,
+      };
+    })
+    .filter(Boolean);
+
 function PatientDetailCard({
   patient,
   styles,
   onCancelBooking,
   onEditPatient,
-  onReportCourierChange,
   onPrimaryPanelCompanyPress,
   onOpenSampleCollection,
   selectedTests = [],
@@ -302,8 +420,7 @@ function PatientDetailCard({
   onRemoveSelectedTest,
   panelCompanies = [],
   activePanelCompanyId = '',
-  reportCourierValue: reportCourierValueProp,
-  testBookingStatusValue = 'confirmed_booked',
+  testBookingStatusValue = 'none',
   testBookingStatusFromCce = '',
   onTestBookingStatusChange,
   cghsEnabled = false,
@@ -319,6 +436,7 @@ function PatientDetailCard({
   paymentProofDocuments: paymentProofDocumentsProp = [],
   onPaymentProofDocumentsChange,
   requiresPaymentProof = false,
+  requiresIdentityDocuments = false,
   sampleCollected = false,
   showAlert,
   isCancelBookingDisabled,
@@ -338,6 +456,7 @@ function PatientDetailCard({
   const [activeCghsDocument, setActiveCghsDocument] = useState(null);
   const [documentZoom, setDocumentZoom] = useState(DOCUMENT_ZOOM_MIN);
   const [documentOffset, setDocumentOffset] = useState({x: 0, y: 0});
+  const [cghsCameraLoadingSection, setCghsCameraLoadingSection] = useState('');
   const [paymentProofDocuments, setPaymentProofDocuments] = useState(
     Array.isArray(paymentProofDocumentsProp) ? paymentProofDocumentsProp : [],
   );
@@ -394,17 +513,6 @@ function PatientDetailCard({
   const paymentDisplayLabel = getPaymentLabelFromBillingMode(paymentBillingMode);
   const shouldShowPaymentProofUpload = requiresPaymentProof;
   const shouldShowManualSlipUpload = testBookingStatusValue === MANUAL_HC_SLIP_STATUS;
-  const rawReportCourierValue = toStableValue(
-    reportCourierValueProp !== undefined
-      ? reportCourierValueProp
-      : patient.reportCourier,
-  ).toLowerCase();
-  const reportCourierValue =
-    rawReportCourierValue === 'yes'
-      ? 'Yes'
-      : rawReportCourierValue === 'no'
-      ? 'No'
-      : '';
   const genderBadge = getGenderBadgeConfig(patient.gender);
   const labmatePid = toStableValue(patient.labmatePid || patient.labmate_pid);
   const cceTestBookingStatusLabel = toStableValue(testBookingStatusFromCce)
@@ -414,6 +522,14 @@ function PatientDetailCard({
     TEST_BOOKING_STATUS_OPTIONS.find(
       option => option.value === testBookingStatusValue,
     ) || TEST_BOOKING_STATUS_OPTIONS[0];
+
+  const renderConditionalFieldLabel = useCallback(
+    label =>
+      label ? (
+        <RequiredLabel styles={styles}>{label}</RequiredLabel>
+      ) : null,
+    [styles],
+  );
 
   useEffect(() => {
     setPaymentProofDocuments(
@@ -438,6 +554,8 @@ function PatientDetailCard({
         panelCompanyId: test.panelCompanyId || '',
         parentDescription: test.parentDescription || '',
         mrp: Number(test?.mrp || test?.charge || 0) || 0,
+        charge: getDisplayTestPrice(test),
+        percentageonstandard: getStandardDiscountPercent(test),
       }));
     }
 
@@ -452,6 +570,8 @@ function PatientDetailCard({
       panelCompanyId: patient.compCatId || patient.comp_cat_id || '',
       parentDescription: '',
       mrp: Number(test?.mrp || test?.charge || test?.amount || 0) || 0,
+      charge: getDisplayTestPrice(test),
+      percentageonstandard: getStandardDiscountPercent(test),
     }));
   }, [
     patient.compCatId,
@@ -461,9 +581,51 @@ function PatientDetailCard({
     selectedTests,
     selectedTestsSourceReady,
   ]);
-  const normalizedDocuments = (Array.isArray(patient.documents)
-    ? patient.documents
-    : [])
+  const normalizedDocuments = [
+    ...(Array.isArray(patient.documents) ? patient.documents : []),
+    ...buildApiDocumentItems(
+      patient.patientDocumentUrls || patient.patient_document_urls,
+      'Patient Document',
+    ),
+    ...buildApiDocumentItems(
+      patient.prescriptionUrls || patient.prescription_urls,
+      'Prescription',
+    ),
+    ...(Array.isArray(cghsDocumentsBySection.patientPhotos)
+      ? cghsDocumentsBySection.patientPhotos.map((document, index) => ({
+          ...document,
+          label:
+            document?.label || document?.name || `Patient Photo ${index + 1}`,
+          documentType: 'Patient Photo',
+          canRemove: true,
+          documentSource: 'cghs',
+          documentSectionKey: 'patientPhotos',
+          documentSourceIndex: index,
+        }))
+      : []),
+    ...(Array.isArray(cghsDocumentsBySection.cghsCard)
+      ? cghsDocumentsBySection.cghsCard.map((document, index) => ({
+          ...document,
+          label: document?.label || document?.name || `CGHS Card ${index + 1}`,
+          documentType: 'CGHS Card',
+          canRemove: true,
+          documentSource: 'cghs',
+          documentSectionKey: 'cghsCard',
+          documentSourceIndex: index,
+        }))
+      : []),
+    ...(Array.isArray(paymentProofDocuments)
+      ? paymentProofDocuments.map((document, index) => ({
+          ...document,
+          label:
+            document?.label || document?.name || `Prescription ${index + 1}`,
+          documentType: 'Prescription',
+          canRemove: true,
+          documentSource: 'prescription',
+          documentSourceIndex: index,
+        }))
+      : []),
+  ]
     .map((document, index) => {
       const imageSource = getDocumentImageSource(document);
 
@@ -472,10 +634,10 @@ function PatientDetailCard({
       }
 
       return {
+        ...document,
         id: String(document?.id || document?.uri || document || `document-${index}`),
-        label:
-          String(document?.label || document?.name || document || '').trim() ||
-          `Photo ${index + 1}`,
+        label: getDocumentDisplayLabel(document, `Document ${index + 1}`),
+        documentType: toStableValue(document?.documentType) || 'Document',
         imageSource,
       };
     })
@@ -523,6 +685,7 @@ function PatientDetailCard({
     setActiveDocumentIndex(-1);
     setActiveCghsDocument({
       label: document?.name || 'Patient photo',
+      documentType: document?.documentType || 'Document',
       imageSource,
     });
   };
@@ -648,6 +811,179 @@ function PatientDetailCard({
     );
     documentGestureRef.current.mode = 'idle';
   };
+  const appendPaymentProofDocuments = useCallback(
+    pickedDocuments => {
+      if (!pickedDocuments.length) {
+        return;
+      }
+
+      setPaymentProofDocuments(previousDocuments => {
+        const nextDocuments = [...previousDocuments, ...pickedDocuments];
+        onPaymentProofDocumentsChange?.(patient, nextDocuments);
+        return nextDocuments;
+      });
+    },
+    [onPaymentProofDocumentsChange, patient],
+  );
+  const appendManualSlipDocuments = useCallback(
+    pickedDocuments => {
+      if (!pickedDocuments.length) {
+        return;
+      }
+
+      setManualSlipDocuments(previousDocuments => {
+        const nextDocuments = [...previousDocuments, ...pickedDocuments];
+        onManualSlipDocumentsChange?.(patient, nextDocuments);
+        return nextDocuments;
+      });
+    },
+    [onManualSlipDocumentsChange, patient],
+  );
+  const pickDocumentsFromDevice = useCallback(
+    async ({fileNamePrefix, onDocumentsPicked, emptyMessage, failureMessage}) => {
+      if (!LocalDocumentPickerModule?.pickDocuments) {
+        showPatientAlert(
+          'Upload Not Available',
+          'Document picker module is not available in this build.',
+        );
+        return;
+      }
+
+      try {
+        const pickedFiles = await LocalDocumentPickerModule.pickDocuments();
+        const pickedDocuments = normalizePickedDocuments(
+          pickedFiles,
+          fileNamePrefix,
+        );
+
+        if (!pickedDocuments.length) {
+          return;
+        }
+
+        onDocumentsPicked(pickedDocuments);
+      } catch (error) {
+        if (
+          error?.code === 'DOCUMENT_PICKER_CANCELLED' ||
+          String(error?.message || '').toLowerCase().includes('cancel')
+        ) {
+          return;
+        }
+
+        showPatientAlert('Upload Failed', failureMessage || emptyMessage);
+      }
+    },
+    [showPatientAlert],
+  );
+  const captureDocumentFromCamera = useCallback(
+    async ({
+      documentLabel,
+      fileNamePrefix,
+      onDocumentsPicked,
+      requireLocationMeta = false,
+      onCaptureStart,
+      onCaptureEnd,
+    }) => {
+      if (!LocalGeoCameraModule?.captureStampedPhoto) {
+        showPatientAlert(
+          'Camera Not Available',
+          'Geo camera module is not available in this build.',
+        );
+        return;
+      }
+
+      onCaptureStart?.();
+
+      try {
+        let location = null;
+        let addressText = '';
+
+        if (requireLocationMeta && Platform.OS === 'android') {
+          const granted = await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          );
+
+          if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+            showPatientAlert(
+              'Location Required',
+              'Location permission is required to capture this photo.',
+            );
+            return;
+          }
+        }
+
+        if (requireLocationMeta) {
+          location = await GetLocation.getCurrentPosition({
+            enableHighAccuracy: true,
+            timeout: 20000,
+          });
+
+          try {
+            const address = await getAddressFromCoords(
+              location.latitude,
+              location.longitude,
+            );
+            addressText = address?.fullAddress || address?.displayName || '';
+          } catch {
+            addressText = '';
+          }
+        }
+
+        const stampText = [
+          `Patient: ${patient?.name || 'N/A'}`,
+          `Document: ${documentLabel || 'Document'}`,
+          location
+            ? `Lat: ${formatGeoCoordinate(location.latitude)}, Long: ${formatGeoCoordinate(
+                location.longitude,
+              )}`
+            : '',
+          addressText ? `Address: ${addressText}` : '',
+          `Time: ${formatPhotoTimestamp()}`,
+        ]
+          .filter(Boolean)
+          .join('\n');
+        const capturedPhoto = await LocalGeoCameraModule.captureStampedPhoto(
+          stampText,
+        );
+
+        if (!capturedPhoto?.uri) {
+          return;
+        }
+
+        onDocumentsPicked([
+          {
+            uri: capturedPhoto.uri,
+            name: capturedPhoto.name || `${fileNamePrefix}-${Date.now()}.jpg`,
+            type: capturedPhoto.type || 'image/jpeg',
+          },
+        ]);
+      } catch (error) {
+        if (
+          error?.code === 'CAMERA_CANCELLED' ||
+          String(error?.message || '').toLowerCase().includes('cancel')
+        ) {
+          return;
+        }
+
+        showPatientAlert(
+          'Camera Failed',
+          'Unable to capture a photo right now. Please try again.',
+        );
+      } finally {
+        onCaptureEnd?.();
+      }
+    },
+    [patient?.name, showPatientAlert],
+  );
+  const openUploadSourceOptions = useCallback(
+    ({title, onCameraPress, onScreenshotPress}) => {
+      showPatientAlert(title, 'Choose how to add this file.', [
+        {text: 'Camera', onPress: onCameraPress},
+        {text: 'Screenshot', onPress: onScreenshotPress},
+        {text: 'Cancel', style: 'cancel'},
+      ]);
+    },
+    [showPatientAlert],
+  );
 
   useEffect(() => {
     if (
@@ -672,47 +1008,21 @@ function PatientDetailCard({
   ]);
 
   const handlePickPaymentProofDocuments = async () => {
-    if (!LocalDocumentPickerModule?.pickDocuments) {
-      showPatientAlert(
-        'Upload Not Available',
-        'Document picker module is not available in this build.',
-      );
-      return;
-    }
-
-    try {
-      const pickedFiles = await LocalDocumentPickerModule.pickDocuments();
-
-      const pickedDocuments = (Array.isArray(pickedFiles) ? pickedFiles : [])
-        .filter(file => file?.uri)
-        .map((file, index) => ({
-          uri: file.uri,
-          name: file.name || `payment-proof-${Date.now()}-${index}`,
-          type: file.type || getMimeTypeFromFileName(file.name),
-        }));
-
-      if (!pickedDocuments.length) {
-        return;
-      }
-
-      setPaymentProofDocuments(previousDocuments => {
-        const nextDocuments = [...previousDocuments, ...pickedDocuments];
-        onPaymentProofDocumentsChange?.(patient, nextDocuments);
-        return nextDocuments;
-      });
-    } catch (error) {
-      if (
-        error?.code === 'DOCUMENT_PICKER_CANCELLED' ||
-        String(error?.message || '').toLowerCase().includes('cancel')
-      ) {
-        return;
-      }
-
-      showPatientAlert(
-        'Upload Failed',
-        'Unable to select documents right now. Please try again.',
-      );
-    }
+    openUploadSourceOptions({
+      title: 'Prescription',
+      onCameraPress: () =>
+        captureDocumentFromCamera({
+          documentLabel: 'Prescription',
+          fileNamePrefix: 'prescription',
+          onDocumentsPicked: appendPaymentProofDocuments,
+        }),
+      onScreenshotPress: () =>
+        pickDocumentsFromDevice({
+          fileNamePrefix: 'payment-proof',
+          onDocumentsPicked: appendPaymentProofDocuments,
+          failureMessage: 'Unable to select documents right now. Please try again.',
+        }),
+    });
   };
   const handleRemovePaymentProofDocument = indexToRemove => {
     setPaymentProofDocuments(previousDocuments => {
@@ -724,47 +1034,21 @@ function PatientDetailCard({
     });
   };
   const handlePickManualSlipDocuments = async () => {
-    if (!LocalDocumentPickerModule?.pickDocuments) {
-      showPatientAlert(
-        'Upload Not Available',
-        'Document picker module is not available in this build.',
-      );
-      return;
-    }
-
-    try {
-      const pickedFiles = await LocalDocumentPickerModule.pickDocuments();
-
-      const pickedDocuments = (Array.isArray(pickedFiles) ? pickedFiles : [])
-        .filter(file => file?.uri)
-        .map((file, index) => ({
-          uri: file.uri,
-          name: file.name || `manual-hc-slip-${Date.now()}-${index}`,
-          type: file.type || getMimeTypeFromFileName(file.name),
-        }));
-
-      if (!pickedDocuments.length) {
-        return;
-      }
-
-      setManualSlipDocuments(previousDocuments => {
-        const nextDocuments = [...previousDocuments, ...pickedDocuments];
-        onManualSlipDocumentsChange?.(patient, nextDocuments);
-        return nextDocuments;
-      });
-    } catch (error) {
-      if (
-        error?.code === 'DOCUMENT_PICKER_CANCELLED' ||
-        String(error?.message || '').toLowerCase().includes('cancel')
-      ) {
-        return;
-      }
-
-      showPatientAlert(
-        'Upload Failed',
-        'Unable to select documents right now. Please try again.',
-      );
-    }
+    openUploadSourceOptions({
+      title: 'Manual HC Slip',
+      onCameraPress: () =>
+        captureDocumentFromCamera({
+          documentLabel: 'Manual HC Slip',
+          fileNamePrefix: 'manual-hc-slip',
+          onDocumentsPicked: appendManualSlipDocuments,
+        }),
+      onScreenshotPress: () =>
+        pickDocumentsFromDevice({
+          fileNamePrefix: 'manual-hc-slip',
+          onDocumentsPicked: appendManualSlipDocuments,
+          failureMessage: 'Unable to select documents right now. Please try again.',
+        }),
+    });
   };
   const handleRemoveManualSlipDocument = indexToRemove => {
     setManualSlipDocuments(previousDocuments => {
@@ -789,131 +1073,72 @@ function PatientDetailCard({
     [cghsDocumentsBySection, onCghsDocumentsChange, patient],
   );
   const handleUploadCghsDocuments = async sectionKey => {
-    if (!LocalDocumentPickerModule?.pickDocuments) {
-      showPatientAlert(
-        'Upload Not Available',
-        'Document picker module is not available in this build.',
-      );
-      return;
-    }
-
-    try {
-      const pickedFiles = await LocalDocumentPickerModule.pickDocuments();
-      const pickedDocuments = (Array.isArray(pickedFiles) ? pickedFiles : [])
-        .filter(file => file?.uri)
-        .map((file, index) => ({
-          uri: file.uri,
-          name: file.name || `cghs-document-${Date.now()}-${index}`,
-          type: file.type || getMimeTypeFromFileName(file.name),
-        }));
-
-      if (!pickedDocuments.length) {
-        return;
-      }
-
-      appendCghsDocuments(sectionKey, pickedDocuments);
-    } catch (error) {
-      if (
-        error?.code === 'DOCUMENT_PICKER_CANCELLED' ||
-        String(error?.message || '').toLowerCase().includes('cancel')
-      ) {
-        return;
-      }
-
-      showPatientAlert(
-        'Upload Failed',
-        'Unable to select documents right now. Please try again.',
-      );
-    }
-  };
-  const handleCaptureCghsPatientPhoto = async () => {
-    if (!LocalGeoCameraModule?.captureStampedPhoto) {
-      showPatientAlert(
-        'Camera Not Available',
-        'Geo camera module is not available in this build.',
-      );
-      return;
-    }
-
-    try {
-      if (Platform.OS === 'android') {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        );
-
-        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-          showPatientAlert(
-            'Location Required',
-            'Location permission is required for geo-stamped patient photos.',
-          );
-          return;
-        }
-      }
-
-      const location = await GetLocation.getCurrentPosition({
-        enableHighAccuracy: true,
-        timeout: 20000,
-      });
-      let addressText = '';
-
-      try {
-        const address = await getAddressFromCoords(
-          location.latitude,
-          location.longitude,
-        );
-        addressText = address?.fullAddress || address?.displayName || '';
-      } catch {
-        addressText = '';
-      }
-
-      const stampText = [
-        `Patient: ${patient?.name || 'N/A'}`,
-        `Lat: ${formatGeoCoordinate(location.latitude)}, Long: ${formatGeoCoordinate(
-          location.longitude,
-        )}`,
-        addressText ? `Address: ${addressText}` : '',
-        `Time: ${formatPhotoTimestamp()}`,
-      ]
-        .filter(Boolean)
-        .join('\n');
-      const capturedPhoto = await LocalGeoCameraModule.captureStampedPhoto(
-        stampText,
-      );
-
-      if (!capturedPhoto?.uri) {
-        return;
-      }
-
-      appendCghsDocuments('patientPhotos', [
-        {
-          uri: capturedPhoto.uri,
-          name: capturedPhoto.name || `patient-photo-${Date.now()}.jpg`,
-          type: capturedPhoto.type || 'image/jpeg',
-        },
-      ]);
-    } catch (error) {
-      if (
-        error?.code === 'CAMERA_CANCELLED' ||
-        String(error?.message || '').toLowerCase().includes('cancel')
-      ) {
-        return;
-      }
-
-      showPatientAlert(
-        'Camera Failed',
-        'Unable to capture a geo-stamped photo right now. Please try again.',
-      );
-    }
+    pickDocumentsFromDevice({
+      fileNamePrefix: `cghs-document-${sectionKey}`,
+      onDocumentsPicked: pickedDocuments =>
+        appendCghsDocuments(sectionKey, pickedDocuments),
+      failureMessage: 'Unable to select documents right now. Please try again.',
+    });
   };
   const handlePickCghsDocuments = sectionKey => {
-    if (sectionKey !== 'patientPhotos') {
-      handleUploadCghsDocuments(sectionKey);
+    const sectionLabel =
+      sectionKey === 'patientPhotos' ? 'Patient Photo' : 'CGHS Card';
+
+    openUploadSourceOptions({
+      title: sectionLabel,
+      onCameraPress: () =>
+        captureDocumentFromCamera({
+          documentLabel: sectionLabel,
+          fileNamePrefix:
+            sectionKey === 'patientPhotos' ? 'patient-photo' : 'cghs-card',
+          requireLocationMeta: sectionKey === 'patientPhotos',
+          onCaptureStart:
+            sectionKey === 'patientPhotos'
+              ? () => setCghsCameraLoadingSection(sectionKey)
+              : undefined,
+          onCaptureEnd:
+            sectionKey === 'patientPhotos'
+              ? () => setCghsCameraLoadingSection('')
+              : undefined,
+          onDocumentsPicked: pickedDocuments =>
+            appendCghsDocuments(sectionKey, pickedDocuments),
+        }),
+      onScreenshotPress: () => handleUploadCghsDocuments(sectionKey),
+    });
+  };
+  const handleUploadPatientInfoDocument = () => {
+    const uploadOptions = [];
+
+    if (typeof onCghsDocumentsChange === 'function') {
+      uploadOptions.push(
+        {
+          text: 'CGHS Card',
+          onPress: () => handleUploadCghsDocuments('cghsCard'),
+        },
+        {
+          text: 'Patient Photo',
+          onPress: () => handlePickCghsDocuments('patientPhotos'),
+        },
+      );
+    }
+
+    if (typeof onPaymentProofDocumentsChange === 'function') {
+      uploadOptions.push({
+        text: 'Prescription',
+        onPress: handlePickPaymentProofDocuments,
+      });
+    }
+
+    if (!uploadOptions.length) {
+      showPatientAlert(
+        'Upload Not Available',
+        'Document upload is not available for this patient.',
+      );
       return;
     }
 
-    showPatientAlert('Patient Photo', 'Choose how to add patient photo.', [
-      {text: 'Camera', onPress: handleCaptureCghsPatientPhoto},
-      {text: 'Upload', onPress: () => handleUploadCghsDocuments(sectionKey)},
+    showPatientAlert('Upload Document', 'Choose document type.', [
+      ...uploadOptions,
       {text: 'Cancel', style: 'cancel'},
     ]);
   };
@@ -922,6 +1147,19 @@ function PatientDetailCard({
       (_, index) => index !== indexToRemove,
     );
     onCghsDocumentsChange?.(patient, sectionKey, nextDocuments);
+  };
+  const handleRemovePatientInfoDocument = document => {
+    if (document?.documentSource === 'cghs') {
+      handleRemoveCghsDocument(
+        document.documentSectionKey,
+        document.documentSourceIndex,
+      );
+      return;
+    }
+
+    if (document?.documentSource === 'prescription') {
+      handleRemovePaymentProofDocument(document.documentSourceIndex);
+    }
   };
   const handleCallPatientNumber = async phoneNumber => {
     const dialableNumber = getDialablePhoneNumber(phoneNumber);
@@ -990,13 +1228,6 @@ function PatientDetailCard({
                   />
                   <Text style={styles.patientTagHighlightText} numberOfLines={1}>
                     {patient.tag}
-                  </Text>
-                </View>
-              ) : null}
-              {reportCourierValue ? (
-                <View style={styles.patientInfoPillSuccess}>
-                  <Text style={styles.patientInfoPillSuccessText}>
-                    Reports: {reportCourierValue}
                   </Text>
                 </View>
               ) : null}
@@ -1142,31 +1373,26 @@ function PatientDetailCard({
         <View
           style={[
             styles.patientDetailMetaItem,
+            styles.patientDetailMetaItemFull,
             isNarrowCard && styles.patientDetailMetaItemStacked,
           ]}>
           <Text style={styles.patientDetailMetaLabel}>Referred By</Text>
-          <Text style={styles.patientDetailMetaValue} numberOfLines={1}>
+          <Text style={styles.patientDetailMetaValue}>
             {patient.referredBy || 'N/A'}
           </Text>
         </View>
         <View
           style={[
             styles.patientDetailMetaItem,
+            styles.patientDetailMetaItemFull,
             isNarrowCard && styles.patientDetailMetaItemStacked,
           ]}>
           <Text style={styles.patientDetailMetaLabel}>Internal Referenced By</Text>
-          <Text style={styles.patientDetailMetaValue} numberOfLines={1}>
+          <Text style={styles.patientDetailMetaValue}>
             {patient.internalReferencedBy || 'N/A'}
           </Text>
         </View>
       </View>
-      <ReportCourierSelector
-        styles={styles}
-        patient={patient}
-        value={reportCourierValue}
-        isNarrow={isNarrowCard}
-        onChange={onReportCourierChange}
-      />
       {false ? (
         <View style={styles.patientCghsSection}>
           <TouchableOpacity
@@ -1220,6 +1446,9 @@ function PatientDetailCard({
                       <View style={styles.patientCghsDocumentHeader}>
                         <Text style={styles.patientCghsDocumentLabel}>
                           {section.label}
+                          {requiresIdentityDocuments ? (
+                            <Text style={styles.requiredFieldAsterisk}> *</Text>
+                          ) : null}
                         </Text>
                         {sectionDocuments.length ? (
                           <Text style={styles.patientCghsDocumentCount}>
@@ -1228,16 +1457,29 @@ function PatientDetailCard({
                         ) : null}
                         <TouchableOpacity
                           activeOpacity={0.85}
-                          style={styles.patientCghsUploadButton}
+                          style={[
+                            styles.patientCghsUploadButton,
+                            cghsCameraLoadingSection === section.key &&
+                              styles.patientCghsUploadButtonDisabled,
+                          ]}
                           onPress={() => handlePickCghsDocuments(section.key)}
-                          disabled={typeof onCghsDocumentsChange !== 'function'}>
-                          <Ionicons
-                            name="cloud-upload-outline"
-                            size={14}
-                            style={styles.patientCghsUploadButtonIcon}
-                          />
+                          disabled={
+                            typeof onCghsDocumentsChange !== 'function' ||
+                            cghsCameraLoadingSection === section.key
+                          }>
+                          {cghsCameraLoadingSection === section.key ? (
+                            <ActivityIndicator color="#FFFFFF" size="small" />
+                          ) : (
+                            <Ionicons
+                              name="cloud-upload-outline"
+                              size={14}
+                              style={styles.patientCghsUploadButtonIcon}
+                            />
+                          )}
                           <Text style={styles.patientCghsUploadButtonText}>
-                            Upload
+                            {cghsCameraLoadingSection === section.key
+                              ? 'Opening...'
+                              : 'Upload'}
                           </Text>
                         </TouchableOpacity>
                       </View>
@@ -1372,7 +1614,7 @@ function PatientDetailCard({
       </View>
       {shouldShowManualSlipUpload ? (
         <View style={styles.patientPaymentProofSection}>
-          <Text style={styles.addPatientFieldLabel}>Upload manual slip *</Text>
+          {renderConditionalFieldLabel('Upload manual slip')}
           <TouchableOpacity
             activeOpacity={0.85}
             style={styles.completeUploadBox}
@@ -1457,9 +1699,7 @@ function PatientDetailCard({
       </View>
       {shouldShowPaymentProofUpload ? (
         <View style={styles.patientPaymentProofSection}>
-          <Text style={styles.addPatientFieldLabel}>
-            Billing Proof / Prescription *
-          </Text>
+          {renderConditionalFieldLabel('Billing Proof / Prescription')}
           <TouchableOpacity
             activeOpacity={0.85}
             style={styles.completeUploadBox}
@@ -1519,8 +1759,30 @@ function PatientDetailCard({
         documents={normalizedDocuments}
         isNarrow={isNarrowCard}
         onOpenDocument={handleOpenDocument}
+        onUploadDocument={handleUploadPatientInfoDocument}
+        onRemoveDocument={handleRemovePatientInfoDocument}
       />
       </View>
+
+      <Modal
+        transparent
+        animationType="fade"
+        visible={cghsCameraLoadingSection === 'patientPhotos'}
+        onRequestClose={() => {}}>
+        <View style={styles.loadingOverlay}>
+          <View style={styles.loadingCard}>
+            <View style={styles.loadingSpinnerWrap}>
+              <ActivityIndicator color={BRAND.primaryStrong} size="large" />
+            </View>
+            <Text style={[styles.loadingTitle, styles.loadingTitleCompact]}>
+              Opening camera
+            </Text>
+            <Text style={styles.loadingMessage}>
+              Preparing geo-tagged patient photo. Please wait...
+            </Text>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         transparent
@@ -1608,16 +1870,23 @@ function PatientDetailCard({
 
             {activeCghsDocument ? (
               <View style={styles.patientDocumentViewerFooter}>
-                <Text style={styles.patientDocumentViewerCounter}>
-                  {activeCghsDocument.label}
-                </Text>
+                <View style={styles.patientDocumentViewerMeta}>
+                  <Text style={styles.patientDocumentViewerType} numberOfLines={1}>
+                    {activeCghsDocument.documentType || 'Document'}
+                  </Text>
+                  <Text
+                    style={styles.patientDocumentViewerCounter}
+                    numberOfLines={1}>
+                    {activeCghsDocument.label}
+                  </Text>
+                </View>
               </View>
             ) : (
-            <View style={styles.patientDocumentViewerFooter}>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.patientDocumentViewerNavButton}
-                onPress={() => handleNavigateDocument(-1)}>
+          <View style={styles.patientDocumentViewerFooter}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.patientDocumentViewerNavButton}
+              onPress={() => handleNavigateDocument(-1)}>
                 <Ionicons
                   name="chevron-back"
                   size={18}
@@ -1625,9 +1894,18 @@ function PatientDetailCard({
                 />
                 <Text style={styles.patientDocumentViewerNavText}>Previous</Text>
               </TouchableOpacity>
-              <Text style={styles.patientDocumentViewerCounter}>
-                {activeDocumentIndex + 1} / {normalizedDocuments.length}
-              </Text>
+              <View style={styles.patientDocumentViewerMeta}>
+                <Text style={styles.patientDocumentViewerType} numberOfLines={1}>
+                  {viewerDocument?.documentType || 'Document'}
+                </Text>
+                <Text style={styles.patientDocumentViewerCounter} numberOfLines={1}>
+                  {viewerDocument?.label ||
+                    `${activeDocumentIndex + 1} / ${normalizedDocuments.length}`}
+                </Text>
+                <Text style={styles.patientDocumentViewerCounter}>
+                  {activeDocumentIndex + 1} / {normalizedDocuments.length}
+                </Text>
+              </View>
               <TouchableOpacity
                 activeOpacity={0.85}
                 style={styles.patientDocumentViewerNavButton}

@@ -19,6 +19,7 @@ function CancelBookingModal({
   isNarrowScreen,
   selectedBooking,
   patientCount,
+  cancelTargetPatient,
   bookingActionLoading,
   cancellationReasonOptions,
   cancellationReason,
@@ -37,6 +38,9 @@ function CancelBookingModal({
   closeCancelBookingModal,
   confirmCancelBooking,
 }) {
+  const isPatientCancellation = Boolean(cancelTargetPatient);
+  const patientName = cancelTargetPatient?.name || 'Patient';
+
   return (
     <Modal
       transparent
@@ -56,13 +60,18 @@ function CancelBookingModal({
           ]}>
           <View style={[styles.addPatientModalHeader, styles.cancelBookingHeader]}>
             <View style={styles.panelCompanyModalHeaderText}>
-              <Text style={styles.cancelBookingTitle}>Cancel entire booking</Text>
+              <Text style={styles.cancelBookingTitle}>
+                {isPatientCancellation ? 'Cancel patient' : 'Cancel entire booking'}
+              </Text>
               <Text style={styles.cancelBookingSubtitle}>
-                {selectedBooking?.bookingCode ||
-                  selectedBooking?.bookingNumber ||
-                  selectedBooking?.id ||
-                  'Appointment'}{' '}
-                | {patientCount} Patient{patientCount > 1 ? 's' : ''}
+                {isPatientCancellation
+                  ? `${patientName} | Patient level cancellation`
+                  : `${selectedBooking?.bookingCode ||
+                      selectedBooking?.bookingNumber ||
+                      selectedBooking?.id ||
+                      'Appointment'} | ${patientCount} Patient${
+                      patientCount > 1 ? 's' : ''
+                    }`}
               </Text>
             </View>
             <TouchableOpacity
@@ -146,7 +155,9 @@ function CancelBookingModal({
                   ) : null}
                 </View>
                 <Text style={styles.cancelCheckboxText}>
-                  Reschedule this booking
+                  {isPatientCancellation
+                    ? 'Reschedule this patient'
+                    : 'Reschedule this booking'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -233,8 +244,9 @@ function CancelBookingModal({
                 ) : (
                   <View style={styles.cancelInfoBox}>
                     <Text style={styles.cancelInfoText}>
-                      Booking will be cancelled and follow-up will be sent to
-                      Lead Management.
+                      {isPatientCancellation
+                        ? 'Patient will be cancelled and follow-up will be sent to Lead Management.'
+                        : 'Booking will be cancelled and follow-up will be sent to Lead Management.'}
                     </Text>
                   </View>
                 )}

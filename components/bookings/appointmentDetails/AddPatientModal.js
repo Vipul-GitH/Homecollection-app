@@ -461,6 +461,20 @@ function AddPatientModal({
                     ) : null}
                   </View>
                 </View>
+
+                <View style={styles.addPatientInputGroup}>
+                  <Text style={styles.addPatientFieldLabel}>CGHS Card No</Text>
+                  <TextInput
+                    value={patientForm.cghsCardNo}
+                    onChangeText={value =>
+                      updatePatientFormField('cghsCardNo', value)
+                    }
+                    placeholder="Enter CGHS card number"
+                    placeholderTextColor={BRAND.textMuted}
+                    autoCapitalize="characters"
+                    style={styles.addPatientInput}
+                  />
+                </View>
   
                 <Text style={styles.addPatientFieldLabel}>Tag</Text>
                 <View style={styles.addPatientChipGrid}>

@@ -36,8 +36,13 @@ function PatientSampleCollectionSection({
   ).map(item => ({
     tubeName: normalizeText(item?.tubeName || item?.specimenName) || 'Sample Tube',
     totalCount: Number(item?.totalCount || 0),
-    selectedCount: Number(item?.selectedCount || 0),
-    pendingCount: Number(item?.pendingCount || 0),
+    selectedCount: isCollected ? Number(item?.selectedCount || 0) : 0,
+    pendingCount: isCollected
+      ? Number(item?.pendingCount || 0)
+      : Math.max(
+          Number(item?.totalCount || item?.pendingCount || item?.selectedCount || 0),
+          1,
+        ),
   }));
   const tubeSummaryRows = allTubeSummaryRows.filter(
     item => !isUndefinedTubeName(item.tubeName),

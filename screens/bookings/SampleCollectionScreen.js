@@ -1,4 +1,11 @@
-import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {NativeModules, Text, TouchableOpacity, View} from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AppAlertModal from '../../components/common/AppAlertModal';
@@ -151,9 +158,47 @@ const isUndefinedSpecimenName = value => {
   return !normalizedValue || normalizedValue === 'none' || normalizedValue === 'n/a';
 };
 
+const ADDITIONAL_TUBE_OPTIONS = [
+  'EDTA',
+  'Plain',
+  'Flu-F',
+  'Flu-PP',
+  'Flu-R',
+  'Urine Sterile',
+  'Sodium Citrate',
+  'Heparin Plasma',
+  'ACD',
+  'Stool',
+  'Pus',
+];
+
+const ADDITIONAL_TUBE_META = {
+  EDTA: {icon: 'water-outline', tone: '#7C3AED'},
+  Plain: {icon: 'ellipse-outline', tone: '#DC2626'},
+  'Flu-F': {icon: 'snow-outline', tone: '#0891B2'},
+  'Flu-PP': {icon: 'snow-outline', tone: '#0D9488'},
+  'Flu-R': {icon: 'snow-outline', tone: '#2563EB'},
+  'Urine Sterile': {icon: 'flask-outline', tone: '#CA8A04'},
+  'Sodium Citrate': {icon: 'medical-outline', tone: '#9333EA'},
+  'Heparin Plasma': {icon: 'fitness-outline', tone: '#16A34A'},
+  ACD: {icon: 'beaker-outline', tone: '#EA580C'},
+  Stool: {icon: 'cube-outline', tone: '#92400E'},
+  Pus: {icon: 'bandage-outline', tone: '#BE123C'},
+};
+
 const normalizeDraftKey = value => toStableValue(value).toUpperCase();
 
+const getRootCodeFromSelectionKey = value =>
+  normalizeDraftKey(toStableValue(value).split('|')[0]);
+
 const isMatchingDraftUnselectedTest = (test, draftTest) => {
+  const testKey = normalizeDraftKey(test?.key);
+  const draftKey = normalizeDraftKey(draftTest?.key);
+
+  if (testKey && draftKey && testKey === draftKey) {
+    return true;
+  }
+
   const testCode = normalizeDraftKey(test?.booked_code);
   const draftCode = normalizeDraftKey(draftTest?.booked_code);
 
@@ -161,9 +206,22 @@ const isMatchingDraftUnselectedTest = (test, draftTest) => {
     return false;
   }
 
-  const testRoot = normalizeDraftKey(test?.rootBookedCode);
+  const testRoot =
+    normalizeDraftKey(test?.rootBookedCode) ||
+    normalizeDraftKey(test?.root_booked_code) ||
+    getRootCodeFromSelectionKey(test?.key);
   const draftRoot = normalizeDraftKey(draftTest?.root_booked_code);
-  return !draftRoot || !testRoot || draftRoot === testRoot;
+
+  if (draftRoot && testRoot && draftRoot !== testRoot) {
+    return false;
+  }
+
+  const testSpecimen = normalizeDraftKey(test?.specimenName);
+  const draftSpecimen = normalizeDraftKey(
+    draftTest?.specimenName || draftTest?.specimen_name,
+  );
+
+  return !draftSpecimen || !testSpecimen || draftSpecimen === testSpecimen;
 };
 
 function SampleCollectionScreen({
@@ -178,12 +236,20 @@ function SampleCollectionScreen({
 }) {
   const [appAlert, setAppAlert] = useState(null);
   const [expandedSpecimens, setExpandedSpecimens] = useState({});
+  const [expandedAdditionalTubes, setExpandedAdditionalTubes] = useState(false);
   const [selectedSpecimens, setSelectedSpecimens] = useState(
     () => sampleCollectionDraft?.selectedSpecimens || {},
   );
   const [selectedSpecimenTests, setSelectedSpecimenTests] = useState(
     () => sampleCollectionDraft?.selectedSpecimenTests || {},
   );
+  const [selectedAdditionalTubes, setSelectedAdditionalTubes] = useState(
+    () =>
+      Array.isArray(sampleCollectionDraft?.selectedAdditionalTubes)
+        ? sampleCollectionDraft.selectedAdditionalTubes
+        : [],
+  );
+  const [selectionRestoreVersion, setSelectionRestoreVersion] = useState(0);
   const sampleCollectionDraftRef = useRef(sampleCollectionDraft);
   const [sampleTubeMaps, setSampleTubeMaps] = useState(() =>
     buildSampleTubeMapsFromTests([]),
@@ -196,8 +262,15 @@ function SampleCollectionScreen({
   useEffect(() => {
     const currentDraft = sampleCollectionDraftRef.current || {};
     setExpandedSpecimens({});
+    setExpandedAdditionalTubes(false);
     setSelectedSpecimens(currentDraft?.selectedSpecimens || {});
     setSelectedSpecimenTests(currentDraft?.selectedSpecimenTests || {});
+    setSelectedAdditionalTubes(
+      Array.isArray(currentDraft?.selectedAdditionalTubes)
+        ? currentDraft.selectedAdditionalTubes
+        : [],
+    );
+    setSelectionRestoreVersion(0);
   }, [selectedPatient]);
 
   const normalizedSelectedTests = useMemo(
@@ -264,6 +337,17 @@ function SampleCollectionScreen({
       ).filter(tube => !isUndefinedSpecimenName(tube)),
     [normalizedSelectedTests, sampleTubeMaps.childrenMap, sampleTubeMaps.testsMap],
   );
+  const displayedSampleTubes = useMemo(() => {
+    const seenTubes = new Set();
+    return [...patientLevelTubes, ...selectedAdditionalTubes].filter(tube => {
+      const tubeKey = tube.toLowerCase();
+      if (seenTubes.has(tubeKey)) {
+        return false;
+      }
+      seenTubes.add(tubeKey);
+      return true;
+    });
+  }, [patientLevelTubes, selectedAdditionalTubes]);
 
   useEffect(() => {
     let isMounted = true;
@@ -308,9 +392,6 @@ function SampleCollectionScreen({
     }
 
     setSampleTubeMaps(fallbackMaps);
-    onLocalDatabaseLoadingChange?.(
-      'Fetching sample tube mapping from local database...',
-    );
 
     const mappingRequest =
       sampleTubeMappingRequests.get(cacheKey) ||
@@ -350,14 +431,21 @@ function SampleCollectionScreen({
     };
   }, [normalizedSelectedTests, onLocalDatabaseLoadingChange]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const currentDraft = sampleCollectionDraftRef.current || {};
     const draftUnselectedTests = Array.isArray(currentDraft?.unselectedTests)
       ? currentDraft.unselectedTests
       : [];
+    const draftSelectedSpecimens = currentDraft?.selectedSpecimens || {};
+    const draftSelectedSpecimenTests = currentDraft?.selectedSpecimenTests || {};
     const draftUnselectedTubes = Array.isArray(currentDraft?.unselectedTubes)
       ? currentDraft.unselectedTubes
       : [];
+    const hasSavedSelection =
+      Object.keys(draftSelectedSpecimens).length > 0 ||
+      Object.keys(draftSelectedSpecimenTests).length > 0 ||
+      draftUnselectedTests.length > 0 ||
+      draftUnselectedTubes.length > 0;
     const draftUnselectedTubeMap = draftUnselectedTubes.reduce(
       (nextMap, item) => ({
         ...nextMap,
@@ -369,14 +457,20 @@ function SampleCollectionScreen({
     setSelectedSpecimens(previousState => {
       const nextState = {};
       selectedSpecimenSummary.forEach(item => {
+        const isUndefinedSpecimen = isUndefinedSpecimenName(item.specimenName);
         const draftTube = draftUnselectedTubeMap[
           toStableValue(item.specimenName).toLowerCase()
         ];
         nextState[item.specimenName] =
-          previousState[item.specimenName] !== undefined
-            ? previousState[item.specimenName]
+          isUndefinedSpecimen
+            ? false
             : draftTube && Number(draftTube.selectedCount || 0) <= 0
             ? false
+            : hasSavedSelection &&
+              draftSelectedSpecimens[item.specimenName] !== undefined
+            ? draftSelectedSpecimens[item.specimenName]
+            : previousState[item.specimenName] !== undefined
+            ? previousState[item.specimenName]
             : true;
       });
       return nextState;
@@ -385,20 +479,27 @@ function SampleCollectionScreen({
     setSelectedSpecimenTests(previousState => {
       const nextState = {};
       selectedSpecimenSummary.forEach(item => {
+        const isUndefinedSpecimen = isUndefinedSpecimenName(item.specimenName);
         item.tests.forEach(test => {
           const wasDraftUnselected = draftUnselectedTests.some(draftTest =>
             isMatchingDraftUnselectedTest(test, draftTest),
           );
           nextState[test.key] =
-            previousState[test.key] !== undefined
-              ? previousState[test.key]
+            isUndefinedSpecimen
+              ? false
               : wasDraftUnselected
               ? false
+              : hasSavedSelection &&
+                draftSelectedSpecimenTests[test.key] !== undefined
+              ? draftSelectedSpecimenTests[test.key]
+              : previousState[test.key] !== undefined
+              ? previousState[test.key]
               : true;
         });
       });
       return nextState;
     });
+    setSelectionRestoreVersion(version => version + 1);
   }, [selectedSpecimenSummary]);
 
   const toggleSpecimenExpansion = specimenName => {
@@ -406,6 +507,10 @@ function SampleCollectionScreen({
       ...previousState,
       [specimenName]: !previousState[specimenName],
     }));
+  };
+
+  const toggleAdditionalTubesExpansion = () => {
+    setExpandedAdditionalTubes(isExpanded => !isExpanded);
   };
 
   const allSpecimenTests = useMemo(
@@ -501,6 +606,7 @@ function SampleCollectionScreen({
 
   const isSpecimenItemSelected = useCallback(
     item =>
+      !isUndefinedSpecimenName(item.specimenName) &&
       item.tests.some(
         test => !test.isProfileContext && Boolean(selectedSpecimenTests[test.key]),
       ),
@@ -508,6 +614,10 @@ function SampleCollectionScreen({
   );
 
   const toggleSpecimenSelection = item => {
+    if (isUndefinedSpecimenName(item.specimenName)) {
+      return;
+    }
+
     const nextSelected = !isSpecimenItemSelected(item);
     setSelectedSpecimens(previousState => ({
       ...previousState,
@@ -523,6 +633,10 @@ function SampleCollectionScreen({
   };
 
   const toggleSpecimenTestSelection = selectedTest => {
+    if (isUndefinedSpecimenName(selectedTest?.specimenName)) {
+      return;
+    }
+
     setSelectedSpecimenTests(previousState => ({
       ...previousState,
       ...(descendantKeysByTestKey[selectedTest.key] || [selectedTest.key]).reduce(
@@ -535,11 +649,24 @@ function SampleCollectionScreen({
     }));
   };
 
+  const toggleAdditionalTubeSelection = tubeName => {
+    setSelectedAdditionalTubes(previousTubes =>
+      previousTubes.includes(tubeName)
+        ? previousTubes.filter(tube => tube !== tubeName)
+        : [...previousTubes, tubeName],
+    );
+  };
+  const clearAdditionalTubeSelection = () => {
+    setSelectedAdditionalTubes([]);
+  };
+
   const getSelectedSpecimenTestCount = useCallback(
     item =>
-      item.tests.filter(
-        test => !test.isProfileContext && selectedSpecimenTests[test.key],
-      ).length,
+      isUndefinedSpecimenName(item.specimenName)
+        ? 0
+        : item.tests.filter(
+            test => !test.isProfileContext && selectedSpecimenTests[test.key],
+          ).length,
     [selectedSpecimenTests],
   );
   const selectedSampleTestCount = selectedSpecimenSummary.reduce(
@@ -548,18 +675,29 @@ function SampleCollectionScreen({
   );
   const tubeSelectionSummary = useMemo(
     () =>
-      selectedSpecimenSummary.map(item => {
-        const selectedCount = getSelectedSpecimenTestCount(item);
-        const totalCount = Number(item.count || 0);
+      [
+        ...selectedSpecimenSummary
+          .filter(item => !isUndefinedSpecimenName(item.specimenName))
+          .map(item => {
+            const selectedCount = getSelectedSpecimenTestCount(item);
+            const totalCount = Number(item.count || 0);
 
-        return {
-          tubeName: item.specimenName,
-          totalCount,
-          selectedCount,
-          pendingCount: Math.max(totalCount - selectedCount, 0),
-      };
-    }),
-    [getSelectedSpecimenTestCount, selectedSpecimenSummary],
+            return {
+              tubeName: item.specimenName,
+              totalCount,
+              selectedCount,
+              pendingCount: Math.max(totalCount - selectedCount, 0),
+            };
+          }),
+        ...selectedAdditionalTubes.map(tubeName => ({
+          tubeName,
+          totalCount: 1,
+          selectedCount: 1,
+          pendingCount: 0,
+          isAdditionalTube: true,
+        })),
+      ],
+    [getSelectedSpecimenTestCount, selectedAdditionalTubes, selectedSpecimenSummary],
   );
   const selectedTubes = useMemo(
     () =>
@@ -589,6 +727,10 @@ function SampleCollectionScreen({
     const tests = [];
 
     selectedSpecimenSummary.forEach(item => {
+      if (isUndefinedSpecimenName(item.specimenName)) {
+        return;
+      }
+
       item.tests.forEach(test => {
         if (test.isProfileContext || selectedSpecimenTests[test.key]) {
           return;
@@ -623,6 +765,10 @@ function SampleCollectionScreen({
     const pendingGroupMap = new Map();
 
     selectedSpecimenSummary.forEach(item => {
+      if (isUndefinedSpecimenName(item.specimenName)) {
+        return;
+      }
+
       item.tests.forEach(test => {
         const isPendingChildTest =
           !test.isProfileContext &&
@@ -674,7 +820,7 @@ function SampleCollectionScreen({
     selectedSpecimenTests,
   ]);
   useEffect(() => {
-    if (!selectedPatient || !allSpecimenTests.length) {
+    if (!selectedPatient || selectionRestoreVersion === 0) {
       return;
     }
 
@@ -683,6 +829,7 @@ function SampleCollectionScreen({
       selectedCount: selectedSampleTestCount,
       selectedSpecimens,
       selectedSpecimenTests,
+      selectedAdditionalTubes,
       tubeSelectionSummary,
       selectedTubes,
       unselectedTubes,
@@ -697,14 +844,19 @@ function SampleCollectionScreen({
     sampleCollectionDraft?.collected,
     selectedPatient,
     selectedSampleTestCount,
+    selectedAdditionalTubes,
     selectedSpecimenTests,
     selectedSpecimens,
+    selectionRestoreVersion,
     selectedTubes,
     tubeSelectionSummary,
     unselectedTests,
     unselectedTubes,
   ]);
-  const canCollectSample = selectedSampleTestCount > 0;
+  const canCollectSample =
+    selectedSampleTestCount > 0 || selectedAdditionalTubes.length > 0;
+  const selectedCollectionItemCount =
+    selectedSampleTestCount + selectedAdditionalTubes.length;
   const showAppAlert = useCallback((title, message) => {
     setAppAlert({
       title,
@@ -727,6 +879,7 @@ function SampleCollectionScreen({
         selectedTubes,
         selectedSpecimens,
         selectedSpecimenTests,
+        selectedAdditionalTubes,
         unselectedTubes,
         unselectedTests,
       });
@@ -735,8 +888,8 @@ function SampleCollectionScreen({
 
     showAppAlert(
       'Sample Collection',
-      `${selectedSampleTestCount} test${
-        selectedSampleTestCount > 1 ? 's' : ''
+      `${selectedCollectionItemCount} item${
+        selectedCollectionItemCount > 1 ? 's' : ''
       } marked for collection.`,
     );
   };
@@ -778,9 +931,133 @@ function SampleCollectionScreen({
             <View style={styles.sampleTubeSummaryTextWrap}>
               <Text style={styles.sampleTubeSummaryLabel}>Sample Tubes</Text>
               <Text style={styles.sampleTubeSummaryValue}>
-                {patientLevelTubes.length ? patientLevelTubes.join(', ') : '-'}
+                {displayedSampleTubes.length
+                  ? displayedSampleTubes.join(', ')
+                  : '-'}
               </Text>
             </View>
+          </View>
+
+          <View style={styles.sampleCollectionAdditionalTubeCard}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.sampleCollectionAdditionalTubeHeader}
+              onPress={toggleAdditionalTubesExpansion}>
+              <View style={styles.sampleCollectionAdditionalTubeIconWrap}>
+                <Ionicons
+                  name="add-circle-outline"
+                  size={19}
+                  style={styles.sampleCollectionAdditionalTubeIcon}
+                />
+              </View>
+              <View style={styles.sampleCollectionAdditionalTubeHeaderText}>
+                <Text style={styles.sampleCollectionSectionTitle}>
+                  Additional Tubes
+                </Text>
+                <Text style={styles.sampleCollectionAdditionalTubeMeta}>
+                  {selectedAdditionalTubes.length
+                    ? `${selectedAdditionalTubes.length} selected`
+                    : 'Optional tubes'}
+                </Text>
+              </View>
+              <View
+                style={[
+                  styles.sampleCollectionCountBadge,
+                  selectedAdditionalTubes.length &&
+                    styles.sampleCollectionCountBadgeActive,
+                ]}>
+                <Text style={styles.sampleCollectionCountText}>
+                  {selectedAdditionalTubes.length}
+                </Text>
+              </View>
+              <View style={styles.sampleCollectionAdditionalTubeChevronWrap}>
+                <Ionicons
+                  name={expandedAdditionalTubes ? 'chevron-up' : 'chevron-down'}
+                  size={18}
+                  style={styles.sampleCollectionSpecimenChevron}
+                />
+              </View>
+            </TouchableOpacity>
+            {selectedAdditionalTubes.length ? (
+              <View style={styles.sampleCollectionAdditionalSelectedRow}>
+                <View style={styles.sampleCollectionAdditionalSelectedChips}>
+                  {selectedAdditionalTubes.map(tubeName => (
+                    <View
+                      key={`selected-additional-${tubeName}`}
+                      style={styles.sampleCollectionAdditionalSelectedChip}>
+                      <Text
+                        style={styles.sampleCollectionAdditionalSelectedText}
+                        numberOfLines={1}>
+                        {tubeName}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.sampleCollectionAdditionalClearButton}
+                  onPress={clearAdditionalTubeSelection}>
+                  <Text style={styles.sampleCollectionAdditionalClearText}>
+                    Clear
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+            {expandedAdditionalTubes ? (
+              <View style={styles.sampleCollectionAdditionalGrid}>
+                {ADDITIONAL_TUBE_OPTIONS.map(tubeName => {
+                  const isSelected = selectedAdditionalTubes.includes(tubeName);
+                  const tubeMeta = ADDITIONAL_TUBE_META[tubeName] || {};
+
+                  return (
+                    <TouchableOpacity
+                      key={tubeName}
+                      activeOpacity={0.85}
+                      style={[
+                        styles.sampleCollectionAdditionalTubeOption,
+                        isSelected &&
+                          styles.sampleCollectionAdditionalTubeOptionActive,
+                      ]}
+                      onPress={() => toggleAdditionalTubeSelection(tubeName)}>
+                      <View
+                        style={styles.sampleCollectionAdditionalTubeOptionIconWrap}>
+                        <Ionicons
+                          name={tubeMeta.icon || 'test-tube-outline'}
+                          size={17}
+                          style={[
+                            styles.sampleCollectionAdditionalTubeOptionIcon,
+                            tubeMeta.tone ? {color: tubeMeta.tone} : null,
+                          ]}
+                        />
+                      </View>
+                      <Text
+                        style={[
+                          styles.sampleCollectionAdditionalTubeOptionText,
+                          isSelected &&
+                            styles.sampleCollectionAdditionalTubeOptionTextActive,
+                        ]}
+                        numberOfLines={2}>
+                        {tubeName}
+                      </Text>
+                      <View
+                        style={[
+                          styles.sampleCollectionAdditionalCheck,
+                          isSelected &&
+                            styles.sampleCollectionAdditionalCheckActive,
+                        ]}>
+                        {isSelected ? (
+                          <Ionicons
+                            name="checkmark"
+                            size={13}
+                            style={styles.sampleCollectionAdditionalCheckIcon}
+                          />
+                        ) : null}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.sampleCollectionSectionHeader}>
@@ -796,6 +1073,9 @@ function SampleCollectionScreen({
             <View style={styles.sampleCollectionSelectedList}>
               {selectedSpecimenSummary.map(item => {
                 const isExpanded = Boolean(expandedSpecimens[item.specimenName]);
+                const isUndefinedSpecimen = isUndefinedSpecimenName(
+                  item.specimenName,
+                );
                 const isSpecimenSelected = isSpecimenItemSelected(item);
                 const selectedCount = getSelectedSpecimenTestCount(item);
 
@@ -807,26 +1087,41 @@ function SampleCollectionScreen({
                       style={[
                         styles.sampleCollectionSpecimenCard,
                         isExpanded && styles.sampleCollectionSpecimenCardActive,
+                        isUndefinedSpecimen &&
+                          styles.sampleCollectionUndefinedSpecimenCard,
                       ]}>
-                      <TouchableOpacity
-                        activeOpacity={0.85}
-                        style={styles.sampleCollectionSpecimenCheckButton}
-                        onPress={() => toggleSpecimenSelection(item)}>
+                      {isUndefinedSpecimen ? (
                         <View
                           style={[
-                            styles.sampleCollectionSpecimenCheck,
-                            !isSpecimenSelected &&
-                              styles.sampleCollectionSpecimenCheckUnchecked,
+                            styles.sampleCollectionSpecimenInfoIconWrap,
                           ]}>
-                          {isSpecimenSelected ? (
-                            <Ionicons
-                              name="checkmark"
-                              size={14}
-                              style={styles.sampleCollectionSpecimenCheckIcon}
-                            />
-                          ) : null}
+                          <Ionicons
+                            name="information-circle-outline"
+                            size={19}
+                            style={styles.sampleCollectionSpecimenInfoIcon}
+                          />
                         </View>
-                      </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          activeOpacity={0.85}
+                          style={styles.sampleCollectionSpecimenCheckButton}
+                          onPress={() => toggleSpecimenSelection(item)}>
+                          <View
+                            style={[
+                              styles.sampleCollectionSpecimenCheck,
+                              !isSpecimenSelected &&
+                                styles.sampleCollectionSpecimenCheckUnchecked,
+                            ]}>
+                            {isSpecimenSelected ? (
+                              <Ionicons
+                                name="checkmark"
+                                size={14}
+                                style={styles.sampleCollectionSpecimenCheckIcon}
+                              />
+                            ) : null}
+                          </View>
+                        </TouchableOpacity>
+                      )}
                       <TouchableOpacity
                         activeOpacity={0.85}
                         style={styles.sampleCollectionSpecimenHeaderContent}
@@ -838,7 +1133,11 @@ function SampleCollectionScreen({
                               : item.specimenName}
                           </Text>
                           <Text style={styles.sampleCollectionSpecimenMeta}>
-                            {selectedCount}/{item.count} tests selected
+                            {isUndefinedSpecimen
+                              ? `${item.count} test${
+                                  item.count > 1 ? 's' : ''
+                                } need tube mapping`
+                              : `${selectedCount}/${item.count} tests selected`}
                           </Text>
                         </View>
                         <View style={styles.sampleCollectionSpecimenCountBadge}>
@@ -857,7 +1156,9 @@ function SampleCollectionScreen({
                     {isExpanded ? (
                       <View style={styles.sampleCollectionSpecimenTestsList}>
                         {item.tests.map(test => {
-                          const isTestSelected = Boolean(selectedDisplayMap[test.key]);
+                          const isTestSelected = Boolean(
+                            selectedDisplayMap[test.key],
+                          );
                           const parentChain = Array.isArray(test.parentDescriptions)
                             ? test.parentDescriptions.filter(Boolean)
                             : test.parentDescription
@@ -883,28 +1184,45 @@ function SampleCollectionScreen({
                                   styles.sampleCollectionSelectedLevelTwo,
                                 hierarchyLevel >= 3 &&
                                   styles.sampleCollectionSelectedLevelThree,
+                                isUndefinedSpecimen &&
+                                  styles.sampleCollectionUndefinedTestCard,
                               ]}>
-                              <TouchableOpacity
-                                activeOpacity={0.85}
-                                style={styles.sampleCollectionTestCheckButton}
-                                onPress={() =>
-                                  toggleSpecimenTestSelection(test)
-                                }>
+                              {isUndefinedSpecimen ? (
                                 <View
                                   style={[
-                                    styles.sampleCollectionSpecimenCheck,
-                                    !isTestSelected &&
-                                      styles.sampleCollectionSpecimenCheckUnchecked,
+                                    styles.sampleCollectionTestInfoIconWrap,
                                   ]}>
-                                  {isTestSelected ? (
-                                    <Ionicons
-                                      name="checkmark"
-                                      size={13}
-                                      style={styles.sampleCollectionSpecimenCheckIcon}
-                                    />
-                                  ) : null}
+                                  <Ionicons
+                                    name="information-circle-outline"
+                                    size={17}
+                                    style={styles.sampleCollectionSpecimenInfoIcon}
+                                  />
                                 </View>
-                              </TouchableOpacity>
+                              ) : (
+                                <TouchableOpacity
+                                  activeOpacity={0.85}
+                                  style={styles.sampleCollectionTestCheckButton}
+                                  onPress={() =>
+                                    toggleSpecimenTestSelection(test)
+                                  }>
+                                  <View
+                                    style={[
+                                      styles.sampleCollectionSpecimenCheck,
+                                      !isTestSelected &&
+                                        styles.sampleCollectionSpecimenCheckUnchecked,
+                                    ]}>
+                                    {isTestSelected ? (
+                                      <Ionicons
+                                        name="checkmark"
+                                        size={13}
+                                        style={
+                                          styles.sampleCollectionSpecimenCheckIcon
+                                        }
+                                      />
+                                    ) : null}
+                                  </View>
+                                </TouchableOpacity>
+                              )}
                               <View style={styles.sampleCollectionSelectedTextWrap}>
                                 {test.isProfileContext ? (
                                   <Text
@@ -923,7 +1241,7 @@ function SampleCollectionScreen({
                                 <Text style={styles.sampleCollectionSelectedTitle}>
                                   {test.description}
                                 </Text>
-                                {isUndefinedSpecimenName(item.specimenName) ? (
+                                {isUndefinedSpecimen ? (
                                   <Text style={styles.sampleCollectionSelectedMeta}>
                                     Sample tube is not defined for this test.
                                   </Text>
@@ -968,6 +1286,9 @@ function SampleCollectionScreen({
             <View style={styles.sampleCollectionCollectCountBadge}>
               <Text style={styles.sampleCollectionCollectCountText}>
                 {selectedSampleTestCount}
+                {selectedAdditionalTubes.length
+                  ? `+${selectedAdditionalTubes.length}`
+                  : ''}
               </Text>
             </View>
           </TouchableOpacity>

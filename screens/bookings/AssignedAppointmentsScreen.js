@@ -284,6 +284,14 @@ function AssignedAppointmentsScreen({
                           label="Patient Count"
                           value={booking.patientCount || booking.patients?.length || 1}
                         />
+                        {booking.patientNames ? (
+                          <QueueMetaRow
+                            styles={styles}
+                            icon="person-outline"
+                            label="Patient Names"
+                            value={booking.patientNames}
+                          />
+                        ) : null}
                       </View>
                       <QueueBadge styles={styles} label={booking.status} />
                     </View>

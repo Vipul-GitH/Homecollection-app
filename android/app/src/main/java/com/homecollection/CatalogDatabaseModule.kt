@@ -719,6 +719,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           COALESCE(NULLIF(t1.description, ''), NULLIF(t2.description, ''), NULLIF(pr.CTestName, ''), NULLIF(pr.TestCode, '')) AS description,
           CAST(pr.Charge AS REAL) AS charge,
           CAST(pr.MRP AS REAL) AS mrp,
+          CAST(IFNULL(NULLIF(pr.percentageonstandard, ''), '0') AS REAL) AS percentageonstandard,
           CASE
             WHEN NULLIF(pr.percentageonstandard, '') IS NOT NULL
               THEN CAST(pr.MRP AS REAL) * CAST(pr.percentageonstandard AS REAL) / 100.0
@@ -745,6 +746,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("description", cursor.stringValue("description"))
             .put("charge", cursor.doubleValue("charge"))
             .put("mrp", cursor.doubleValue("mrp"))
+            .put("percentageonstandard", cursor.doubleValue("percentageonstandard"))
             .put("max_discount", cursor.doubleValue("max_discount"))
             .put("max_allowed_discount", cursor.doubleValue("max_allowed_discount"))
         }
@@ -1989,6 +1991,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           COALESCE(t1.profile, t2.profile, 0) AS profile,
           CAST(pr.Charge AS REAL) AS charge,
           CAST(pr.MRP AS REAL) AS mrp,
+          CAST(IFNULL(NULLIF(pr.percentageonstandard, ''), '0') AS REAL) AS percentageonstandard,
           CASE
             WHEN NULLIF(pr.percentageonstandard, '') IS NOT NULL
               THEN CAST(pr.MRP AS REAL) * CAST(pr.percentageonstandard AS REAL) / 100.0
@@ -2035,6 +2038,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("has_children", hasChildren)
             .put("charge", testCursor.doubleValue("charge"))
             .put("mrp", testCursor.doubleValue("mrp"))
+            .put("percentageonstandard", testCursor.doubleValue("percentageonstandard"))
             .put("max_discount", testCursor.doubleValue("max_discount"))
             .put("max_allowed_discount", testCursor.doubleValue("max_allowed_discount"))
             .put("specimen_name", testCursor.stringValue("specimen_name"))

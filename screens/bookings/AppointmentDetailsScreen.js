@@ -21,9 +21,12 @@ import AppAlertModal from '../../components/common/AppAlertModal';
 import AddPatientModal from '../../components/bookings/appointmentDetails/AddPatientModal';
 import BookingDetailOverview from '../../components/bookings/appointmentDetails/BookingDetailOverview';
 import CancelBookingModal from '../../components/bookings/appointmentDetails/CancelBookingModal';
+import CompleteBookingScreen from '../../components/bookings/appointmentDetails/CompleteBookingScreen';
 import OptionSelectModal from '../../components/bookings/appointmentDetails/OptionSelectModal';
-import PaymentSummarySection from '../../components/bookings/appointmentDetails/PaymentSummarySection';
 import PatientSelectorSection from '../../components/bookings/appointmentDetails/PatientSelectorSection';
+import ReportDeliverySection, {
+  normalizeReportDeliveryValues,
+} from '../../components/bookings/appointmentDetails/ReportDeliverySection';
 import {
   CATALOG_ITEM_PAGE_SIZE,
   CATALOG_TEST_VISIBLE_LIMIT,
@@ -83,20 +86,8 @@ import {
   sampleTubeMappingCache,
   sampleTubeMappingRequests,
 } from '../../utils/bookings/sampleTubeMappingCache';
-const {CatalogDatabaseModule, LocalDocumentPickerModule} = NativeModules;
-const stringifyForDebugLog = value => {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch (error) {
-    return String(value);
-  }
-};
-
-const logCompleteBookingPayload = (label, payload) => {
-  if (__DEV__) {
-    console.log(label, stringifyForDebugLog(payload));
-  }
-};
+const {CatalogDatabaseModule, LocalDocumentPickerModule, LocalGeoCameraModule} =
+  NativeModules;
 const normalizeAppAlertArgs = (
   titleOrMessage,
   messageOrButtons,
@@ -137,20 +128,58 @@ const CANCELLATION_REASON_OPTIONS = [
   'Billing / approval issue',
   'Test no longer required',
   'Phlebotomist delay',
+  'phlebo not able to collect sample',
   'High charges / booked at another lab',
 ];
 const CANCEL_TIME_SLOT_OPTIONS = [
   '07:30 AM to 08:00 AM',
+  '08:00 AM to 08:30 AM',
   '08:30 AM to 09:00 AM',
   '09:00 AM to 09:30 AM',
+  '09:30 AM to 10:00 AM',
+  '10:00 AM to 10:30 AM',
   '10:30 AM to 11:00 AM',
+  '11:00 AM to 11:30 AM',
+  '11:30 AM to 12:00 PM',
+  '12:00 PM to 12:30 PM',
+  '12:30 PM to 01:00 PM',
+  '01:00 PM to 01:30 PM',
+  '01:30 PM to 02:00 PM',
+  '02:00 PM to 02:30 PM',
+  '02:30 PM to 03:00 PM',
+  '03:00 PM to 03:30 PM',
+  '03:30 PM to 04:00 PM',
 ];
 const EMPTY_UPLOAD_DOCUMENTS = [];
-const DEFAULT_TEST_BOOKING_STATUS = 'confirmed_booked';
+const DEFAULT_TEST_BOOKING_STATUS = 'none';
 const MANUAL_HC_SLIP_STATUS = 'manual_hc_slip';
 const toCurrencyNumber = value => {
   const normalizedValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
   return Number.isFinite(normalizedValue) ? normalizedValue : 0;
+};
+const getTestStandardDiscountPercent = test =>
+  toCurrencyNumber(
+    test?.percentageonstandard ||
+      test?.percentageOnStandard ||
+      test?.percentage_on_standard ||
+      test?.PercentageOnStandard ||
+      test?.percentagestandard ||
+      test?.percentageStandard ||
+      test?.percentage_standard ||
+      test?.PercentageStandard,
+  );
+const getDiscountedTestPrice = test => {
+  const mrp = toCurrencyNumber(test?.mrp || test?.MRP || test?.amount);
+  const charge = toCurrencyNumber(test?.charge || test?.Charge);
+  const baseMrp = mrp || charge;
+  const standardDiscount = Math.min(
+    100,
+    Math.max(0, getTestStandardDiscountPercent(test)),
+  );
+  if (standardDiscount > 0 && baseMrp > 0) {
+    return Math.max(0, baseMrp - (baseMrp * standardDiscount) / 100);
+  }
+  return charge || baseMrp;
 };
 
 const getBillingChargeMode = company =>
@@ -443,6 +472,7 @@ const getMergedPatientSelectedTests = (patient, selectedTests, panelCompany = nu
       description: test?.name || test?.test_name || 'Unnamed Test',
       specimenName: test?.specimen_name || test?.specimenName || 'N/A',
       mrp: toCurrencyNumber(test?.mrp || test?.charge || test?.amount),
+      percentageonstandard: getTestStandardDiscountPercent(test),
       billingChargeMode: getBillingChargeMode(test) || baseBillingChargeMode,
       chargeMode: getBillingChargeMode(test) || baseBillingChargeMode,
       selectedChargeMode: getBillingChargeMode(test) || baseBillingChargeMode,
@@ -566,6 +596,20 @@ const hasPatientPrescriptionUrls = patient => {
     .some(url => Boolean(normalizeFormText(url)));
 };
 
+const hasSpecialIdentityPanel = value => {
+  const normalizedValue = normalizeFormText(value).toUpperCase();
+  return normalizedValue.includes('CAPF') || normalizedValue.includes('NHA');
+};
+
+const normalizeUploadDocuments = (pickedFiles, fileNamePrefix) =>
+  (Array.isArray(pickedFiles) ? pickedFiles : [])
+    .filter(file => file?.uri)
+    .map((file, index) => ({
+      uri: file.uri,
+      name: file.name || `${fileNamePrefix}-${Date.now()}-${index}`,
+      type: file.type || getMimeTypeFromFileName(file.name),
+    }));
+
 const isPatientTerminalForCompletion = patient => {
   const statusCode = Number(patient?.bookingPatientStatusCode || 0);
   return statusCode === 3 || statusCode === 4 || statusCode === 5;
@@ -573,6 +617,15 @@ const isPatientTerminalForCompletion = patient => {
 
 const isManualHcSlipSelected = value =>
   normalizeFormText(value) === MANUAL_HC_SLIP_STATUS;
+
+const getCompleteBookingPatientOptionId = (patient, index) =>
+  String(
+    getCompletePayloadPatientId(patient) ||
+      getPatientMutationId(patient) ||
+      patient?.id ||
+      patient?.patientId ||
+      `patient-${index}`,
+  );
 
 function AppointmentDetailsScreen({
   selectedBooking,
@@ -605,7 +658,18 @@ function AppointmentDetailsScreen({
   const [isDobCalendarVisible, setIsDobCalendarVisible] = useState(false);
   const [isCancelBookingModalVisible, setIsCancelBookingModalVisible] =
     useState(false);
+  const [cancelTargetPatient, setCancelTargetPatient] = useState(null);
   const [isCancelCalendarVisible, setIsCancelCalendarVisible] = useState(false);
+  const [isCompleteBookingScreenVisible, setIsCompleteBookingScreenVisible] =
+    useState(false);
+  const [
+    isLinkedAppointmentCalendarVisible,
+    setIsLinkedAppointmentCalendarVisible,
+  ] = useState(false);
+  const [
+    isLinkedAppointmentTimeSlotSelectVisible,
+    setIsLinkedAppointmentTimeSlotSelectVisible,
+  ] = useState(false);
   const [isCancellationReasonSelectVisible, setIsCancellationReasonSelectVisible] =
     useState(false);
   const [isCancelTimeSlotSelectVisible, setIsCancelTimeSlotSelectVisible] =
@@ -621,9 +685,24 @@ function AppointmentDetailsScreen({
   const [cancelNewTimeSlot, setCancelNewTimeSlot] = useState(
     CANCEL_TIME_SLOT_OPTIONS[0],
   );
+  const [linkedAppointmentDate, setLinkedAppointmentDate] = useState('');
+  const [linkedAppointmentTimeSlot, setLinkedAppointmentTimeSlot] =
+    useState('');
+  const [isLinkedAppointmentSelected, setIsLinkedAppointmentSelected] =
+    useState(false);
+  const [samplePickCount, setSamplePickCount] = useState('');
+  const [samplePickPatientIds, setSamplePickPatientIds] = useState([]);
+  const [sampleCollectionEasyTough, setSampleCollectionEasyTough] =
+    useState('');
+  const [
+    sampleCollectionEasyToughPatientIds,
+    setSampleCollectionEasyToughPatientIds,
+  ] = useState([]);
   const [cancelCalendarMonth, setCancelCalendarMonth] = useState(
     () => new Date(),
   );
+  const [linkedAppointmentCalendarMonth, setLinkedAppointmentCalendarMonth] =
+    useState(() => new Date());
   const [isAdditionalDiscountEnabled, setIsAdditionalDiscountEnabled] =
     useState(() => Boolean(appointmentDetailState?.isAdditionalDiscountEnabled));
   const [completeAdditionalDiscountMode, setCompleteAdditionalDiscountMode] =
@@ -646,6 +725,9 @@ function AppointmentDetailsScreen({
   );
   const [completePayments, setCompletePayments] = useState(() =>
     normalizeCompletePaymentDrafts(appointmentDetailState?.completePayments),
+  );
+  const [pendingPaymentPatientId, setPendingPaymentPatientId] = useState(
+    () => appointmentDetailState?.pendingPaymentPatientId || '',
   );
   const additionalDiscountLimitAlertKeyRef = useRef('');
   const [dobCalendarMonth, setDobCalendarMonth] = useState(() => new Date());
@@ -697,6 +779,10 @@ function AppointmentDetailsScreen({
     () => appointmentDetailState?.patientReportCourierMap || {},
     [appointmentDetailState?.patientReportCourierMap],
   );
+  const patientReportScheduleMap = useMemo(
+    () => appointmentDetailState?.patientReportScheduleMap || {},
+    [appointmentDetailState?.patientReportScheduleMap],
+  );
   const patientSampleCollectionMap = useMemo(
     () => appointmentDetailState?.patientSampleCollectionMap || {},
     [appointmentDetailState?.patientSampleCollectionMap],
@@ -722,31 +808,90 @@ function AppointmentDetailsScreen({
   }, [appointmentDetailState]);
   useEffect(() => {
     const currentDraft = appointmentDetailStateRef.current || {};
+    const backendAdditionalDiscount = toCurrencyNumber(
+      selectedBooking?.amountFields?.additionalDiscount,
+    );
+    const backendAmountReceived = toCurrencyNumber(
+      selectedBooking?.amountFields?.amountReceived,
+    );
+    const backendPaymentMode = normalizeFormText(
+      selectedBooking?.amountFields?.paymentMode || selectedBooking?.payment?.mode,
+    );
+    const resolvedBackendPaymentMode =
+      COMPLETE_PAYMENT_MODE_OPTIONS.find(
+        mode => mode.toLowerCase() === backendPaymentMode.toLowerCase(),
+      ) || COMPLETE_PAYMENT_MODE_OPTIONS[0];
+    const hasDraftAdditionalDiscount =
+      normalizeFormText(currentDraft?.completeAdditionalDiscount) ||
+      normalizeFormText(currentDraft?.appliedAdditionalDiscount);
+    const hasDraftPayments =
+      Array.isArray(currentDraft?.completePayments) &&
+      currentDraft.completePayments.some(payment =>
+        normalizeFormText(payment?.amount),
+      );
+    const initialAdditionalDiscount =
+      hasDraftAdditionalDiscount
+        ? normalizeFormText(currentDraft?.completeAdditionalDiscount)
+          ? currentDraft?.completeAdditionalDiscount
+          : currentDraft?.appliedAdditionalDiscount
+        : backendAdditionalDiscount <= 0
+        ? currentDraft?.completeAdditionalDiscount
+        : String(backendAdditionalDiscount);
+    const initialAppliedAdditionalDiscount =
+      hasDraftAdditionalDiscount
+        ? currentDraft?.appliedAdditionalDiscount
+        : backendAdditionalDiscount > 0
+        ? String(backendAdditionalDiscount)
+        : '';
 
     setIsAdditionalDiscountEnabled(
-      Boolean(currentDraft?.isAdditionalDiscountEnabled),
+      Boolean(currentDraft?.isAdditionalDiscountEnabled) ||
+        backendAdditionalDiscount > 0,
     );
     setCompleteAdditionalDiscountMode(
       currentDraft?.completeAdditionalDiscountMode || 'amount',
     );
     setCompleteAdditionalDiscount(
-      currentDraft?.completeAdditionalDiscount === undefined
+      initialAdditionalDiscount === undefined
         ? ''
-        : String(currentDraft.completeAdditionalDiscount),
+        : String(initialAdditionalDiscount),
     );
     setAppliedAdditionalDiscountMode(
-      currentDraft?.appliedAdditionalDiscountMode || '',
+      hasDraftAdditionalDiscount
+        ? currentDraft?.appliedAdditionalDiscountMode || ''
+        : backendAdditionalDiscount > 0
+        ? 'amount'
+        : '',
     );
     setAppliedAdditionalDiscount(
-      currentDraft?.appliedAdditionalDiscount === undefined
+      initialAppliedAdditionalDiscount === undefined
         ? ''
-        : String(currentDraft.appliedAdditionalDiscount),
+        : String(initialAppliedAdditionalDiscount),
     );
     setCompletePayments(
-      normalizeCompletePaymentDrafts(currentDraft?.completePayments),
+      hasDraftPayments || backendAmountReceived <= 0
+        ? normalizeCompletePaymentDrafts(currentDraft?.completePayments)
+        : normalizeCompletePaymentDrafts([
+            {
+              mode: resolvedBackendPaymentMode,
+              amount: backendAmountReceived,
+            },
+          ]),
     );
+    setIsLinkedAppointmentSelected(
+      Boolean(currentDraft?.isLinkedAppointmentSelected),
+    );
+    setLinkedAppointmentDate(currentDraft?.linkedAppointmentDate || '');
+    setLinkedAppointmentTimeSlot(currentDraft?.linkedAppointmentTimeSlot || '');
     setSelectedPatientKey(currentDraft?.selectedPatientKey || '');
-  }, [selectedBooking?.id]);
+    setPendingPaymentPatientId(currentDraft?.pendingPaymentPatientId || '');
+  }, [
+    selectedBooking?.amountFields?.additionalDiscount,
+    selectedBooking?.amountFields?.amountReceived,
+    selectedBooking?.amountFields?.paymentMode,
+    selectedBooking?.id,
+    selectedBooking?.payment?.mode,
+  ]);
   useEffect(() => {
     if (!selectedBooking?.id) {
       return;
@@ -760,7 +905,11 @@ function AppointmentDetailsScreen({
       completeAdditionalDiscount,
       appliedAdditionalDiscountMode,
       appliedAdditionalDiscount,
+      isLinkedAppointmentSelected,
+      linkedAppointmentDate,
+      linkedAppointmentTimeSlot,
       selectedPatientKey,
+      pendingPaymentPatientId,
     }));
   }, [
     appliedAdditionalDiscount,
@@ -769,7 +918,11 @@ function AppointmentDetailsScreen({
     completeAdditionalDiscountMode,
     completePayments,
     isAdditionalDiscountEnabled,
+    isLinkedAppointmentSelected,
+    linkedAppointmentDate,
+    linkedAppointmentTimeSlot,
     onAppointmentDetailStateChange,
+    pendingPaymentPatientId,
     selectedBooking?.id,
     selectedPatientKey,
   ]);
@@ -813,6 +966,17 @@ function AppointmentDetailsScreen({
         patientReportCourierMap:
           typeof updater === 'function'
             ? updater(previousState?.patientReportCourierMap || {})
+            : updater,
+      })),
+    [onAppointmentDetailStateChange],
+  );
+  const setPatientReportScheduleMap = useCallback(
+    updater =>
+      onAppointmentDetailStateChange?.(previousState => ({
+        ...previousState,
+        patientReportScheduleMap:
+          typeof updater === 'function'
+            ? updater(previousState?.patientReportScheduleMap || {})
             : updater,
       })),
     [onAppointmentDetailStateChange],
@@ -938,6 +1102,56 @@ function AppointmentDetailsScreen({
       showAppAlert,
     ],
   );
+  const confirmRemoveSelectedTest = useCallback(
+    ({patient, testName, onConfirm}) => {
+      const displayName = normalizeFormText(testName);
+
+      showAppAlert(
+        'Remove Test?',
+        displayName
+          ? `Are you sure you want to remove "${displayName}"?`
+          : 'Are you sure you want to remove this test?',
+        [
+          {text: 'Cancel', style: 'cancel'},
+          {
+            text: 'Remove',
+            style: 'destructive',
+            onPress: () => {
+              confirmSampleCollectionReset(patient, onConfirm);
+            },
+          },
+        ],
+        {cancelable: true},
+      );
+    },
+    [confirmSampleCollectionReset, showAppAlert],
+  );
+  const confirmRemovePanelCompany = useCallback(
+    ({patient, panelCompany, onConfirm}) => {
+      const companyName = normalizeFormText(
+        panelCompany?.name || panelCompany?.panelCompany,
+      );
+
+      showAppAlert(
+        'Remove Panel Company?',
+        companyName
+          ? `Are you sure you want to remove "${companyName}" and its tests?`
+          : 'Are you sure you want to remove this panel company and its tests?',
+        [
+          {text: 'Cancel', style: 'cancel'},
+          {
+            text: 'Remove',
+            style: 'destructive',
+            onPress: () => {
+              confirmSampleCollectionReset(patient, onConfirm);
+            },
+          },
+        ],
+        {cancelable: true},
+      );
+    },
+    [confirmSampleCollectionReset, showAppAlert],
+  );
   const closeAppAlert = useCallback(
     shouldDismiss => {
       const onDismiss = appAlert?.onDismiss;
@@ -962,6 +1176,61 @@ function AppointmentDetailsScreen({
         ? selectedBooking.patients
         : [],
     [selectedBooking?.patients],
+  );
+  const completeBookingPatientOptions = useMemo(
+    () =>
+      patients.reduce((options, patient, index) => {
+        if (isPatientTerminalForCompletion(patient)) {
+          return options;
+        }
+
+        options.push({
+          id: getCompleteBookingPatientOptionId(patient, index),
+          patientId: getCompletePayloadPatientId(patient),
+          name: normalizeFormText(patient?.name) || `Patient ${index + 1}`,
+        });
+
+        return options;
+      }, []),
+    [patients],
+  );
+  const completePaymentPatientOptions = useMemo(
+    () =>
+      patients.reduce((options, patient, index) => {
+        if (isPatientTerminalForCompletion(patient)) {
+          return options;
+        }
+
+        options.push({
+          id: getCompleteBookingPatientOptionId(patient, index),
+          patientId: getCompletePayloadPatientId(patient),
+          name: normalizeFormText(patient?.name) || `Patient ${index + 1}`,
+        });
+
+        return options;
+      }, []),
+    [patients],
+  );
+  const reportDeliveryPatients = useMemo(
+    () =>
+      patients.reduce((options, patient, index) => {
+        if (isPatientTerminalForCompletion(patient)) {
+          return options;
+        }
+
+        const patientId = getPatientMutationId(patient);
+        if (!patientId) {
+          return options;
+        }
+
+        options.push({
+          id: patientId,
+          name: normalizeFormText(patient?.name) || `Patient ${index + 1}`,
+        });
+
+        return options;
+      }, []),
+    [patients],
   );
   const patientSelectorItems = useMemo(
     () =>
@@ -1149,6 +1418,13 @@ function AppointmentDetailsScreen({
   useEffect(() => {
     setPatientCompletionDocumentsMap({});
     setPatientManualSlipDocumentsMap({});
+    setSamplePickCount('');
+    setSamplePickPatientIds([]);
+    setSampleCollectionEasyTough('');
+    setSampleCollectionEasyToughPatientIds([]);
+    setIsLinkedAppointmentSelected(false);
+    setLinkedAppointmentDate('');
+    setLinkedAppointmentTimeSlot('');
   }, [selectedBooking?.id]);
 
   useEffect(() => {
@@ -1284,18 +1560,54 @@ function AppointmentDetailsScreen({
         return false;
       }
 
+      const patientId = getPatientMutationId(patient);
       const panelCompanies = getPatientPanelCompanies(patient);
+      const selectedTests = patientId
+        ? patientSelectedTestsMap[patientId] || []
+        : [];
       const hasCreditPanel = panelCompanies.length
         ? panelCompanies.some(company => getBillingChargeMode(company).includes('C'))
         : getBillingChargeMode(patient).includes('C');
+      const hasCreditSelectedTest = selectedTests.some(test =>
+        getBillingChargeMode({
+          billingChargeMode:
+            test?.selectedChargeMode ||
+            test?.selected_charge_mode ||
+            test?.billingChargeMode ||
+            test?.chargeMode,
+        }).includes('C'),
+      );
 
-      return hasCreditPanel;
+      return hasCreditPanel || hasCreditSelectedTest;
+    },
+    [getPatientPanelCompanies, patientSelectedTestsMap],
+  );
+  const doesPatientRequireIdentityDocuments = useCallback(
+    patient => {
+      const panelCompanies = getPatientPanelCompanies(patient);
+
+      if (panelCompanies.length) {
+        return panelCompanies.some(
+          company =>
+            hasSpecialIdentityPanel(company?.name) ||
+            hasSpecialIdentityPanel(company?.details),
+        );
+      }
+
+      return (
+        hasSpecialIdentityPanel(patient?.panelCompany || patient?.panel_company) ||
+        hasSpecialIdentityPanel(patient?.cat_details || patient?.catDetails)
+      );
     },
     [getPatientPanelCompanies],
   );
   const completeBillingTests = useMemo(
     () =>
       patients.flatMap(patient => {
+        if (isPatientTerminalForCompletion(patient)) {
+          return [];
+        }
+
         const patientId = getPatientMutationId(patient);
         const hasSelectedTestsOverride =
           patientId &&
@@ -1330,8 +1642,20 @@ function AppointmentDetailsScreen({
             selectedChargeMode,
             billingBucket: getBillingBucketFromChargeMode(selectedChargeMode),
             mrp: toCurrencyNumber(test?.mrp || test?.charge || test?.amount),
-            charge: toCurrencyNumber(test?.charge || test?.mrp || test?.amount),
-            max_discount: toCurrencyNumber(test?.max_discount || test?.maxDiscount),
+            charge: getDiscountedTestPrice(test),
+            percentageonstandard: getTestStandardDiscountPercent(test),
+            standard_discount_amount: Math.max(
+              0,
+              toCurrencyNumber(test?.mrp || test?.charge || test?.amount) -
+                getDiscountedTestPrice(test),
+            ),
+            max_discount:
+              toCurrencyNumber(test?.max_discount || test?.maxDiscount) ||
+              Math.max(
+                0,
+                toCurrencyNumber(test?.mrp || test?.charge || test?.amount) -
+                  getDiscountedTestPrice(test),
+              ),
             max_allowed_discount: toCurrencyNumber(
               test?.max_allowed_discount || test?.maxAllowedDiscount,
             ),
@@ -1351,16 +1675,28 @@ function AppointmentDetailsScreen({
     const freeTests = completeBillingTests.filter(
       test => test.billingBucket === 'free',
     );
-    const subtotal = payingTests.reduce(
+    const subtotal = completeBillingTests.reduce(
+      (total, test) => total + toCurrencyNumber(test?.mrp),
+      0,
+    );
+    const payingSubtotal = payingTests.reduce(
       (total, test) => total + toCurrencyNumber(test?.mrp),
       0,
     );
     const creditTotal = creditTests.reduce(
-      (total, test) => total + toCurrencyNumber(test?.mrp),
+      (total, test) => total + toCurrencyNumber(test?.charge),
       0,
     );
-    const baseDiscount = payingTests.reduce(
-      (total, test) => total + toCurrencyNumber(test?.max_discount),
+    const freeTotal = freeTests.reduce(
+      (total, test) => total + toCurrencyNumber(test?.charge),
+      0,
+    );
+    const baseDiscount = completeBillingTests.reduce(
+      (total, test) => total + toCurrencyNumber(test?.standard_discount_amount),
+      0,
+    );
+    const payingBaseDiscount = payingTests.reduce(
+      (total, test) => total + toCurrencyNumber(test?.standard_discount_amount),
       0,
     );
     const maxTotalDiscount = payingTests.reduce(
@@ -1372,23 +1708,28 @@ function AppointmentDetailsScreen({
         ),
       0,
     );
-    const maxAdditionalAllowed = Math.max(0, maxTotalDiscount - baseDiscount);
+    const maxAdditionalAllowed = Math.max(0, maxTotalDiscount - payingBaseDiscount);
     const additionalValue = toCurrencyNumber(appliedAdditionalDiscount);
     const requestedAdditional =
       appliedAdditionalDiscountMode === 'percent'
-        ? (subtotal * additionalValue) / 100
+        ? (payingSubtotal * additionalValue) / 100
         : appliedAdditionalDiscountMode === 'amount'
         ? additionalValue
         : 0;
     const effectiveAdditional =
       requestedAdditional > maxAdditionalAllowed ? 0 : requestedAdditional;
     const finalDiscount = baseDiscount + effectiveAdditional;
-    const finalAmount = Math.max(0, subtotal - finalDiscount);
+    const nonPayingTotal = creditTotal + freeTotal;
+    const finalAmount = Math.max(0, subtotal - finalDiscount - nonPayingTotal);
 
     return {
       subtotal,
+      payingSubtotal,
       creditTotal,
+      freeTotal,
+      nonPayingTotal,
       baseDiscount,
+      payingBaseDiscount,
       maxTotalDiscount,
       maxAdditionalAllowed,
       requestedAdditional,
@@ -1407,22 +1748,41 @@ function AppointmentDetailsScreen({
   const preloadedAdditionalDiscount = toCurrencyNumber(
     bookingAmountFields.additionalDiscount,
   );
-  const shouldUsePreloadedAdditionalDisplay =
-    !isAdditionalDiscountEnabled &&
-    preloadedAdditionalDiscount > 0 &&
-    preloadedAdditionalDiscount <= localBillingSummary.maxAdditionalAllowed;
-  const completeBillingTotal = localBillingSummary.subtotal;
-  const completeBaseDiscountAmount = localBillingSummary.baseDiscount;
-  const completeAdditionalDiscountAmount = shouldUsePreloadedAdditionalDisplay
-    ? preloadedAdditionalDiscount
-    : localBillingSummary.effectiveAdditional;
+  const preloadedBillingTotal = toCurrencyNumber(bookingAmountFields.subtotal);
+  const preloadedBaseDiscount = toCurrencyNumber(bookingAmountFields.baseDiscount);
+  const preloadedNetAmount = toCurrencyNumber(bookingAmountFields.totalAmount);
+  const hasLiveBillingSelectionState = patients.some(patient => {
+    const patientId = getPatientMutationId(patient);
+    return (
+      patientId &&
+      Object.prototype.hasOwnProperty.call(patientSelectedTestsMap, patientId)
+    );
+  });
+  const shouldUsePreloadedBillingDisplay = !hasLiveBillingSelectionState;
+  const completeBillingTotal =
+    shouldUsePreloadedBillingDisplay && preloadedBillingTotal > 0
+      ? preloadedBillingTotal
+      : localBillingSummary.subtotal;
+  const completeAdditionalDiscountAmount = localBillingSummary.effectiveAdditional;
+  const calculatedBaseDiscountAmount =
+    shouldUsePreloadedBillingDisplay && preloadedBaseDiscount > 0
+      ? Math.max(0, preloadedBaseDiscount - completeAdditionalDiscountAmount)
+      : localBillingSummary.baseDiscount;
+  const completeBaseDiscountAmount = calculatedBaseDiscountAmount;
   const completeDiscountAmount =
     completeBaseDiscountAmount + completeAdditionalDiscountAmount;
   const completeCreditAmount = localBillingSummary.creditTotal;
-  const completeNetAmount = Math.max(
-    0,
-    completeBillingTotal - completeDiscountAmount,
-  );
+  const completeNetAmount =
+    shouldUsePreloadedBillingDisplay &&
+    preloadedNetAmount > 0 &&
+    completeAdditionalDiscountAmount === preloadedAdditionalDiscount
+      ? preloadedNetAmount
+      : Math.max(
+          0,
+          completeBillingTotal -
+            completeDiscountAmount -
+            localBillingSummary.nonPayingTotal,
+        );
   const completeAmountReceived = useMemo(
     () =>
       completePayments.reduce(
@@ -1434,6 +1794,49 @@ function AppointmentDetailsScreen({
   const completePaymentMode =
     completePayments.find(payment => normalizeFormText(payment?.mode))?.mode ||
     COMPLETE_PAYMENT_MODE_OPTIONS[0];
+  const hasEnteredCompletePaymentAmount = completePayments.some(payment =>
+    normalizeFormText(payment?.amount),
+  );
+  const pendingPaymentAmount = Math.max(
+    0,
+    completeNetAmount - completeAmountReceived,
+  );
+  const extraPaymentAmount = Math.max(
+    0,
+    completeAmountReceived - completeNetAmount,
+  );
+  const shouldCollectPendingPaymentPatient =
+    hasEnteredCompletePaymentAmount &&
+    (pendingPaymentAmount > 0.009 || extraPaymentAmount > 0.009) &&
+    completePaymentPatientOptions.length > 0;
+  useEffect(() => {
+    if (!shouldCollectPendingPaymentPatient) {
+      if (pendingPaymentPatientId) {
+        setPendingPaymentPatientId('');
+      }
+      return;
+    }
+
+    const hasValidSelection = completePaymentPatientOptions.some(
+      patient => patient.id === pendingPaymentPatientId,
+    );
+    if (hasValidSelection) {
+      return;
+    }
+
+    if (completePaymentPatientOptions.length === 1) {
+      setPendingPaymentPatientId(completePaymentPatientOptions[0].id);
+      return;
+    }
+
+    if (pendingPaymentPatientId) {
+      setPendingPaymentPatientId('');
+    }
+  }, [
+    completePaymentPatientOptions,
+    pendingPaymentPatientId,
+    shouldCollectPendingPaymentPatient,
+  ]);
   useEffect(() => {
     if (!appliedAdditionalDiscountMode) {
       return;
@@ -1547,10 +1950,20 @@ function AppointmentDetailsScreen({
               normalizeFormText(test?.description || test?.name) ||
               'Unnamed Test',
             mrp: toCurrencyNumber(test?.mrp || test?.charge || test?.amount),
-            charge: toCurrencyNumber(test?.charge || test?.mrp || test?.amount),
-            max_discount: toCurrencyNumber(
-              test?.max_discount || test?.maxDiscount,
+            charge: getDiscountedTestPrice(test),
+            percentageonstandard: getTestStandardDiscountPercent(test),
+            standard_discount_amount: Math.max(
+              0,
+              toCurrencyNumber(test?.mrp || test?.charge || test?.amount) -
+                getDiscountedTestPrice(test),
             ),
+            max_discount:
+              toCurrencyNumber(test?.max_discount || test?.maxDiscount) ||
+              Math.max(
+                0,
+                toCurrencyNumber(test?.mrp || test?.charge || test?.amount) -
+                  getDiscountedTestPrice(test),
+              ),
             max_allowed_discount: toCurrencyNumber(
               test?.max_allowed_discount || test?.maxAllowedDiscount,
             ),
@@ -1562,8 +1975,17 @@ function AppointmentDetailsScreen({
           DEFAULT_TEST_BOOKING_STATUS;
 
         return {
-          patient_id: payloadPatientId,
-          test_booking_status: testBookingStatus,
+        patient_id: payloadPatientId,
+        test_booking_status: testBookingStatus,
+          report_delivery: normalizeReportDeliveryValues(
+            patientReportCourierMap[patientId],
+          ).join(','),
+          report_delivery_options: normalizeReportDeliveryValues(
+            patientReportCourierMap[patientId],
+          ),
+          report_schedule: normalizeFormText(
+            patientReportScheduleMap[patientId],
+          ) || 'routine',
           panels: Array.from(panelMap.values()).filter(
             panel => panel.selected_tests.length,
           ),
@@ -1588,12 +2010,58 @@ function AppointmentDetailsScreen({
           Array.isArray(pendingGroup?.pending) &&
           pendingGroup.pending.length,
       );
+    const paymentCollectionsPayload = completePayments
+      .filter(payment => toCurrencyNumber(payment?.amount) > 0)
+      .map(payment => ({
+        payment_id: payment.id,
+        mode: normalizeFormText(payment?.mode) || COMPLETE_PAYMENT_MODE_OPTIONS[0],
+        amount: toCurrencyNumber(payment?.amount),
+      }));
+    const pendingPaymentPatient = completePaymentPatientOptions.find(
+      patient => patient.id === pendingPaymentPatientId,
+    );
 
     return {
       additional_discount_mode: appliedAdditionalDiscountMode || 'amount',
       additional_discount_value: additionalDiscountValue,
       amount_received: completeAmountReceived,
+      pending_amount: pendingPaymentAmount,
+      pending_payment_patient_option_id: pendingPaymentPatient?.id || '',
+      pending_payment_patient_id: pendingPaymentPatient?.patientId || '',
+      pending_payment_patient_name: pendingPaymentPatient?.name || '',
+      extra_amount: extraPaymentAmount,
+      extra_payment_patient_option_id: pendingPaymentPatient?.id || '',
+      extra_payment_patient_id: pendingPaymentPatient?.patientId || '',
+      extra_payment_patient_name: pendingPaymentPatient?.name || '',
+      linked_appointment: isLinkedAppointmentSelected ? 'yes' : 'no',
+      linked_appointment_date: isLinkedAppointmentSelected
+        ? linkedAppointmentDate
+        : '',
+      linked_appointment_time_slot: isLinkedAppointmentSelected
+        ? linkedAppointmentTimeSlot
+        : '',
+      sample_collection_pick_count: samplePickCount,
+      sample_collection_pick_patients: completeBookingPatientOptions.filter(
+        option => samplePickPatientIds.includes(option.id),
+      ),
+      sample_collection_easy_tough: sampleCollectionEasyTough,
+      sample_collection_easy_tough_patients:
+        sampleCollectionEasyTough === 'tough'
+          ? completeBookingPatientOptions.filter(option =>
+              sampleCollectionEasyToughPatientIds.includes(option.id),
+            )
+          : [],
       payment_mode: completePaymentMode,
+      payments_collected: paymentCollectionsPayload,
+      payment_proofs: completePayments
+        .filter(payment => Array.isArray(payment?.proofDocuments))
+        .map(payment => ({
+          payment_id: payment.id,
+          mode: payment.mode,
+          amount: toCurrencyNumber(payment.amount),
+          documents: payment.proofDocuments,
+        }))
+        .filter(payment => payment.documents.length),
       tests_payload: testsPayload,
       pending_child_tests: pendingChildTestsPayload,
       patient_documents_map: patientCompletionDocumentsMap,
@@ -1602,15 +2070,30 @@ function AppointmentDetailsScreen({
   }, [
     appliedAdditionalDiscount,
     appliedAdditionalDiscountMode,
+    completeBookingPatientOptions,
+    completePaymentPatientOptions,
     completeAdditionalDiscountAmount,
     completeAmountReceived,
     completePaymentMode,
+    completePayments,
+    isLinkedAppointmentSelected,
+    linkedAppointmentDate,
+    linkedAppointmentTimeSlot,
     patientCompletionDocumentsMap,
     patientManualSlipDocumentsMap,
+    patientReportCourierMap,
+    patientReportScheduleMap,
     patientSampleCollectionMap,
     patientSelectedTestsMap,
     patientTestBookingStatusMap,
+    extraPaymentAmount,
+    pendingPaymentAmount,
+    pendingPaymentPatientId,
     patients,
+    sampleCollectionEasyTough,
+    sampleCollectionEasyToughPatientIds,
+    samplePickCount,
+    samplePickPatientIds,
   ]);
 
   const rawBookingStatusCode = Number(selectedBooking.bookingStatusCode || 0);
@@ -1828,10 +2311,11 @@ function AppointmentDetailsScreen({
     selectedBooking.address.longitude !== 'N/A'
       ? selectedBooking.address.longitude
       : '';
+  const locationUrl = normalizeFormText(selectedBooking.address.locationUrl);
   const patientCount = selectedBooking.patients.length;
 
   const handleOpenLocation = async () => {
-    if (!resolvedAddress && (!latitude || !longitude)) {
+    if (!locationUrl && !resolvedAddress && (!latitude || !longitude)) {
       return;
     }
 
@@ -1839,7 +2323,9 @@ function AppointmentDetailsScreen({
       latitude && longitude
         ? `${latitude},${longitude}`
         : encodeURIComponent(resolvedAddress);
-    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${mapsQuery}`;
+    const mapsUrl =
+      locationUrl ||
+      `https://www.google.com/maps/search/?api=1&query=${mapsQuery}`;
 
     try {
       await Linking.openURL(mapsUrl);
@@ -1992,6 +2478,12 @@ function AppointmentDetailsScreen({
       panelCompany:
         normalizeFormText(patient.panelCompany) ||
         INITIAL_PATIENT_FORM.panelCompany,
+      cghsCardNo: normalizeFormText(
+        patient.cardNo ||
+          patient.card_no ||
+          patient.cghsCardNo ||
+          patient.cghs_card_no,
+      ),
       tag: normalizeOptionValue(patient.tag, TAG_OPTIONS, INITIAL_PATIENT_FORM.tag),
     });
     setPatientDocuments([]);
@@ -2035,31 +2527,62 @@ function AppointmentDetailsScreen({
     }
   };
 
+  const resetCancelForm = useCallback(() => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    setCancellationReason(CANCELLATION_REASON_OPTIONS[0]);
+    setIsCancellationReasonSelectVisible(false);
+    setIsCancelTimeSlotSelectVisible(false);
+    setIsCancelRescheduleRequested(true);
+    setIsCancelKnownSlot(true);
+    setCancelRemarks('');
+    setCancelNewVisitDate(toDateInputValue(tomorrow));
+    setCancelCalendarMonth(new Date(tomorrow.getFullYear(), tomorrow.getMonth(), 1));
+    setCancelNewTimeSlot(CANCEL_TIME_SLOT_OPTIONS[0]);
+  }, []);
+
   const handlePatientCancelBooking = patient => {
-    showAppAlert(
-      'Cancel Patient',
-      `Cancel ${patient.name} from this booking?`,
-      [
-        {text: 'Keep Patient', style: 'cancel'},
-        {
-          text: 'Cancel Patient',
-          style: 'destructive',
-          onPress: () => onCancelPatient(patient),
-        },
-      ],
-    );
+    resetCancelForm();
+    setCancelTargetPatient(patient);
+    setIsCancelBookingModalVisible(true);
   };
 
   const handleReportCourierChange = (patient, nextValue) => {
-    const patientId = getPatientMutationId(patient);
+    const patientId = patient?.id || getPatientMutationId(patient);
 
     if (!patientId) {
       return;
     }
 
-    setPatientReportCourierMap(previousMap => ({
+    setPatientReportCourierMap(previousMap => {
+      const selectedValues = normalizeReportDeliveryValues(
+        previousMap[patientId],
+      );
+      const normalizedNextValue = normalizeFormText(nextValue);
+      const nextValues = selectedValues.includes(normalizedNextValue)
+        ? selectedValues.filter(value => value !== normalizedNextValue)
+        : [...selectedValues, normalizedNextValue];
+
+      return {
+        ...previousMap,
+        [patientId]: nextValues,
+      };
+    });
+  };
+
+  const handleReportScheduleChange = (patient, nextValue) => {
+    const patientId = patient?.id || getPatientMutationId(patient);
+
+    if (!patientId) {
+      return;
+    }
+
+    const normalizedNextValue = normalizeFormText(nextValue) || 'routine';
+
+    setPatientReportScheduleMap(previousMap => ({
       ...previousMap,
-      [patientId]: nextValue,
+      [patientId]: normalizedNextValue,
     }));
   };
 
@@ -2154,35 +2677,144 @@ function AppointmentDetailsScreen({
   }, []);
 
   const openCancelBookingModal = () => {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    setCancellationReason(CANCELLATION_REASON_OPTIONS[0]);
-    setIsCancellationReasonSelectVisible(false);
-    setIsCancelTimeSlotSelectVisible(false);
-    setIsCancelRescheduleRequested(true);
-    setIsCancelKnownSlot(true);
-    setCancelRemarks('');
-    setCancelNewVisitDate(toDateInputValue(tomorrow));
-    setCancelCalendarMonth(new Date(tomorrow.getFullYear(), tomorrow.getMonth(), 1));
-    setCancelNewTimeSlot(CANCEL_TIME_SLOT_OPTIONS[0]);
+    resetCancelForm();
+    setCancelTargetPatient(null);
     setIsCancelBookingModalVisible(true);
   };
 
   const closeCancelBookingModal = () => {
-    if (bookingActionLoading === 'cancel') {
+    if (
+      bookingActionLoading === 'cancel' ||
+      (cancelTargetPatient &&
+        String(cancellingPatientId) ===
+          String(getPatientMutationId(cancelTargetPatient)))
+    ) {
       return;
     }
 
     setIsCancelBookingModalVisible(false);
+    setCancelTargetPatient(null);
     setIsCancelCalendarVisible(false);
     setIsCancellationReasonSelectVisible(false);
     setIsCancelTimeSlotSelectVisible(false);
   };
 
+  const openCompleteBookingScreen = () => {
+    setIsCompleteBookingScreenVisible(true);
+    setIsLinkedAppointmentCalendarVisible(false);
+    setIsLinkedAppointmentTimeSlotSelectVisible(false);
+
+    if (!isLinkedAppointmentSelected) {
+      setLinkedAppointmentDate('');
+      setLinkedAppointmentTimeSlot('');
+    }
+  };
+
+  const closeCompleteBookingScreen = () => {
+    if (bookingActionLoading === 'completed') {
+      return;
+    }
+
+    setIsCompleteBookingScreenVisible(false);
+    setIsLinkedAppointmentCalendarVisible(false);
+    setIsLinkedAppointmentTimeSlotSelectVisible(false);
+  };
+
+  const handleLinkedAppointmentChange = useCallback(isSelected => {
+    setIsLinkedAppointmentSelected(isSelected);
+
+    if (!isSelected) {
+      setLinkedAppointmentDate('');
+      setLinkedAppointmentTimeSlot('');
+      setIsLinkedAppointmentCalendarVisible(false);
+      setIsLinkedAppointmentTimeSlotSelectVisible(false);
+    }
+  }, []);
+
+  const handleSamplePickCountChange = useCallback(
+    value => {
+      setSamplePickCount(value);
+      if (value === '1') {
+        setSamplePickPatientIds([]);
+        return;
+      }
+
+      if (completeBookingPatientOptions.length === 1) {
+        setSamplePickPatientIds([completeBookingPatientOptions[0].id]);
+      }
+    },
+    [completeBookingPatientOptions],
+  );
+
+  const handleSamplePickPatientToggle = useCallback(patientId => {
+    setSamplePickPatientIds(previousIds =>
+      previousIds.includes(patientId)
+        ? previousIds.filter(id => id !== patientId)
+        : [...previousIds, patientId],
+    );
+  }, []);
+
+  const handleSampleCollectionEasyToughChange = useCallback(
+    value => {
+      setSampleCollectionEasyTough(value);
+
+      if (value !== 'tough') {
+        setSampleCollectionEasyToughPatientIds([]);
+        return;
+      }
+
+      if (completeBookingPatientOptions.length === 1) {
+        setSampleCollectionEasyToughPatientIds([
+          completeBookingPatientOptions[0].id,
+        ]);
+      }
+    },
+    [completeBookingPatientOptions],
+  );
+
+  const handleSampleCollectionEasyToughPatientToggle = useCallback(patientId => {
+    setSampleCollectionEasyToughPatientIds(previousIds =>
+      previousIds.includes(patientId)
+        ? previousIds.filter(id => id !== patientId)
+        : [...previousIds, patientId],
+    );
+  }, []);
+
+  const buildCancelPayload = useCallback(
+    () => ({
+      cancellation_reason: cancellationReason,
+      cancel_reason: cancellationReason,
+      reason: cancellationReason,
+      remarks: cancelRemarks,
+      cancel_remarks: cancelRemarks,
+      reschedule_requested: Boolean(isCancelRescheduleRequested),
+      is_reschedule_requested: Boolean(isCancelRescheduleRequested),
+      is_new_slot_known: Boolean(isCancelRescheduleRequested && isCancelKnownSlot),
+      new_visit_date:
+        isCancelRescheduleRequested && isCancelKnownSlot ? cancelNewVisitDate : '',
+      new_time_slot:
+        isCancelRescheduleRequested && isCancelKnownSlot ? cancelNewTimeSlot : '',
+    }),
+    [
+      cancelNewTimeSlot,
+      cancelNewVisitDate,
+      cancelRemarks,
+      cancellationReason,
+      isCancelKnownSlot,
+      isCancelRescheduleRequested,
+    ],
+  );
+
   const confirmCancelBooking = async () => {
-    await onBookingAction('cancel');
-    setIsCancelBookingModalVisible(false);
+    const cancelPayload = buildCancelPayload();
+    const didCancel = cancelTargetPatient
+      ? await onCancelPatient(cancelTargetPatient, cancelPayload)
+      : await onBookingAction('cancel', cancelPayload);
+
+    if (didCancel) {
+      setIsCancelBookingModalVisible(false);
+      setCancelTargetPatient(null);
+    }
   };
 
   const validateAdditionalDiscountLimit = ({
@@ -2259,6 +2891,101 @@ function AppointmentDetailsScreen({
   };
 
   const confirmCompleteBooking = async () => {
+    if (!samplePickCount) {
+      showAppAlert(
+        'No. of Pricks Required',
+        'Please select no. of pricks in sample collection.',
+      );
+      return;
+    }
+
+    if (
+      samplePickCount !== '1' &&
+      completeBookingPatientOptions.length &&
+      !samplePickPatientIds.length
+    ) {
+      showAppAlert(
+        'Patient Required',
+        'Please select patient name for no. of pricks in sample collection.',
+      );
+      return;
+    }
+
+    if (!sampleCollectionEasyTough) {
+      showAppAlert(
+        'Sample Collection Required',
+        'Please select whether sample collection was easy/tough.',
+      );
+      return;
+    }
+
+    if (
+      sampleCollectionEasyTough === 'tough' &&
+      completeBookingPatientOptions.length &&
+      !sampleCollectionEasyToughPatientIds.length
+    ) {
+      showAppAlert(
+        'Patient Required',
+        'Please select patient name for sample collection easy/tough.',
+      );
+      return;
+    }
+
+    if (
+      isLinkedAppointmentSelected &&
+      (!linkedAppointmentDate || !linkedAppointmentTimeSlot)
+    ) {
+      showAppAlert(
+        'Linked Appointment Required',
+        'Please select linked appointment date and time slot.',
+      );
+      return;
+    }
+
+    const pendingIdentityDocumentsPatients = patients
+      .filter(patient => {
+        if (isPatientTerminalForCompletion(patient)) {
+          return false;
+        }
+
+        return doesPatientRequireIdentityDocuments(patient);
+      })
+      .map(patient => {
+        const patientId = getPatientMutationId(patient);
+        const cghsDocuments = patientId
+          ? patientCghsDocumentsMap[patientId] || {}
+          : {};
+        const missingDocuments = [];
+
+        if (!Array.isArray(cghsDocuments.patientPhotos) || !cghsDocuments.patientPhotos.length) {
+          missingDocuments.push('patient photo');
+        }
+        if (!Array.isArray(cghsDocuments.cghsCard) || !cghsDocuments.cghsCard.length) {
+          missingDocuments.push('CGHS card');
+        }
+
+        return missingDocuments.length
+          ? {
+              patientName: patient?.name || 'Patient',
+              missingDocuments,
+            }
+          : null;
+      })
+      .filter(Boolean);
+
+    if (pendingIdentityDocumentsPatients.length) {
+      showAppAlert(
+        'CAPF / NHA Documents Required',
+        pendingIdentityDocumentsPatients
+          .map(
+            item =>
+              `${item.patientName}: ${item.missingDocuments.join(' and ')}`,
+          )
+          .join('\n'),
+      );
+      return;
+    }
+
     const pendingManualSlipPatients = patients.filter(patient => {
       if (isPatientTerminalForCompletion(patient)) {
         return false;
@@ -2306,7 +3033,7 @@ function AppointmentDetailsScreen({
       return !patientSampleCollectionMap[patientId]?.collected;
     });
 
-    if (pendingSamplePatients.length) {
+    if (pendingSamplePatients.length && !isLinkedAppointmentSelected) {
       showAppAlert(
         'Sample Collection Pending',
         `Please collect sample or cancel patient booking for: ${pendingSamplePatients
@@ -2346,6 +3073,63 @@ function AppointmentDetailsScreen({
       return;
     }
 
+    const pendingReportDeliveryPatients = patients.filter(patient => {
+      if (isPatientTerminalForCompletion(patient)) {
+        return false;
+      }
+
+      const patientId = getPatientMutationId(patient);
+      if (!patientId) {
+        return false;
+      }
+
+      return !normalizeReportDeliveryValues(
+        patientReportCourierMap[patientId],
+      ).length;
+    });
+
+    if (pendingReportDeliveryPatients.length) {
+      showAppAlert(
+        'Report Delivery Required',
+        `Please select report delivery for: ${pendingReportDeliveryPatients
+          .map(patient => patient?.name || 'Patient')
+          .join(', ')}.`,
+      );
+      return;
+    }
+
+    if (
+      shouldCollectPendingPaymentPatient &&
+      !normalizeFormText(pendingPaymentPatientId)
+    ) {
+      showAppAlert(
+        'Pending Amount Patient Required',
+        extraPaymentAmount > 0.009
+          ? 'Please select which patient has the extra payment amount.'
+          : 'Please select which patient has the pending payment amount.',
+      );
+      return;
+    }
+
+    const pendingUpiProofPayments = completePayments.filter(payment => {
+      if (normalizeFormText(payment?.mode).toUpperCase() !== 'UPI') {
+        return false;
+      }
+
+      return !(
+        Array.isArray(payment?.proofDocuments) &&
+        payment.proofDocuments.length
+      );
+    });
+
+    if (pendingUpiProofPayments.length) {
+      showAppAlert(
+        'UPI Screenshot Required',
+        'Please upload payment screenshot or image for every UPI payment.',
+      );
+      return;
+    }
+
     if (
       !validateAdditionalDiscountLimit({
         mode: appliedAdditionalDiscountMode,
@@ -2355,16 +3139,15 @@ function AppointmentDetailsScreen({
       return;
     }
 
-    logCompleteBookingPayload(
-      '[Complete Booking Payload Before Submit]',
-      completeBookingPayload,
-    );
-
     const didComplete = await onBookingAction('completed', completeBookingPayload);
 
     if (!didComplete) {
       return;
     }
+
+    setIsCompleteBookingScreenVisible(false);
+    setIsLinkedAppointmentCalendarVisible(false);
+    setIsLinkedAppointmentTimeSlotSelectVisible(false);
 
     showAppAlert(
       'Booking Completed',
@@ -2372,6 +3155,8 @@ function AppointmentDetailsScreen({
         'Appointment completed successfully.',
         `Final amount: Rs. ${completeNetAmount.toFixed(2)}`,
         `Amount received: Rs. ${toCurrencyNumber(completeAmountReceived).toFixed(2)}`,
+        `Pending amount: Rs. ${pendingPaymentAmount.toFixed(2)}`,
+        `Extra amount: Rs. ${extraPaymentAmount.toFixed(2)}`,
         `Additional discount: Rs. ${completeAdditionalDiscountAmount.toFixed(2)}`,
       ].join('\n'),
     );
@@ -2383,24 +3168,212 @@ function AppointmentDetailsScreen({
       ),
     );
   }, []);
+  const handlePendingPaymentPatientSelect = useCallback(patient => {
+    setPendingPaymentPatientId(patient?.id || '');
+  }, []);
   const handleAddCompletePayment = useCallback(() => {
     setCompletePayments(previousPayments => [
       ...previousPayments,
       createCompletePaymentEntry(),
     ]);
   }, []);
-  const handleRemoveCompletePayment = useCallback(paymentId => {
-    setCompletePayments(previousPayments => {
-      if (previousPayments.length <= 1) {
-        return [createCompletePaymentEntry()];
+  const handleRemoveCompletePayment = useCallback(
+    paymentId => {
+      const replacementPayment = createCompletePaymentEntry();
+
+      setCompletePayments(previousPayments => {
+        if (previousPayments.length <= 1) {
+          return [replacementPayment];
+        }
+
+        return previousPayments.filter(payment => payment.id !== paymentId);
+      });
+    },
+    [],
+  );
+  const appendCompletePaymentProofDocuments = useCallback(
+    (paymentId, nextDocuments) => {
+      if (!nextDocuments.length) {
+        return;
       }
 
-      return previousPayments.filter(payment => payment.id !== paymentId);
-    });
-  }, []);
+      setCompletePayments(previousPayments =>
+        previousPayments.map(payment => {
+          if (payment.id !== paymentId) {
+            return payment;
+          }
+
+          return {
+            ...payment,
+            proofDocuments: [
+              ...(Array.isArray(payment.proofDocuments)
+                ? payment.proofDocuments
+                : []),
+              ...nextDocuments,
+            ],
+          };
+        }),
+      );
+    },
+    [],
+  );
+  const pickUploadDocumentsFromDevice = useCallback(
+    async ({fileNamePrefix, onDocumentsPicked, failureMessage}) => {
+      if (!LocalDocumentPickerModule?.pickDocuments) {
+        showAppAlert(
+          'Upload Not Available',
+          'Document picker module is not available in this build.',
+        );
+        return;
+      }
+
+      try {
+        const pickedFiles = await LocalDocumentPickerModule.pickDocuments();
+        const normalizedDocuments = normalizeUploadDocuments(
+          pickedFiles,
+          fileNamePrefix,
+        );
+
+        if (!normalizedDocuments.length) {
+          return;
+        }
+
+        onDocumentsPicked(normalizedDocuments);
+      } catch (error) {
+        if (
+          error?.code === 'DOCUMENT_PICKER_CANCELLED' ||
+          String(error?.message || '').toLowerCase().includes('cancel')
+        ) {
+          return;
+        }
+
+        warnDebug('Upload picker error:', error);
+        showAppAlert(
+          'Upload Failed',
+          failureMessage || 'Unable to select files right now. Please try again.',
+        );
+      }
+    },
+    [showAppAlert],
+  );
+  const captureUploadPhoto = useCallback(
+    async ({fileNamePrefix, documentLabel, onDocumentsPicked}) => {
+      if (!LocalGeoCameraModule?.captureStampedPhoto) {
+        showAppAlert(
+          'Camera Not Available',
+          'Geo camera module is not available in this build.',
+        );
+        return;
+      }
+
+      try {
+        const stampText = [
+          `Document: ${documentLabel || 'Document'}`,
+          `Time: ${new Date().toLocaleString('en-IN')}`,
+        ].join('\n');
+        const capturedPhoto = await LocalGeoCameraModule.captureStampedPhoto(
+          stampText,
+        );
+
+        if (!capturedPhoto?.uri) {
+          return;
+        }
+
+        onDocumentsPicked([
+          {
+            uri: capturedPhoto.uri,
+            name: capturedPhoto.name || `${fileNamePrefix}-${Date.now()}.jpg`,
+            type: capturedPhoto.type || 'image/jpeg',
+          },
+        ]);
+      } catch (error) {
+        if (
+          error?.code === 'CAMERA_CANCELLED' ||
+          String(error?.message || '').toLowerCase().includes('cancel')
+        ) {
+          return;
+        }
+
+        warnDebug('Upload camera error:', error);
+        showAppAlert(
+          'Camera Failed',
+          'Unable to capture a photo right now. Please try again.',
+        );
+      }
+    },
+    [showAppAlert],
+  );
+  const openUploadSourceChooser = useCallback(
+    ({title, onCameraPress, onScreenshotPress}) => {
+      showAppAlert(title, 'Choose how to add this file.', [
+        {text: 'Camera', onPress: onCameraPress},
+        {text: 'Screenshot', onPress: onScreenshotPress},
+        {text: 'Cancel', style: 'cancel'},
+      ]);
+    },
+    [showAppAlert],
+  );
+  const handlePickCompletePaymentProof = useCallback(
+    async paymentId => {
+      openUploadSourceChooser({
+        title: 'UPI Payment Proof',
+        onCameraPress: () =>
+          captureUploadPhoto({
+            fileNamePrefix: 'upi-payment-proof',
+            documentLabel: 'UPI Payment Proof',
+            onDocumentsPicked: documents =>
+              appendCompletePaymentProofDocuments(paymentId, documents),
+          }),
+        onScreenshotPress: () =>
+          pickUploadDocumentsFromDevice({
+            fileNamePrefix: 'upi-payment-proof',
+            onDocumentsPicked: documents =>
+              appendCompletePaymentProofDocuments(paymentId, documents),
+            failureMessage:
+              'Unable to select payment screenshot right now. Please try again.',
+          }),
+      });
+    },
+    [
+      appendCompletePaymentProofDocuments,
+      captureUploadPhoto,
+      openUploadSourceChooser,
+      pickUploadDocumentsFromDevice,
+    ],
+  );
+  const handleRemoveCompletePaymentProof = useCallback(
+    (paymentId, documentIndex) => {
+      setCompletePayments(previousPayments =>
+        previousPayments.map(payment => {
+          if (payment.id !== paymentId) {
+            return payment;
+          }
+
+          return {
+            ...payment,
+            proofDocuments: (Array.isArray(payment.proofDocuments)
+              ? payment.proofDocuments
+              : []
+            ).filter((_, index) => index !== documentIndex),
+          };
+        }),
+      );
+    },
+    [],
+  );
 
   const moveCancelCalendarMonth = direction => {
     setCancelCalendarMonth(previousMonth => {
+      const nextMonth = new Date(
+        previousMonth.getFullYear(),
+        previousMonth.getMonth() + direction,
+        1,
+      );
+      return nextMonth;
+    });
+  };
+  const moveLinkedAppointmentCalendarMonth = direction => {
+    setLinkedAppointmentCalendarMonth(previousMonth => {
       const nextMonth = new Date(
         previousMonth.getFullYear(),
         previousMonth.getMonth() + direction,
@@ -2415,49 +3388,39 @@ function AppointmentDetailsScreen({
     setCancelCalendarMonth(new Date(date.getFullYear(), date.getMonth(), 1));
     setIsCancelCalendarVisible(false);
   };
+  const handleLinkedAppointmentDateSelect = date => {
+    setLinkedAppointmentDate(toDateInputValue(date));
+    setLinkedAppointmentCalendarMonth(
+      new Date(date.getFullYear(), date.getMonth(), 1),
+    );
+    setIsLinkedAppointmentCalendarVisible(false);
+  };
 
   const handlePickPatientDocuments = async () => {
-    if (!LocalDocumentPickerModule?.pickDocuments) {
-      showAppAlert(
-        'Upload Not Available',
-        'Document picker module is not available in this build.',
-      );
-      return;
-    }
-
-    try {
-      const pickedFiles = await LocalDocumentPickerModule.pickDocuments();
-
-      const normalizedDocuments = (Array.isArray(pickedFiles) ? pickedFiles : [])
-        .filter(file => file?.uri)
-        .map((file, index) => ({
-          uri: file.uri,
-          name: file.name || `patient-document-${Date.now()}-${index}`,
-          type: file.type || getMimeTypeFromFileName(file.name),
-        }));
-
-      if (!normalizedDocuments.length) {
-        return;
-      }
-
-      setPatientDocuments(previousDocuments => [
-        ...previousDocuments,
-        ...normalizedDocuments,
-      ]);
-    } catch (error) {
-      if (
-        error?.code === 'DOCUMENT_PICKER_CANCELLED' ||
-        String(error?.message || '').toLowerCase().includes('cancel')
-      ) {
-        return;
-      }
-
-      warnDebug('Patient document pick error:', error);
-      showAppAlert(
-        'Upload Failed',
-        'Unable to select documents right now. Please try again.',
-      );
-    }
+    openUploadSourceChooser({
+      title: 'Patient Document',
+      onCameraPress: () =>
+        captureUploadPhoto({
+          fileNamePrefix: 'patient-document',
+          documentLabel: 'Patient Document',
+          onDocumentsPicked: documents =>
+            setPatientDocuments(previousDocuments => [
+              ...previousDocuments,
+              ...documents,
+            ]),
+        }),
+      onScreenshotPress: () =>
+        pickUploadDocumentsFromDevice({
+          fileNamePrefix: 'patient-document',
+          onDocumentsPicked: documents =>
+            setPatientDocuments(previousDocuments => [
+              ...previousDocuments,
+              ...documents,
+            ]),
+          failureMessage:
+            'Unable to select documents right now. Please try again.',
+        }),
+    });
   };
 
   const handleRemovePatientDocument = indexToRemove => {
@@ -2514,6 +3477,43 @@ function AppointmentDetailsScreen({
     setCatalogVisibleCount(CATALOG_ITEM_PAGE_SIZE);
   };
 
+  const openPanelCompanyCatalog = useCallback(
+    async ({patient, panelCompany}) => {
+      const catalogResponse = await onPanelCompanySelect({
+        patient,
+        compCatId: panelCompany?.compCatId,
+        panelCompany,
+      });
+
+      if (!catalogResponse) {
+        return false;
+      }
+
+      const groups = sortCatalogGroupsById(catalogResponse?.groups);
+
+      if (!groups.length) {
+        showAppAlert(
+          'No Groups Found',
+          'No groups were returned for the selected panel company.',
+        );
+        return false;
+      }
+
+      setSelectedPanelCompanyName(panelCompany?.name || '');
+      setSelectedPanelCompany(panelCompany);
+      setPanelCatalogGroups(groups);
+      setSelectedCatalogGroup(null);
+      setSelectedCatalogSubgroup(null);
+      setTestSearch('');
+      setExpandedCatalogTests({});
+      setCatalogVisibleCount(CATALOG_ITEM_PAGE_SIZE);
+      setIsPanelCompanyModalVisible(false);
+      setIsPanelCatalogVisible(true);
+      return true;
+    },
+    [onPanelCompanySelect, showAppAlert],
+  );
+
   const handleSelectPanelCompany = async panelCompany => {
     const resolvedPanelCompany =
       await resolvePanelCompanyChargeMode(panelCompany);
@@ -2556,43 +3556,23 @@ function AppointmentDetailsScreen({
       setSelectedPanelCompany(appPanelCompany);
       setIsPanelCompanyModalVisible(false);
       setIsPanelCatalogVisible(false);
-      showAppAlert(
-        'Panel Company Selected',
-        `${appPanelCompany.name || 'Panel company'} selected as ${getPaymentLabelFromBillingMode(
-          appPanelCompany.billingChargeMode,
-        )}.`,
-      );
-      return;
-    }
 
-    const catalogResponse = await onPanelCompanySelect({
-      patient: selectedPanelPatient,
-      compCatId: resolvedPanelCompany.compCatId,
-      panelCompany: resolvedPanelCompany,
-    });
-
-    if (catalogResponse) {
-      const groups = sortCatalogGroupsById(catalogResponse?.groups);
-
-      if (!groups.length) {
-        showAppAlert(
-          'No Groups Found',
-          'No groups were returned for the selected panel company.',
-        );
+      if (onOpenAddTest) {
+        onOpenAddTest(selectedPanelPatient, appPanelCompany);
         return;
       }
 
-      setSelectedPanelCompanyName(resolvedPanelCompany.name);
-      setSelectedPanelCompany(resolvedPanelCompany);
-      setPanelCatalogGroups(groups);
-      setSelectedCatalogGroup(null);
-      setSelectedCatalogSubgroup(null);
-      setTestSearch('');
-      setExpandedCatalogTests({});
-      setCatalogVisibleCount(CATALOG_ITEM_PAGE_SIZE);
-      setIsPanelCompanyModalVisible(false);
-      setIsPanelCatalogVisible(true);
+      await openPanelCompanyCatalog({
+        patient: selectedPanelPatient,
+        panelCompany: appPanelCompany,
+      });
+      return;
     }
+
+    await openPanelCompanyCatalog({
+      patient: selectedPanelPatient,
+      panelCompany: resolvedPanelCompany,
+    });
   };
 
   const openPanelCompanyTests = async ({patient, panelCompany}) => {
@@ -2753,7 +3733,10 @@ function AppointmentDetailsScreen({
   };
 
   const handleRemovePatientPanelCompany = (patient, panelCompanyToRemove) => {
-    confirmSampleCollectionReset(patient, () => {
+    confirmRemovePanelCompany({
+      patient,
+      panelCompany: panelCompanyToRemove,
+      onConfirm: () => {
     const selectedPatientId = getPatientMutationId(patient);
     if (!selectedPatientId) {
       return;
@@ -2850,20 +3833,36 @@ function AppointmentDetailsScreen({
     ) {
       closePanelCompanyModal();
     }
+      },
     });
   };
 
   const handleRemoveSelectedTestWithSampleReset = useCallback(
     payload => {
-      confirmSampleCollectionReset(payload?.patient, () => {
-        onRemovePatientSelectedTest?.(payload);
+      const patientId = getPatientMutationId(payload?.patient);
+      const patientTests = patientId ? patientSelectedTestsMap[patientId] || [] : [];
+      const selectedTest = patientTests.find(test => test?.key === payload?.testKey);
+
+      confirmRemoveSelectedTest({
+        patient: payload?.patient,
+        testName:
+          selectedTest?.description ||
+          selectedTest?.name ||
+          selectedTest?.booked_code ||
+          selectedTest?.code,
+        onConfirm: () => {
+          onRemovePatientSelectedTest?.(payload);
+        },
       });
     },
-    [confirmSampleCollectionReset, onRemovePatientSelectedTest],
+    [confirmRemoveSelectedTest, onRemovePatientSelectedTest, patientSelectedTestsMap],
   );
 
   const calendarDays = getCalendarDays(dobCalendarMonth);
   const cancelCalendarDays = getCalendarDays(cancelCalendarMonth);
+  const linkedAppointmentCalendarDays = getCalendarDays(
+    linkedAppointmentCalendarMonth,
+  );
   const isGenderEditable = EDITABLE_GENDER_TITLES.includes(patientForm.title);
 
   const handleAddTestFlowBack = () => {
@@ -3285,6 +4284,7 @@ function AppointmentDetailsScreen({
     const email = patientForm.email.trim();
     const labmatePid = patientForm.labmatePid.trim();
     const panelCompany = patientForm.panelCompany.trim();
+    const cghsCardNo = patientForm.cghsCardNo.trim();
     const ageYears = Number(patientForm.ageYears);
 
     if (!fullName) {
@@ -3332,6 +4332,7 @@ function AppointmentDetailsScreen({
       ...(email ? {email} : {}),
       ...(labmatePid ? {labmate_pid: labmatePid} : {}),
       ...(panelCompany ? {panel_company: panelCompany} : {}),
+      ...(cghsCardNo ? {card_no: cghsCardNo} : {}),
       ...(patientForm.tag ? {tag: patientForm.tag} : {}),
       patient_documents: patientDocuments,
     };
@@ -3360,7 +4361,14 @@ function AppointmentDetailsScreen({
         isNarrowScreen={isNarrowScreen}
         selectedBooking={selectedBooking}
         patientCount={patientCount}
-        bookingActionLoading={bookingActionLoading}
+        cancelTargetPatient={cancelTargetPatient}
+        bookingActionLoading={
+          cancelTargetPatient &&
+          String(cancellingPatientId) ===
+            String(getPatientMutationId(cancelTargetPatient))
+            ? 'cancel'
+            : bookingActionLoading
+        }
         cancellationReasonOptions={CANCELLATION_REASON_OPTIONS}
         cancellationReason={cancellationReason}
         setCancellationReason={setCancellationReason}
@@ -3379,120 +4387,229 @@ function AppointmentDetailsScreen({
         confirmCancelBooking={confirmCancelBooking}
       />
 
-      <BookingDetailOverview
-        styles={styles}
-        selectedBooking={selectedBooking}
-        patientCount={patientCount}
-        isSmallPhone={isSmallPhone}
-        canUseActiveBookingControls={canUseActiveBookingControls}
-        canUsePatientActions={canUsePatientActions}
-        shouldShowProgressActions={shouldShowProgressActions}
-        shouldShowStartOnly={shouldShowStartOnly}
-        bookingActionLoading={bookingActionLoading}
-        resolvedAddress={resolvedAddress}
-        latitude={latitude}
-        longitude={longitude}
-        isTerminalBooking={isTerminalBooking}
-        isCompletedBooking={isCompletedBooking}
-        isCancelledBooking={isCancelledBooking}
-        terminalBookingMessage={terminalBookingMessage}
-        canCallBookingPhone={Boolean(
-          normalizeFormText(selectedBooking.phoneNumber),
-        )}
-        handleCallBookingPhone={handleCallBookingPhone}
-        handleOpenLocation={handleOpenLocation}
-        handleAddPatientPress={handleAddPatientPress}
-        openCancelBookingModal={openCancelBookingModal}
-        onBookingAction={onBookingAction}
-      />
+      {isCompleteBookingScreenVisible ? (
+        <CompleteBookingScreen
+          styles={styles}
+          isNarrowScreen={isNarrowScreen}
+          selectedBooking={selectedBooking}
+          patientCount={patientCount}
+          bookingActionLoading={bookingActionLoading}
+          patientOptions={completeBookingPatientOptions}
+          isLinkedAppointmentSelected={isLinkedAppointmentSelected}
+          onLinkedAppointmentChange={handleLinkedAppointmentChange}
+          linkedAppointmentDate={linkedAppointmentDate}
+          setIsLinkedAppointmentCalendarVisible={
+            setIsLinkedAppointmentCalendarVisible
+          }
+          linkedAppointmentTimeSlot={linkedAppointmentTimeSlot}
+          isLinkedAppointmentTimeSlotSelectVisible={
+            isLinkedAppointmentTimeSlotSelectVisible
+          }
+          setIsLinkedAppointmentTimeSlotSelectVisible={
+            setIsLinkedAppointmentTimeSlotSelectVisible
+          }
+          samplePickCount={samplePickCount}
+          samplePickPatientIds={samplePickPatientIds}
+          sampleCollectionEasyTough={sampleCollectionEasyTough}
+          sampleCollectionEasyToughPatientIds={
+            sampleCollectionEasyToughPatientIds
+          }
+          onSamplePickCountChange={handleSamplePickCountChange}
+          onSamplePickPatientToggle={handleSamplePickPatientToggle}
+          onSampleCollectionEasyToughChange={
+            handleSampleCollectionEasyToughChange
+          }
+          onSampleCollectionEasyToughPatientToggle={
+            handleSampleCollectionEasyToughPatientToggle
+          }
+          closeCompleteBookingScreen={closeCompleteBookingScreen}
+          confirmCompleteBooking={confirmCompleteBooking}
+          completeBillingTotal={completeBillingTotal}
+          completeBaseDiscountAmount={completeBaseDiscountAmount}
+          completeAdditionalDiscountAmount={completeAdditionalDiscountAmount}
+          completeCreditAmount={completeCreditAmount}
+          completeNetAmount={completeNetAmount}
+          localBillingSummary={localBillingSummary}
+          isAdditionalDiscountEnabled={isAdditionalDiscountEnabled}
+          completeAdditionalDiscountMode={completeAdditionalDiscountMode}
+          completeAdditionalDiscount={completeAdditionalDiscount}
+          completePayments={completePayments}
+          completePaymentModeOptions={COMPLETE_PAYMENT_MODE_OPTIONS}
+          paymentPatientOptions={completeBookingPatientOptions}
+          pendingPaymentAmount={pendingPaymentAmount}
+          extraPaymentAmount={extraPaymentAmount}
+          pendingPaymentPatientId={pendingPaymentPatientId}
+          shouldCollectPendingPaymentPatient={shouldCollectPendingPaymentPatient}
+          handlePendingPaymentPatientSelect={handlePendingPaymentPatientSelect}
+          handleAdditionalDiscountToggle={handleAdditionalDiscountToggle}
+          setCompleteAdditionalDiscountMode={setCompleteAdditionalDiscountMode}
+          setCompleteAdditionalDiscount={setCompleteAdditionalDiscount}
+          handleApplyAdditionalDiscount={handleApplyAdditionalDiscount}
+          handleCompletePaymentChange={handleCompletePaymentChange}
+          handleRemoveCompletePayment={handleRemoveCompletePayment}
+          handleAddCompletePayment={handleAddCompletePayment}
+          handlePickCompletePaymentProof={handlePickCompletePaymentProof}
+          handleRemoveCompletePaymentProof={handleRemoveCompletePaymentProof}
+        />
+      ) : (
+        <>
+          <BookingDetailOverview
+            styles={styles}
+            selectedBooking={selectedBooking}
+            patientCount={patientCount}
+            isSmallPhone={isSmallPhone}
+            canUseActiveBookingControls={canUseActiveBookingControls}
+            canUsePatientActions={canUsePatientActions}
+            shouldShowProgressActions={shouldShowProgressActions}
+            shouldShowStartOnly={shouldShowStartOnly}
+            bookingActionLoading={bookingActionLoading}
+            resolvedAddress={resolvedAddress}
+            latitude={latitude}
+            longitude={longitude}
+            locationUrl={locationUrl}
+            isTerminalBooking={isTerminalBooking}
+            isCompletedBooking={isCompletedBooking}
+            isCancelledBooking={isCancelledBooking}
+            terminalBookingMessage={terminalBookingMessage}
+            canCallBookingPhone={Boolean(
+              normalizeFormText(selectedBooking.phoneNumber),
+            )}
+            handleCallBookingPhone={handleCallBookingPhone}
+            handleOpenLocation={handleOpenLocation}
+            handleAddPatientPress={handleAddPatientPress}
+            openCancelBookingModal={openCancelBookingModal}
+            onBookingAction={onBookingAction}
+          />
 
-      <PatientSelectorSection
-        styles={styles}
-        isSmallPhone={isSmallPhone}
-        patientCount={patientCount}
-        patientSelectorItems={patientSelectorItems}
-        filteredPatientSelectorItems={filteredPatientSelectorItems}
-        selectedPatientItem={selectedPatientItem}
-        patientSearchText={patientSearchText}
-        setPatientSearchText={setPatientSearchText}
-        setSelectedPatientKey={setSelectedPatientKey}
-      />
+          <PatientSelectorSection
+            styles={styles}
+            isSmallPhone={isSmallPhone}
+            patientCount={patientCount}
+            patientSelectorItems={patientSelectorItems}
+            filteredPatientSelectorItems={filteredPatientSelectorItems}
+            selectedPatientItem={selectedPatientItem}
+            patientSearchText={patientSearchText}
+            setPatientSearchText={setPatientSearchText}
+            setSelectedPatientKey={setSelectedPatientKey}
+          />
 
-      <SelectedPatientAppointmentSection
-        selectedPatientItem={selectedPatientItem}
-        styles={styles}
-        isSmallPhone={isSmallPhone}
-        canUsePatientActions={canUsePatientActions}
-        canCancelPatientForBooking={canCancelPatientForBooking}
-        isTerminalBooking={isTerminalBooking}
-        isBookingCompleteOrCancelled={isCompletedBooking || isCancelledBooking}
-        activePatientPanelCompanyMap={activePatientPanelCompanyMap}
-        patientSelectedTestsMap={patientSelectedTestsMap}
-        patientPrecomputedSampleTubesMap={patientPrecomputedSampleTubesMap}
-        patientSampleCollectionMap={patientSampleCollectionMap}
-        patientTestBookingStatusMap={patientTestBookingStatusMap}
-        patientCghsEnabledMap={patientCghsEnabledMap}
-        patientCghsIdMap={patientCghsIdMap}
-        patientCghsDocumentsMap={patientCghsDocumentsMap}
-        patientManualSlipDocumentsMap={patientManualSlipDocumentsMap}
-        patientCompletionDocumentsMap={patientCompletionDocumentsMap}
-        patientReportCourierMap={patientReportCourierMap}
-        addingTestPatientId={addingTestPatientId}
-        cancellingPatientId={cancellingPatientId}
-        defaultTestBookingStatus={DEFAULT_TEST_BOOKING_STATUS}
-        emptyUploadDocuments={EMPTY_UPLOAD_DOCUMENTS}
-        getPatientPanelCompanies={getPatientPanelCompanies}
-        isManualHcSlipSelected={isManualHcSlipSelected}
-        doesPatientNeedPaymentProof={doesPatientNeedPaymentProof}
-        handlePrimaryPanelCompanyPress={handlePrimaryPanelCompanyPress}
-        openPanelCompanyTests={openPanelCompanyTests}
-        handleRemovePatientPanelCompany={handleRemovePatientPanelCompany}
-        handlePatientCancelBooking={handlePatientCancelBooking}
-        handleEditPatientPress={handleEditPatientPress}
-        handleReportCourierChange={handleReportCourierChange}
-        handleTestBookingStatusChange={handleTestBookingStatusChange}
-        handlePatientCghsEnabledChange={handlePatientCghsEnabledChange}
-        handlePatientCghsIdChange={handlePatientCghsIdChange}
-        handlePatientCghsDocumentsChange={handlePatientCghsDocumentsChange}
-        handlePatientManualSlipDocumentsChange={
-          handlePatientManualSlipDocumentsChange
-        }
-        handlePatientPaymentProofDocumentsChange={
-          handlePatientPaymentProofDocumentsChange
-        }
-        showAppAlert={showAppAlert}
-        onOpenSampleCollection={onOpenSampleCollection}
-        handleRemoveSelectedTestWithSampleReset={
-          handleRemoveSelectedTestWithSampleReset
-        }
-        handlePatientAddPanelCompany={handlePatientAddPanelCompany}
-      />
+          <SelectedPatientAppointmentSection
+            selectedPatientItem={selectedPatientItem}
+            styles={styles}
+            isSmallPhone={isSmallPhone}
+            canUsePatientActions={canUsePatientActions}
+            canCancelPatientForBooking={canCancelPatientForBooking}
+            isTerminalBooking={isTerminalBooking}
+            isBookingCompleteOrCancelled={isCompletedBooking || isCancelledBooking}
+            activePatientPanelCompanyMap={activePatientPanelCompanyMap}
+            patientSelectedTestsMap={patientSelectedTestsMap}
+            patientPrecomputedSampleTubesMap={patientPrecomputedSampleTubesMap}
+            patientSampleCollectionMap={patientSampleCollectionMap}
+            patientTestBookingStatusMap={patientTestBookingStatusMap}
+            patientCghsEnabledMap={patientCghsEnabledMap}
+            patientCghsIdMap={patientCghsIdMap}
+            patientCghsDocumentsMap={patientCghsDocumentsMap}
+            patientManualSlipDocumentsMap={patientManualSlipDocumentsMap}
+            patientCompletionDocumentsMap={patientCompletionDocumentsMap}
+            addingTestPatientId={addingTestPatientId}
+            cancellingPatientId={cancellingPatientId}
+            defaultTestBookingStatus={DEFAULT_TEST_BOOKING_STATUS}
+            emptyUploadDocuments={EMPTY_UPLOAD_DOCUMENTS}
+            getPatientPanelCompanies={getPatientPanelCompanies}
+            isManualHcSlipSelected={isManualHcSlipSelected}
+            doesPatientNeedPaymentProof={doesPatientNeedPaymentProof}
+            doesPatientRequireIdentityDocuments={doesPatientRequireIdentityDocuments}
+            handlePrimaryPanelCompanyPress={handlePrimaryPanelCompanyPress}
+            openPanelCompanyTests={openPanelCompanyTests}
+            handleRemovePatientPanelCompany={handleRemovePatientPanelCompany}
+            handlePatientCancelBooking={handlePatientCancelBooking}
+            handleEditPatientPress={handleEditPatientPress}
+            handleTestBookingStatusChange={handleTestBookingStatusChange}
+            handlePatientCghsEnabledChange={handlePatientCghsEnabledChange}
+            handlePatientCghsIdChange={handlePatientCghsIdChange}
+            handlePatientCghsDocumentsChange={handlePatientCghsDocumentsChange}
+            handlePatientManualSlipDocumentsChange={
+              handlePatientManualSlipDocumentsChange
+            }
+            handlePatientPaymentProofDocumentsChange={
+              handlePatientPaymentProofDocumentsChange
+            }
+            showAppAlert={showAppAlert}
+            onOpenSampleCollection={onOpenSampleCollection}
+            handleRemoveSelectedTestWithSampleReset={
+              handleRemoveSelectedTestWithSampleReset
+            }
+            handlePatientAddPanelCompany={handlePatientAddPanelCompany}
+          />
 
-      <PaymentSummarySection
-        styles={styles}
-        patientCount={patientCount}
-        completeBillingTotal={completeBillingTotal}
-        completeBaseDiscountAmount={completeBaseDiscountAmount}
-        completeAdditionalDiscountAmount={completeAdditionalDiscountAmount}
-        completeCreditAmount={completeCreditAmount}
-        completeNetAmount={completeNetAmount}
-        localBillingSummary={localBillingSummary}
-        isAdditionalDiscountEnabled={isAdditionalDiscountEnabled}
-        completeAdditionalDiscountMode={completeAdditionalDiscountMode}
-        completeAdditionalDiscount={completeAdditionalDiscount}
-        completePayments={completePayments}
-        completePaymentModeOptions={COMPLETE_PAYMENT_MODE_OPTIONS}
-        bookingActionLoading={bookingActionLoading}
-        shouldShowProgressActions={shouldShowProgressActions}
-        handleAdditionalDiscountToggle={handleAdditionalDiscountToggle}
-        setCompleteAdditionalDiscountMode={setCompleteAdditionalDiscountMode}
-        setCompleteAdditionalDiscount={setCompleteAdditionalDiscount}
-        handleApplyAdditionalDiscount={handleApplyAdditionalDiscount}
-        handleCompletePaymentChange={handleCompletePaymentChange}
-        handleRemoveCompletePayment={handleRemoveCompletePayment}
-        handleAddCompletePayment={handleAddCompletePayment}
-        confirmCompleteBooking={confirmCompleteBooking}
-      />
+          <ReportDeliverySection
+            styles={styles}
+            patients={reportDeliveryPatients}
+            patientReportCourierMap={patientReportCourierMap}
+            patientReportScheduleMap={patientReportScheduleMap}
+            onToggleReportDelivery={
+              canUsePatientActions ? handleReportCourierChange : undefined
+            }
+            onReportScheduleChange={
+              canUsePatientActions ? handleReportScheduleChange : undefined
+            }
+          />
+
+          {shouldShowProgressActions ? (
+            <View style={styles.completeBookingLaunchCard}>
+              <View style={styles.completeBookingLaunchHeader}>
+                <View style={styles.completeBookingLaunchIconWrap}>
+                  <Ionicons
+                    name="wallet-outline"
+                    size={18}
+                    style={styles.completeBookingLaunchIcon}
+                  />
+                </View>
+                <View style={styles.completeBookingLaunchText}>
+                  <Text style={styles.completeBookingLaunchTitle}>
+                    Billing & Completion
+                  </Text>
+                  <Text style={styles.completeBookingLaunchSubtitle}>
+                    Review billing, uploads, payments, and final booking steps on
+                    a separate screen.
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.completeBookingLaunchStats}>
+                <View style={styles.completeBookingLaunchStat}>
+                  <Text style={styles.completeBookingLaunchStatLabel}>
+                    Final Amount
+                  </Text>
+                  <Text style={styles.completeBookingLaunchStatValue}>
+                    Rs. {completeNetAmount.toFixed(2)}
+                  </Text>
+                </View>
+                <View style={styles.completeBookingLaunchStat}>
+                  <Text style={styles.completeBookingLaunchStatLabel}>
+                    Payments
+                  </Text>
+                  <Text style={styles.completeBookingLaunchStatValue}>
+                    {completePayments.length}
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                activeOpacity={0.88}
+                style={styles.completeBookingLaunchButton}
+                onPress={openCompleteBookingScreen}>
+                <Text style={styles.completeBookingLaunchButtonText}>
+                  Open Billing Summary
+                </Text>
+                <Ionicons
+                  name="arrow-forward"
+                  size={16}
+                  style={styles.completeBookingLaunchButtonIcon}
+                />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </>
+      )}
 
       <AddPatientModal
         styles={styles}
@@ -3578,7 +4695,19 @@ function AppointmentDetailsScreen({
           setCancelNewTimeSlot(slot);
           setIsCancelTimeSlotSelectVisible(false);
         }}
-        scrollable={false}
+      />
+
+      <OptionSelectModal
+        styles={styles}
+        visible={isLinkedAppointmentTimeSlotSelectVisible}
+        title="Linked Appointment Time Slot"
+        options={CANCEL_TIME_SLOT_OPTIONS}
+        selectedValue={linkedAppointmentTimeSlot}
+        onClose={() => setIsLinkedAppointmentTimeSlotSelectVisible(false)}
+        onSelect={slot => {
+          setLinkedAppointmentTimeSlot(slot);
+          setIsLinkedAppointmentTimeSlotSelectVisible(false);
+        }}
       />
 
       <CalendarPickerModal
@@ -3599,6 +4728,25 @@ function AppointmentDetailsScreen({
         }}
         emptyKeyPrefix="cancel-empty"
         dateKeyPrefix="cancel"
+      />
+      <CalendarPickerModal
+        styles={styles}
+        visible={isLinkedAppointmentCalendarVisible}
+        eyebrow="Linked Appointment Date"
+        title={linkedAppointmentDate || 'Select date'}
+        calendarMonth={linkedAppointmentCalendarMonth}
+        calendarDays={linkedAppointmentCalendarDays}
+        selectedDateValue={linkedAppointmentDate}
+        onClose={() => setIsLinkedAppointmentCalendarVisible(false)}
+        onMoveMonth={moveLinkedAppointmentCalendarMonth}
+        onSelectDate={handleLinkedAppointmentDateSelect}
+        disableDate={date => {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          return date < today;
+        }}
+        emptyKeyPrefix="linked-appointment-empty"
+        dateKeyPrefix="linked-appointment"
       />
       <AppAlertModal
         alert={appAlert}

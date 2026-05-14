@@ -11,7 +11,10 @@ function BookingCard({
 }) {
   const {width} = useWindowDimensions();
   const isNarrowCard = width < 390;
-  const patientNames = booking.patients.map(patient => patient.name).join(', ');
+  const patientNames =
+    booking.patients.map(patient => patient.name).join(', ') ||
+    booking.patientNames ||
+    'Patient names not available';
   const resolvedPatientCount = booking.patientCount || booking.patients.length;
   const isAssignedAppointmentCard = showViewDetailsButton;
 

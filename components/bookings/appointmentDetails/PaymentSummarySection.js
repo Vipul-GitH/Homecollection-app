@@ -9,6 +9,7 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 import {BRAND} from '../../../styles/appStyles';
+import RequiredLabel from './RequiredLabel';
 
 function PaymentSummarySection({
   styles,
@@ -24,6 +25,12 @@ function PaymentSummarySection({
   completeAdditionalDiscount,
   completePayments,
   completePaymentModeOptions,
+  paymentPatientOptions = [],
+  pendingPaymentAmount = 0,
+  extraPaymentAmount = 0,
+  pendingPaymentPatientId = '',
+  shouldCollectPendingPaymentPatient = false,
+  handlePendingPaymentPatientSelect,
   bookingActionLoading,
   shouldShowProgressActions,
   handleAdditionalDiscountToggle,
@@ -33,8 +40,21 @@ function PaymentSummarySection({
   handleCompletePaymentChange,
   handleRemoveCompletePayment,
   handleAddCompletePayment,
+  handlePickCompletePaymentProof,
+  handleRemoveCompletePaymentProof,
   confirmCompleteBooking,
 }) {
+  const shouldShowPaymentsCollected = localBillingSummary.payingTestCount > 0;
+  const patientOptions = paymentPatientOptions;
+  const paymentDifferenceAmount =
+    extraPaymentAmount > 0.009 ? extraPaymentAmount : pendingPaymentAmount;
+  const paymentDifferenceLabel =
+    extraPaymentAmount > 0.009 ? 'Extra Amount' : 'Pending Amount';
+  const paymentDifferenceHint =
+    extraPaymentAmount > 0.009
+      ? 'Select patient for this extra amount.'
+      : 'Select patient for this pending amount.';
+
   return (
     <>
       <View style={styles.paymentSummaryCard}>
@@ -69,6 +89,12 @@ function PaymentSummarySection({
             <Text style={styles.paymentSummaryRowLabel}>Credit</Text>
             <Text style={styles.paymentSummaryRowValue}>
               Rs. {completeCreditAmount.toFixed(2)}
+            </Text>
+          </View>
+          <View style={styles.paymentSummaryTotalRow}>
+            <Text style={styles.paymentSummaryTotalLabel}>Final Amount</Text>
+            <Text style={styles.paymentSummaryTotalValue}>
+              Rs. {completeNetAmount.toFixed(2)}
             </Text>
           </View>
         </View>
@@ -162,83 +188,229 @@ function PaymentSummarySection({
             </>
           ) : null}
         </View>
-        <View style={styles.paymentSummaryTotalRow}>
-          <Text style={styles.paymentSummaryTotalLabel}>FinalAmount</Text>
-          <Text style={styles.paymentSummaryTotalValue}>
-            Rs. {completeNetAmount.toFixed(2)}
-          </Text>
-        </View>
-        <View style={styles.completePaymentsCollectedCard}>
-          <Text style={styles.paymentSummarySubTitle}>Payments Collected</Text>
-          {completePayments.map((payment, index) => (
-            <View key={payment.id} style={styles.completePaymentEntry}>
-              <View style={styles.completePaymentModeRow}>
-                {completePaymentModeOptions.map(mode => {
-                  const isSelected = payment.mode === mode;
+        {shouldShowPaymentsCollected ? (
+          <View style={styles.completePaymentsCollectedCard}>
+            <Text style={styles.paymentSummarySubTitle}>Payments Collected</Text>
+            {completePayments.map((payment, index) => (
+              <View key={payment.id} style={styles.completePaymentEntry}>
+                {patientOptions.length ? (
+                  <View style={styles.completePaymentPatientSection}>
+                    <Text style={styles.addPatientFieldLabel}>Patient</Text>
+                    <View style={styles.completeBookingPatientChipRow}>
+                      {patientOptions.map(patient => {
+                        const isSelected = payment.patientOptionId === patient.id;
 
-                  return (
-                    <TouchableOpacity
-                      key={`${payment.id}-${mode}`}
-                      activeOpacity={0.85}
-                      style={[
-                        styles.completePaymentModeChip,
-                        isSelected && styles.completePaymentModeChipActive,
-                      ]}
-                      onPress={() =>
-                        handleCompletePaymentChange(payment.id, {mode})
-                      }>
-                      <Text
+                        return (
+                          <TouchableOpacity
+                            key={`${payment.id}-${patient.id}`}
+                            activeOpacity={0.85}
+                            style={[
+                              styles.completePaymentModeChip,
+                              styles.completeBookingPatientChip,
+                              isSelected && styles.completePaymentModeChipActive,
+                            ]}
+                            onPress={() =>
+                              handleCompletePaymentChange(payment.id, {
+                                patientOptionId: patient.id,
+                                patientId: patient.patientId,
+                                patientName: patient.name,
+                              })
+                            }>
+                            <Text
+                              style={[
+                                styles.completePaymentModeChipText,
+                                isSelected &&
+                                  styles.completePaymentModeChipTextActive,
+                              ]}
+                              numberOfLines={1}>
+                              {patient.name}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </View>
+                ) : null}
+                <View style={styles.completePaymentModeRow}>
+                  {completePaymentModeOptions.map(mode => {
+                    const isSelected = payment.mode === mode;
+
+                    return (
+                      <TouchableOpacity
+                        key={`${payment.id}-${mode}`}
+                        activeOpacity={0.85}
                         style={[
-                          styles.completePaymentModeChipText,
-                          isSelected &&
-                            styles.completePaymentModeChipTextActive,
-                        ]}>
-                        {mode}
-                      </Text>
+                          styles.completePaymentModeChip,
+                          isSelected && styles.completePaymentModeChipActive,
+                        ]}
+                        onPress={() =>
+                          handleCompletePaymentChange(payment.id, {mode})
+                        }>
+                        <Text
+                          style={[
+                            styles.completePaymentModeChipText,
+                            isSelected &&
+                              styles.completePaymentModeChipTextActive,
+                          ]}>
+                          {mode}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <View style={styles.completeCashInputWrap}>
+                  <Text style={styles.completeCashPrefix}>Rs.</Text>
+                  <TextInput
+                    value={payment.amount}
+                    onChangeText={amount =>
+                      handleCompletePaymentChange(payment.id, {amount})
+                    }
+                    keyboardType="numeric"
+                    placeholder="Enter amount"
+                    placeholderTextColor="#7B8AA3"
+                    style={styles.completeCashInput}
+                  />
+                </View>
+                {payment.mode === 'UPI' ? (
+                  <View style={styles.patientPaymentProofSection}>
+                    <RequiredLabel styles={styles}>
+                      UPI screenshot / image
+                    </RequiredLabel>
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      style={styles.completeUploadBox}
+                      onPress={() => handlePickCompletePaymentProof(payment.id)}>
+                      <View style={styles.completeUploadIconWrap}>
+                        <Ionicons
+                          name="cloud-upload-outline"
+                          size={22}
+                          style={styles.completeUploadIcon}
+                        />
+                      </View>
+                      <View style={styles.completeUploadTextWrap}>
+                        <Text style={styles.completeUploadTitle}>
+                          Upload payment screenshot
+                        </Text>
+                        <Text style={styles.completeUploadHint}>
+                          Required for UPI payments
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name="chevron-forward"
+                        size={18}
+                        style={styles.completeUploadChevron}
+                      />
                     </TouchableOpacity>
-                  );
-                })}
+                    {Array.isArray(payment.proofDocuments) &&
+                    payment.proofDocuments.length ? (
+                      <View style={styles.completeProofList}>
+                        {payment.proofDocuments.map((document, documentIndex) => (
+                          <View
+                            key={`${document.uri}-${documentIndex}`}
+                            style={styles.completeProofItem}>
+                            <Ionicons
+                              name="image-outline"
+                              size={16}
+                              style={styles.completeProofIcon}
+                            />
+                            <Text
+                              style={styles.completeProofName}
+                              numberOfLines={1}>
+                              {document.name}
+                            </Text>
+                            <TouchableOpacity
+                              activeOpacity={0.85}
+                              style={styles.completeProofRemoveButton}
+                              onPress={() =>
+                                handleRemoveCompletePaymentProof(
+                                  payment.id,
+                                  documentIndex,
+                                )
+                              }>
+                              <Ionicons
+                                name="close"
+                                size={14}
+                                style={styles.completeProofRemoveIcon}
+                              />
+                            </TouchableOpacity>
+                          </View>
+                        ))}
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.completePaymentRemoveButton}
+                  onPress={() => handleRemoveCompletePayment(payment.id)}>
+                  <Text style={styles.completePaymentRemoveButtonText}>
+                    Remove
+                  </Text>
+                </TouchableOpacity>
+                {index < completePayments.length - 1 ? (
+                  <View style={styles.completePaymentEntryDivider} />
+                ) : null}
               </View>
-              <View style={styles.completeCashInputWrap}>
-                <Text style={styles.completeCashPrefix}>Rs.</Text>
-                <TextInput
-                  value={payment.amount}
-                  onChangeText={amount =>
-                    handleCompletePaymentChange(payment.id, {amount})
-                  }
-                  keyboardType="numeric"
-                  placeholder="Enter amount"
-                  placeholderTextColor="#7B8AA3"
-                  style={styles.completeCashInput}
-                />
-              </View>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.completePaymentRemoveButton}
-                onPress={() => handleRemoveCompletePayment(payment.id)}>
-                <Text style={styles.completePaymentRemoveButtonText}>
-                  Remove
+            ))}
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.completePaymentAddButton}
+              onPress={handleAddCompletePayment}>
+              <Ionicons
+                name="add"
+                size={14}
+                style={styles.completePaymentAddButtonIcon}
+              />
+              <Text style={styles.completePaymentAddButtonText}>
+                Add Payment
+              </Text>
+            </TouchableOpacity>
+            {shouldCollectPendingPaymentPatient ? (
+              <View style={styles.completePendingPaymentCard}>
+                <View style={styles.completePendingPaymentHeader}>
+                  <Text style={styles.paymentSummarySubTitle}>
+                    {paymentDifferenceLabel}
+                  </Text>
+                  <Text style={styles.completePendingPaymentAmount}>
+                    Rs. {paymentDifferenceAmount.toFixed(2)}
+                  </Text>
+                </View>
+                <Text style={styles.completePendingPaymentHint}>
+                  {paymentDifferenceHint}
                 </Text>
-              </TouchableOpacity>
-              {index < completePayments.length - 1 ? (
-                <View style={styles.completePaymentEntryDivider} />
-              ) : null}
-            </View>
-          ))}
-          <TouchableOpacity
-            activeOpacity={0.85}
-            style={styles.completePaymentAddButton}
-            onPress={handleAddCompletePayment}>
-            <Ionicons
-              name="add"
-              size={14}
-              style={styles.completePaymentAddButtonIcon}
-            />
-            <Text style={styles.completePaymentAddButtonText}>
-              Add Payment
-            </Text>
-          </TouchableOpacity>
-        </View>
+                <View style={styles.completeBookingPatientChipRow}>
+                  {patientOptions.map(patient => {
+                    const isSelected = pendingPaymentPatientId === patient.id;
+
+                    return (
+                      <TouchableOpacity
+                        key={`pending-${patient.id}`}
+                        activeOpacity={0.85}
+                        style={[
+                          styles.completePaymentModeChip,
+                          styles.completeBookingPatientChip,
+                          isSelected && styles.completePaymentModeChipActive,
+                        ]}
+                        onPress={() =>
+                          handlePendingPaymentPatientSelect?.(patient)
+                        }>
+                        <Text
+                          style={[
+                            styles.completePaymentModeChipText,
+                            isSelected &&
+                              styles.completePaymentModeChipTextActive,
+                          ]}
+                          numberOfLines={1}>
+                          {patient.name}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
       </View>
 
       {shouldShowProgressActions ? (

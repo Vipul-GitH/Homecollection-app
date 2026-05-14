@@ -1,6 +1,37 @@
 import {collectUniqueTubesForSelectedTests} from '../../../utils/bookings/sampleTubeMapping';
 import {normalizeFormText} from './helpers';
 
+const toPriceNumber = value => {
+  const numericValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
+  return Number.isFinite(numericValue) ? numericValue : 0;
+};
+
+export const getStandardDiscountPercent = test =>
+  toPriceNumber(
+    test?.percentageonstandard ||
+      test?.percentageOnStandard ||
+      test?.percentage_on_standard ||
+      test?.PercentageOnStandard ||
+      test?.percentagestandard ||
+      test?.percentageStandard ||
+      test?.percentage_standard ||
+      test?.PercentageStandard,
+  );
+
+export const getDisplayTestPrice = test => {
+  const mrp = toPriceNumber(test?.mrp || test?.MRP || test?.amount);
+  const charge = toPriceNumber(test?.charge || test?.Charge);
+  const baseMrp = mrp || charge;
+  const discountPercent = Math.min(
+    100,
+    Math.max(0, getStandardDiscountPercent(test)),
+  );
+  if (discountPercent > 0 && baseMrp > 0) {
+    return Math.max(0, baseMrp - (baseMrp * discountPercent) / 100);
+  }
+  return charge || baseMrp;
+};
+
 export const getPatientCceTestBookingStatus = patient =>
   normalizeFormText(patient?.testBookingStatus || patient?.test_booking_status);
 
@@ -23,6 +54,8 @@ export const buildPatientDisplayTests = ({
       panelCompanyId: test.panelCompanyId || '',
       parentDescription: test.parentDescription || '',
       mrp: Number(test?.mrp || test?.charge || 0) || 0,
+      charge: getDisplayTestPrice(test),
+      percentageonstandard: getStandardDiscountPercent(test),
     }));
   }
 
@@ -39,6 +72,8 @@ export const buildPatientDisplayTests = ({
     panelCompanyId: patient?.compCatId || patient?.comp_cat_id || '',
     parentDescription: '',
     mrp: Number(test?.mrp || test?.charge || test?.amount || 0) || 0,
+    charge: getDisplayTestPrice(test),
+    percentageonstandard: getStandardDiscountPercent(test),
   }));
 };
 

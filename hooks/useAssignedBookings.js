@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
-import {Alert} from 'react-native';
+import {Alert, AppState} from 'react-native';
 import {
   addAssignedBookingPatientApi,
   cancelAssignedBookingPatientApi,
@@ -35,6 +35,10 @@ import {
 } from '../utils/app/runtimeHelpers';
 import {logDebug, warnDebug} from '../utils/app/logger';
 import {showPlatformMessage} from '../utils/ui/notifications';
+import {
+  getLocalMatchedPanelCompaniesResponse,
+  getLocalPanelCatalogByCompanyResponse,
+} from '../services/local/panelCatalogLocal';
 
 const toDisplayValue = value => {
   if (value === null || value === undefined) {
@@ -201,6 +205,8 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
   const [cancellingPatientId, setCancellingPatientId] = useState('');
   const [addingTestPatientId, setAddingTestPatientId] = useState('');
   const panelCompanyCatalogCacheRef = useRef(new Map());
+  const matchedPanelCompanyCacheRef = useRef(new Map());
+  const isPendingOfflineSyncRunningRef = useRef(false);
 
   const getPanelCompanyCatalogCacheKey = useCallback(
     ({compCatId, panelCompany}) =>
@@ -211,6 +217,20 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         toDisplayValue(panelCompany?.atype || panelCompany?.Atype).toUpperCase(),
         toDisplayValue(compCatId || panelCompany?.compCatId),
         toDisplayValue(panelCompany?.name).toLowerCase(),
+      ].join('|'),
+    [],
+  );
+  const getMatchedPanelCompanyCacheKey = useCallback(
+    patient =>
+      [
+        toDisplayValue(
+          patient?.bookingPatientId ||
+            patient?.booking_patient_id ||
+            patient?.id,
+        ),
+        toDisplayValue(patient?.patientId || patient?.patient_id),
+        toDisplayValue(patient?.panelCompany).toLowerCase(),
+        toDisplayValue(patient?.mobileNumber || patient?.mobile_number),
       ].join('|'),
     [],
   );
@@ -253,6 +273,36 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       warnDebug('Local booking status cache update error:', error);
     }
   }, []);
+
+  const persistLocalCompletedBooking = useCallback(
+    async bookingDetail => {
+      if (!bookingDetail?.id) {
+        return;
+      }
+
+      setCompletedAppointments(previousAppointments => {
+        const nextAppointments = [
+          bookingDetail,
+          ...previousAppointments.filter(
+            appointment => String(appointment?.id) !== String(bookingDetail.id),
+          ),
+        ];
+
+        persistCompletedBookings(nextAppointments).catch(error => {
+          warnDebug('Completed bookings cache update error:', error);
+        });
+
+        return nextAppointments;
+      });
+
+      try {
+        await persistBookingDetail(bookingDetail);
+      } catch (error) {
+        warnDebug('Completed booking detail cache update error:', error);
+      }
+    },
+    [],
+  );
 
   const persistUpdatedBookingDetail = useCallback(
     async ({bookingId, updatedBookingDetail}) => {
@@ -386,6 +436,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
             accessToken,
             bookingId: pendingAction.bookingId,
             bookingPatientId: pendingAction.patientId,
+            cancelPayload: pendingAction.cancelPayload,
           });
         }
 
@@ -413,8 +464,18 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
   }, [accessToken, persistUpdatedBookingDetail]);
 
   const syncPendingOfflineWork = useCallback(async () => {
-    await syncPendingBookingActions();
-    await syncPendingPatientActions();
+    if (isPendingOfflineSyncRunningRef.current) {
+      return;
+    }
+
+    isPendingOfflineSyncRunningRef.current = true;
+
+    try {
+      await syncPendingBookingActions();
+      await syncPendingPatientActions();
+    } finally {
+      isPendingOfflineSyncRunningRef.current = false;
+    }
   }, [syncPendingBookingActions, syncPendingPatientActions]);
 
   const warmAssignedBookingDetailsCache = useCallback(
@@ -459,6 +520,30 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       warnDebug('Pending offline sync error:', error);
     });
     return undefined;
+  }, [accessToken, syncPendingOfflineWork]);
+
+  useEffect(() => {
+    if (!accessToken) {
+      return undefined;
+    }
+
+    const syncPendingWork = () => {
+      syncPendingOfflineWork().catch(error => {
+        warnDebug('Pending offline background sync error:', error);
+      });
+    };
+
+    const intervalId = setInterval(syncPendingWork, 30000);
+    const appStateSubscription = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') {
+        syncPendingWork();
+      }
+    });
+
+    return () => {
+      clearInterval(intervalId);
+      appStateSubscription?.remove?.();
+    };
   }, [accessToken, syncPendingOfflineWork]);
 
   useEffect(() => {
@@ -595,7 +680,13 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
   );
 
   const submitBookingAction = useCallback(
-    async ({booking, action, statusPayload = {}, onLocalBookingUpdate}) => {
+    async ({
+      booking,
+      action,
+      statusPayload = {},
+      onLocalBookingUpdate,
+      localCompletedBooking = null,
+    }) => {
       const bookingId = booking?.id;
 
       if (!bookingId) {
@@ -648,6 +739,10 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
           bookingStatusCode: getStatusCodeFromAction(action),
         });
 
+        if (action === 'completed' && localCompletedBooking) {
+          await persistLocalCompletedBooking(localCompletedBooking);
+        }
+
         const successMessage =
           action === 'start'
             ? 'Booking started successfully.'
@@ -674,6 +769,9 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
             status: getStatusFromAction(action),
             bookingStatusCode: getStatusCodeFromAction(action),
           });
+          if (action === 'completed' && localCompletedBooking) {
+            await persistLocalCompletedBooking(localCompletedBooking);
+          }
           showPlatformMessage(
             'Saved Offline',
             'No internet connection. The booking action has been saved and will sync automatically.',
@@ -694,6 +792,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       accessToken,
       applyBookingStatusLocally,
       assignedAppointments,
+      persistLocalCompletedBooking,
     ],
   );
 
@@ -864,7 +963,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
   );
 
   const cancelAssignedBookingPatient = useCallback(
-    async ({booking, patient}) => {
+    async ({booking, patient, cancelPayload = {}}) => {
       const bookingId = booking?.id;
       const bookingPatientId = getPatientMutationId(patient);
 
@@ -890,6 +989,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
           accessToken,
           bookingId,
           bookingPatientId,
+          cancelPayload,
         });
 
         const updatedBookingDetail = await fetchAssignedBookingDetailApi({
@@ -907,6 +1007,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
             type: 'cancel',
             patientId: bookingPatientId,
             localPatientId: bookingPatientId,
+            cancelPayload,
           });
           const shouldRemoveLocalPatient =
             queuedAction?.type === 'cancel-local-add';
@@ -974,11 +1075,26 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         return null;
       }
 
+      const cacheKey = getMatchedPanelCompanyCacheKey(patient);
+      const cachedResponse = matchedPanelCompanyCacheRef.current.get(cacheKey);
+      if (cachedResponse) {
+        return cachedResponse;
+      }
+
       try {
         setAddingTestPatientId(String(bookingPatientId));
+        const localResponse = await getLocalMatchedPanelCompaniesResponse(patient);
+        if (localResponse?.items?.length) {
+          matchedPanelCompanyCacheRef.current.set(cacheKey, localResponse);
+          return localResponse;
+        }
+
         const responseData = await fetchMatchedPanelCompaniesForPatientApi({
           patient,
         });
+        if (responseData) {
+          matchedPanelCompanyCacheRef.current.set(cacheKey, responseData);
+        }
         return responseData;
       } catch (error) {
         Alert.alert(
@@ -990,7 +1106,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         setAddingTestPatientId('');
       }
     },
-    [accessToken],
+    [accessToken, getMatchedPanelCompanyCacheKey],
   );
 
   const fetchPanelCatalogForCompany = useCallback(
@@ -1036,6 +1152,13 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
 
       try {
         setAddingTestPatientId(String(bookingPatientId));
+        const localResponse =
+          await getLocalPanelCatalogByCompanyResponse(panelCompany);
+        if (localResponse?.groups?.length) {
+          panelCompanyCatalogCacheRef.current.set(cacheKey, localResponse);
+          return localResponse;
+        }
+
         const responseData = await fetchPanelCatalogByCompanyApi({
           accessToken,
           compCatId: normalizedCompCatId,

@@ -130,14 +130,18 @@ const sortCatalogTestsByCode = tests =>
     )
     .map(item => item.test);
 
-const sortCatalogGroups = groups =>
+const sortCatalogGroups = (groups, shouldSortTests = true) =>
   (Array.isArray(groups) ? [...groups] : [])
     .map(group => ({
       ...group,
       subgroups: (Array.isArray(group?.subgroups) ? [...group.subgroups] : [])
         .map(subgroup => ({
           ...subgroup,
-          tests: sortCatalogTestsByCode(subgroup?.tests),
+          tests: shouldSortTests
+            ? sortCatalogTestsByCode(subgroup?.tests)
+            : Array.isArray(subgroup?.tests)
+            ? subgroup.tests
+            : [],
         }))
         .sort((leftSubgroup, rightSubgroup) =>
           compareCatalogIds(
@@ -237,6 +241,10 @@ function AddTestScreen({
   const [searchText, setSearchText] = useState('');
   const [visibleItemCount, setVisibleItemCount] = useState(CATALOG_PAGE_SIZE);
   const deferredSearchText = useDeferredValue(searchText);
+  const normalizedSearchText = useMemo(
+    () => deferredSearchText.trim().toLowerCase(),
+    [deferredSearchText],
+  );
   const autoOpenedPanelKeyRef = useRef('');
   const loggedDuplicateKeysRef = useRef(new Set());
 
@@ -330,12 +338,14 @@ function AddTestScreen({
   );
 
   const flattenedCompanyTests = useMemo(
-    () =>
-      groups.flatMap(group =>
+    () => {
+      if (!normalizedSearchText) {
+        return [];
+      }
+
+      return groups.flatMap(group =>
         (Array.isArray(group?.subgroups) ? group.subgroups : []).flatMap(subgroup =>
-          sortCatalogTestsByCode(
-            dedupeTests(Array.isArray(subgroup?.tests) ? subgroup.tests : []),
-          ).map(test => {
+          dedupeTests(Array.isArray(subgroup?.tests) ? subgroup.tests : []).map(test => {
             const childSearchKey = (Array.isArray(test?.child_tests)
               ? test.child_tests
               : [])
@@ -357,8 +367,9 @@ function AddTestScreen({
             };
           }),
         ),
-      ),
-    [dedupeTests, groups],
+      );
+    },
+    [dedupeTests, groups, normalizedSearchText],
   );
 
   useEffect(() => {
@@ -386,9 +397,6 @@ function AddTestScreen({
       }
 
       setIsLoadingCompanies(true);
-      onLocalDatabaseLoadingChange?.(
-        'Loading panel companies from local database...',
-      );
 
       try {
         const responseData = await onAddTestPatient(selectedPatient);
@@ -423,8 +431,6 @@ function AddTestScreen({
   ]);
 
   const activeItems = useMemo(() => {
-    const normalizedSearch = deferredSearchText.trim().toLowerCase();
-
     if (selectedSubgroup) {
       const tests = Array.isArray(selectedSubgroup.tests)
         ? selectedSubgroup.tests
@@ -444,20 +450,20 @@ function AddTestScreen({
       );
     }
 
-    if (normalizedSearch) {
+    if (normalizedSearchText) {
       return sortCatalogTestsByCode(
         flattenedCompanyTests.filter(test =>
-          test.__searchKey?.includes(normalizedSearch),
+          test.__searchKey?.includes(normalizedSearchText),
         ),
       );
     }
 
-    return sortCatalogGroups(groups);
+    return groups;
   }, [
     dedupeTests,
-    deferredSearchText,
     flattenedCompanyTests,
     groups,
+    normalizedSearchText,
     selectedGroup,
     selectedSubgroup,
   ]);
@@ -524,7 +530,6 @@ function AddTestScreen({
       setExpandedTests({});
       setSearchText('');
       setIsLoadingCatalog(true);
-      onLocalDatabaseLoadingChange?.('Loading test catalog...');
 
       try {
         const catalogResponse = await onPanelCompanySelect({
@@ -533,7 +538,7 @@ function AddTestScreen({
           panelCompany,
         });
 
-        const nextGroups = sortCatalogGroups(catalogResponse?.groups);
+        const nextGroups = sortCatalogGroups(catalogResponse?.groups, false);
 
         if (!nextGroups.length) {
           setAppAlert({
@@ -577,18 +582,21 @@ function AddTestScreen({
     handleOpenPanelCompany(selectedPanelCompany);
   }, [handleOpenPanelCompany, selectedPanelCompany, selectedPatient]);
 
-  const isSelectedTest = ({panelCompany, test, childTest = null}) =>
-    selectedTests.some(item => {
-      if (item.key === buildTestSelectionKey(panelCompany, test, childTest)) {
-        return true;
-      }
+  const isSelectedTest = useCallback(
+    ({panelCompany, test, childTest = null}) =>
+      selectedTests.some(item => {
+        if (item.key === buildTestSelectionKey(panelCompany, test, childTest)) {
+          return true;
+        }
 
-      return (
-        toStableValue(item?.panelCompanyId) ===
-          toStableValue(panelCompany?.compCatId) &&
-        getTestDedupeKey(item) === getTestDedupeKey(childTest || test)
-      );
-    });
+        return (
+          toStableValue(item?.panelCompanyId) ===
+            toStableValue(panelCompany?.compCatId) &&
+          getTestDedupeKey(item) === getTestDedupeKey(childTest || test)
+        );
+      }),
+    [selectedTests],
+  );
 
   const handleNavigateBack = () => {
     if (selectedSubgroup) {
@@ -634,6 +642,73 @@ function AddTestScreen({
       });
     },
     [onSampleCollectionReset, sampleCollectionDraft?.collected],
+  );
+  const confirmRemoveSelectedTest = useCallback(
+    ({testName, onConfirm}) => {
+      const displayName = toStableValue(testName);
+
+      setAppAlert({
+        title: 'Remove Test?',
+        message: displayName
+          ? `Are you sure you want to remove "${displayName}"?`
+          : 'Are you sure you want to remove this test?',
+        actions: [
+          {text: 'Cancel', style: 'cancel'},
+          {
+            text: 'Remove',
+            style: 'destructive',
+            onPress: () => confirmSampleCollectionReset(onConfirm),
+          },
+        ],
+        cancelable: true,
+      });
+    },
+    [confirmSampleCollectionReset],
+  );
+  const handleSelectedTestRemove = useCallback(
+    test => {
+      confirmRemoveSelectedTest({
+        testName: test?.name || test?.code,
+        onConfirm: () =>
+          onRemoveSelectedTest?.({
+            patient: selectedPatient,
+            testKey: test.key,
+          }),
+      });
+    },
+    [confirmRemoveSelectedTest, onRemoveSelectedTest, selectedPatient],
+  );
+  const handleCatalogTestPress = useCallback(
+    test => {
+      const isRemoving = isSelectedTest({
+        panelCompany: activePanelCompany,
+        test,
+      });
+      const toggleTest = () =>
+        onToggleSelectedTest?.({
+          patient: selectedPatient,
+          panelCompany: activePanelCompany,
+          test,
+        });
+
+      if (isRemoving) {
+        confirmRemoveSelectedTest({
+          testName: test?.description || test?.booked_code,
+          onConfirm: toggleTest,
+        });
+        return;
+      }
+
+      confirmSampleCollectionReset(toggleTest);
+    },
+    [
+      activePanelCompany,
+      confirmRemoveSelectedTest,
+      confirmSampleCollectionReset,
+      isSelectedTest,
+      onToggleSelectedTest,
+      selectedPatient,
+    ],
   );
 
   return (
@@ -697,14 +772,7 @@ function AddTestScreen({
                     <TouchableOpacity
                       activeOpacity={0.85}
                       style={styles.addTestSelectedRemoveButton}
-                      onPress={() =>
-                        confirmSampleCollectionReset(() =>
-                          onRemoveSelectedTest({
-                          patient: selectedPatient,
-                          testKey: test.key,
-                          }),
-                        )
-                      }>
+                      onPress={() => handleSelectedTestRemove(test)}>
                       <Ionicons
                         name="close"
                         size={14}
@@ -939,15 +1007,7 @@ function AddTestScreen({
                                 test: item,
                               }) && styles.sampleCollectionAddButtonActive,
                             ]}
-                            onPress={() =>
-                              confirmSampleCollectionReset(() =>
-                                onToggleSelectedTest?.({
-                                patient: selectedPatient,
-                                panelCompany: activePanelCompany,
-                                test: item,
-                                }),
-                              )
-                            }>
+                            onPress={() => handleCatalogTestPress(item)}>
                             <Text
                               style={[
                                 styles.sampleCollectionAddButtonText,

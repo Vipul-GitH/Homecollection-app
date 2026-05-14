@@ -19,6 +19,7 @@ function BookingDetailOverview({
   resolvedAddress,
   latitude,
   longitude,
+  locationUrl,
   isTerminalBooking,
   isCompletedBooking,
   isCancelledBooking,
@@ -97,7 +98,8 @@ function BookingDetailOverview({
         styles={styles}
         address={resolvedAddress}
         accessNotes={selectedBooking.address.accessNotes}
-        disabled={!resolvedAddress && (!latitude || !longitude)}
+        hasLocationUrl={Boolean(locationUrl)}
+        disabled={!locationUrl && !resolvedAddress && (!latitude || !longitude)}
         onOpenLocation={handleOpenLocation}
       />
 

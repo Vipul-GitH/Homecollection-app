@@ -233,6 +233,7 @@ export const queuePendingPatientAction = async ({
   patientId,
   patient,
   localPatientId,
+  cancelPayload,
 }) => {
   const normalizedBookingId = String(bookingId);
   const normalizedPatientId = patientId ? String(patientId) : '';
@@ -323,6 +324,7 @@ export const queuePendingPatientAction = async ({
     patientId: normalizedPatientId,
     localPatientId: normalizedLocalPatientId,
     patient,
+    ...(cancelPayload ? {cancelPayload} : {}),
     queuedAt: new Date().toISOString(),
   };
 

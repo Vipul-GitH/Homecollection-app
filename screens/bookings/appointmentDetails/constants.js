@@ -39,6 +39,7 @@ export const INITIAL_PATIENT_FORM = {
   email: '',
   labmatePid: '',
   panelCompany: 'CGHS',
+  cghsCardNo: '',
   tag: 'VIP',
 };
 

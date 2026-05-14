@@ -3,11 +3,7 @@ import {secureFetch} from './secureFetch';
 import {extractAccessToken} from '../../utils/bookings/bookingTransforms';
 import {logDebug} from '../../utils/app/logger';
 
-const logAuthDebug = (...args) => {
-  if (__DEV__) {
-    console.log(...args);
-  }
-};
+const logAuthDebug = () => {};
 
 const buildDiagnosticTargetUrls = () => {
   try {

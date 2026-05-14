@@ -22,6 +22,37 @@ import {useSessionAuth} from './useSessionAuth';
 const toStableValue = value =>
   value === null || value === undefined ? '' : String(value).trim();
 
+const toCurrencyNumber = value => {
+  const numericValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
+  return Number.isFinite(numericValue) ? numericValue : 0;
+};
+
+const getTestStandardDiscountPercent = test =>
+  toCurrencyNumber(
+    test?.percentageonstandard ||
+      test?.percentageOnStandard ||
+      test?.percentage_on_standard ||
+      test?.PercentageOnStandard ||
+      test?.percentagestandard ||
+      test?.percentageStandard ||
+      test?.percentage_standard ||
+      test?.PercentageStandard,
+  );
+
+const getDiscountedTestPrice = test => {
+  const mrp = toCurrencyNumber(test?.mrp || test?.MRP || test?.amount);
+  const charge = toCurrencyNumber(test?.charge || test?.Charge);
+  const baseMrp = mrp || charge;
+  const discountPercent = Math.min(
+    100,
+    Math.max(0, getTestStandardDiscountPercent(test)),
+  );
+  if (discountPercent > 0 && baseMrp > 0) {
+    return Math.max(0, baseMrp - (baseMrp * discountPercent) / 100);
+  }
+  return charge || baseMrp;
+};
+
 const getAppointmentDetailDraftKey = booking =>
   toStableValue(
     booking?.id ||
@@ -164,7 +195,8 @@ const buildSeededPatientTests = (patient, panelCompany = null) =>
         getSpecimenNameForTestCode(test?.code || test?.booked_code) ||
         'N/A',
       mrp: Number(test?.mrp || test?.charge || test?.amount || 0) || 0,
-      charge: Number(test?.charge || test?.mrp || test?.amount || 0) || 0,
+      charge: getDiscountedTestPrice(test),
+      percentageonstandard: getTestStandardDiscountPercent(test),
       max_discount: Number(test?.max_discount || test?.maxDiscount || 0) || 0,
       max_allowed_discount:
         Number(test?.max_allowed_discount || test?.maxAllowedDiscount || 0) || 0,
@@ -214,7 +246,8 @@ const withPanelContextForTests = (tests, patient, panelCompany = null) =>
         [panelCompanyId, test?.gcode || '', test?.scode || '', test?.booked_code || test?.code || '']
           .join('|'),
       mrp: Number(test?.mrp || test?.charge || test?.amount || 0) || 0,
-      charge: Number(test?.charge || test?.mrp || test?.amount || 0) || 0,
+      charge: getDiscountedTestPrice(test),
+      percentageonstandard: getTestStandardDiscountPercent(test),
       max_discount: Number(test?.max_discount || test?.maxDiscount || 0) || 0,
       max_allowed_discount:
         Number(test?.max_allowed_discount || test?.maxAllowedDiscount || 0) || 0,
@@ -279,32 +312,40 @@ const resolvePanelCompanyFromPatientName = async patient => {
 };
 
 const buildSelectedChildTests = (children, parentContext = {}) =>
-  (Array.isArray(children) ? children : []).map(child => ({
-    catalog_key: child?.catalog_key || parentContext.catalogKey || '',
-    gcode: child?.gcode || parentContext.gcode || '',
-    scode: child?.scode || parentContext.scode || '',
-    testcode1: child?.testcode1 || child?.booked_code || child?.test_code || '',
-    booked_code: child?.booked_code || 'N/A',
-    test_code: child?.test_code || child?.booked_code || '',
-    description: child?.description || 'Unnamed Test',
-    is_profile: Boolean(child?.is_profile || child?.isProfile),
-    has_children: Boolean(
-      child?.has_children ||
-        child?.hasChildren ||
-        (Array.isArray(child?.child_tests) && child.child_tests.length) ||
-        (Array.isArray(child?.childTests) && child.childTests.length),
-    ),
-    specimenName:
-      child?.specimen_name ||
-      child?.specimenName ||
-      getSpecimenNameForTestCode(child?.booked_code || '') ||
-      'N/A',
-    childTests: buildSelectedChildTests(child?.child_tests || child?.childTests, {
-      catalogKey: child?.catalog_key || parentContext.catalogKey || '',
+  (Array.isArray(children) ? children : []).map(child => {
+    const mrp = Number(child?.mrp || child?.charge || 0) || 0;
+    const percentageonstandard = getTestStandardDiscountPercent(child);
+
+    return {
+      catalog_key: child?.catalog_key || parentContext.catalogKey || '',
       gcode: child?.gcode || parentContext.gcode || '',
       scode: child?.scode || parentContext.scode || '',
-    }),
-  }));
+      testcode1: child?.testcode1 || child?.booked_code || child?.test_code || '',
+      booked_code: child?.booked_code || 'N/A',
+      test_code: child?.test_code || child?.booked_code || '',
+      description: child?.description || 'Unnamed Test',
+      mrp,
+      charge: getDiscountedTestPrice({...child, mrp, percentageonstandard}),
+      percentageonstandard,
+      is_profile: Boolean(child?.is_profile || child?.isProfile),
+      has_children: Boolean(
+        child?.has_children ||
+          child?.hasChildren ||
+          (Array.isArray(child?.child_tests) && child.child_tests.length) ||
+          (Array.isArray(child?.childTests) && child.childTests.length),
+      ),
+      specimenName:
+        child?.specimen_name ||
+        child?.specimenName ||
+        getSpecimenNameForTestCode(child?.booked_code || '') ||
+        'N/A',
+      childTests: buildSelectedChildTests(child?.child_tests || child?.childTests, {
+        catalogKey: child?.catalog_key || parentContext.catalogKey || '',
+        gcode: child?.gcode || parentContext.gcode || '',
+        scode: child?.scode || parentContext.scode || '',
+      }),
+    };
+  });
 
 const buildEmptyAppointmentDetailState = () => ({
   patientApiPanelCompaniesMap: {},
@@ -323,6 +364,7 @@ const buildEmptyAppointmentDetailState = () => ({
   completeAdditionalDiscount: '',
   appliedAdditionalDiscountMode: '',
   appliedAdditionalDiscount: '',
+  pendingPaymentPatientId: '',
   selectedPatientKey: '',
 });
 
@@ -340,13 +382,124 @@ const buildAppointmentDetailStateFromBooking = booking => {
   return state;
 };
 
+const getCollectedTubeNames = (patient, sampleCollection) => {
+  const selectedTubes = Array.isArray(sampleCollection?.selectedTubes)
+    ? sampleCollection.selectedTubes
+    : [];
+
+  if (selectedTubes.length) {
+    return selectedTubes;
+  }
+
+  const tubeSummaryNames = (
+    Array.isArray(sampleCollection?.tubeSelectionSummary)
+      ? sampleCollection.tubeSelectionSummary
+      : []
+  )
+    .filter(item => Number(item?.selectedCount || 0) > 0)
+    .map(item => toStableValue(item?.tubeName || item?.specimenName))
+    .filter(Boolean);
+
+  if (tubeSummaryNames.length) {
+    return tubeSummaryNames;
+  }
+
+  return (Array.isArray(patient?.tubes) ? patient.tubes : [])
+    .map(tube =>
+      typeof tube === 'string'
+        ? toStableValue(tube)
+        : toStableValue(tube?.tubeName || tube?.name || tube?.specimenName),
+    )
+    .filter(Boolean);
+};
+
+const buildCompletedBookingForHandover = (booking, appointmentDetailState) => {
+  const patientSampleCollectionMap =
+    appointmentDetailState?.patientSampleCollectionMap || {};
+
+  return {
+    ...booking,
+    status: 'Completed',
+    bookingStatusCode: 3,
+    patientCount:
+      booking?.patientCount || (Array.isArray(booking?.patients) ? booking.patients.length : 0),
+    patients: (Array.isArray(booking?.patients) ? booking.patients : []).map(patient => {
+      const patientId = getPatientMutationId(patient);
+      const sampleCollection = patientId
+        ? patientSampleCollectionMap[patientId] || {}
+        : {};
+      const collectedTubes = getCollectedTubeNames(patient, sampleCollection);
+
+      return {
+        ...patient,
+        tubes: collectedTubes,
+        sampleCollection,
+      };
+    }),
+  };
+};
+
+const getTestSelectionIdentity = test =>
+  [
+    toStableValue(test?.panelCompanyChipId),
+    toStableValue(test?.panelCompanyId || test?.compCatId || test?.comp_cat_id),
+    getTestDedupeKey(test),
+    toStableValue(test?.key || test?.catalog_key),
+  ].join('|');
+
+const getPatientSeedTestIdentities = (seedState, patientId) =>
+  (seedState?.patientSelectedTestsMap?.[patientId] || []).map(
+    getTestSelectionIdentity,
+  );
+
+const normalizeDraftState = draftState => {
+  if (!draftState || typeof draftState !== 'object') {
+    return {};
+  }
+
+  return draftState.data && typeof draftState.data === 'object'
+    ? {
+        ...draftState.data,
+        removedSeedTestIdentitiesMap:
+          draftState.removedSeedTestIdentitiesMap ||
+          draftState.data.removedSeedTestIdentitiesMap ||
+          {},
+      }
+    : draftState;
+};
+
 const mergeAppointmentDetailStateWithDraft = (seedState, draftState) => {
   const seed = seedState || buildEmptyAppointmentDetailState();
-  const draft = draftState && typeof draftState === 'object' ? draftState : {};
+  const draft = normalizeDraftState(draftState);
+  const mergedPatientSelectedTestsMap = {...(seed.patientSelectedTestsMap || {})};
+  const draftSelectedTestsMap = draft.patientSelectedTestsMap || {};
+  const removedSeedTestIdentitiesMap = draft.removedSeedTestIdentitiesMap || {};
+
+  Array.from(
+    new Set([
+      ...Object.keys(draftSelectedTestsMap),
+      ...Object.keys(removedSeedTestIdentitiesMap),
+    ]),
+  ).forEach(patientId => {
+    const seedTests = seed.patientSelectedTestsMap?.[patientId] || [];
+    const removedIdentities = new Set(removedSeedTestIdentitiesMap[patientId] || []);
+    const visibleSeedTests = seedTests.filter(
+      test => !removedIdentities.has(getTestSelectionIdentity(test)),
+    );
+    const appAddedTests = (draftSelectedTestsMap[patientId] || []).filter(test =>
+      Boolean(test?.isAppAdded),
+    );
+    const mergedMap = new Map();
+
+    [...visibleSeedTests, ...appAddedTests].forEach(test => {
+      mergedMap.set(getTestSelectionIdentity(test), test);
+    });
+
+    mergedPatientSelectedTestsMap[patientId] = Array.from(mergedMap.values());
+  });
 
   return {
     ...seed,
-    ...draft,
     patientApiPanelCompaniesMap: {
       ...(seed.patientApiPanelCompaniesMap || {}),
       ...(draft.patientApiPanelCompaniesMap || {}),
@@ -359,10 +512,7 @@ const mergeAppointmentDetailStateWithDraft = (seedState, draftState) => {
       ...(seed.activePatientPanelCompanyMap || {}),
       ...(draft.activePatientPanelCompanyMap || {}),
     },
-    patientSelectedTestsMap: {
-      ...(seed.patientSelectedTestsMap || {}),
-      ...(draft.patientSelectedTestsMap || {}),
-    },
+    patientSelectedTestsMap: mergedPatientSelectedTestsMap,
     patientReportCourierMap: {
       ...(seed.patientReportCourierMap || {}),
       ...(draft.patientReportCourierMap || {}),
@@ -386,6 +536,78 @@ const mergeAppointmentDetailStateWithDraft = (seedState, draftState) => {
     patientCghsDocumentsMap: {
       ...(seed.patientCghsDocumentsMap || {}),
       ...(draft.patientCghsDocumentsMap || {}),
+    },
+    completePayments: Array.isArray(draft.completePayments)
+      ? draft.completePayments
+      : seed.completePayments,
+    isAdditionalDiscountEnabled:
+      draft.isAdditionalDiscountEnabled === undefined
+        ? seed.isAdditionalDiscountEnabled
+        : draft.isAdditionalDiscountEnabled,
+    completeAdditionalDiscountMode:
+      draft.completeAdditionalDiscountMode || seed.completeAdditionalDiscountMode,
+    completeAdditionalDiscount:
+      draft.completeAdditionalDiscount === undefined
+        ? seed.completeAdditionalDiscount
+        : draft.completeAdditionalDiscount,
+    appliedAdditionalDiscountMode:
+      draft.appliedAdditionalDiscountMode || seed.appliedAdditionalDiscountMode,
+    appliedAdditionalDiscount:
+      draft.appliedAdditionalDiscount === undefined
+        ? seed.appliedAdditionalDiscount
+        : draft.appliedAdditionalDiscount,
+    pendingPaymentPatientId:
+      draft.pendingPaymentPatientId || seed.pendingPaymentPatientId || '',
+    selectedPatientKey: draft.selectedPatientKey || seed.selectedPatientKey,
+  };
+};
+
+const buildAppointmentDetailDraftForStorage = ({state, selectedBooking}) => {
+  const safeState = state || buildEmptyAppointmentDetailState();
+  const seedState = buildAppointmentDetailStateFromBooking(selectedBooking);
+  const draftSelectedTestsMap = {};
+  const removedSeedTestIdentitiesMap = {};
+
+  Object.keys(safeState.patientSelectedTestsMap || {}).forEach(patientId => {
+    const currentTests = safeState.patientSelectedTestsMap[patientId] || [];
+    const currentIdentities = new Set(currentTests.map(getTestSelectionIdentity));
+    const appAddedTests = currentTests.filter(test => Boolean(test?.isAppAdded));
+    const removedSeedIdentities = getPatientSeedTestIdentities(
+      seedState,
+      patientId,
+    ).filter(identity => !currentIdentities.has(identity));
+
+    if (appAddedTests.length) {
+      draftSelectedTestsMap[patientId] = appAddedTests;
+    }
+    if (removedSeedIdentities.length) {
+      removedSeedTestIdentitiesMap[patientId] = removedSeedIdentities;
+    }
+  });
+
+  return {
+    version: 2,
+    updatedAt: new Date().toISOString(),
+    removedSeedTestIdentitiesMap,
+    data: {
+      patientApiPanelCompaniesMap: safeState.patientApiPanelCompaniesMap || {},
+      patientPanelCompaniesMap: safeState.patientPanelCompaniesMap || {},
+      activePatientPanelCompanyMap: safeState.activePatientPanelCompanyMap || {},
+      patientSelectedTestsMap: draftSelectedTestsMap,
+      patientReportCourierMap: safeState.patientReportCourierMap || {},
+      patientSampleCollectionMap: safeState.patientSampleCollectionMap || {},
+      patientTestBookingStatusMap: safeState.patientTestBookingStatusMap || {},
+      patientCghsEnabledMap: safeState.patientCghsEnabledMap || {},
+      patientCghsIdMap: safeState.patientCghsIdMap || {},
+      patientCghsDocumentsMap: safeState.patientCghsDocumentsMap || {},
+      completePayments: safeState.completePayments || [],
+      isAdditionalDiscountEnabled: safeState.isAdditionalDiscountEnabled,
+      completeAdditionalDiscountMode: safeState.completeAdditionalDiscountMode,
+      completeAdditionalDiscount: safeState.completeAdditionalDiscount,
+      appliedAdditionalDiscountMode: safeState.appliedAdditionalDiscountMode,
+      appliedAdditionalDiscount: safeState.appliedAdditionalDiscount,
+      pendingPaymentPatientId: safeState.pendingPaymentPatientId || '',
+      selectedPatientKey: safeState.selectedPatientKey,
     },
   };
 };
@@ -463,21 +685,38 @@ const mergeBookingTestsWithLocalPrices = (booking, priceResponse) => {
                 price?.max_discount,
                 price?.max_allowed_discount,
               ].some(value => Number(value || 0) > 0);
+            const resolvedTest = {
+              ...test,
+              mrp: Number(hasResolvedPrice ? price?.mrp : test?.mrp || 0) || 0,
+              percentageonstandard:
+                Number(
+                  hasResolvedPrice
+                    ? price?.percentageonstandard ||
+                        price?.percentageOnStandard ||
+                        price?.percentage_on_standard ||
+                        price?.PercentageOnStandard ||
+                        price?.percentagestandard ||
+                        price?.percentageStandard ||
+                        price?.percentage_standard
+                    : test?.percentageonstandard ||
+                        test?.percentageOnStandard ||
+                        test?.percentage_on_standard ||
+                        test?.PercentageOnStandard ||
+                        test?.percentagestandard ||
+                        test?.percentageStandard ||
+                        test?.percentage_standard ||
+                        0,
+                ) || 0,
+            };
             return {
               ...test,
               name: test?.name || test?.test_name || price?.description,
-              mrp:
-                Number(hasResolvedPrice ? price?.mrp : test?.mrp || 0) || 0,
-              charge:
-                Number(
-                  hasResolvedPrice
-                    ? price?.charge ?? price?.mrp
-                    : test?.charge || test?.mrp || 0,
-                ) || 0,
+              mrp: resolvedTest.mrp,
+              charge: getDiscountedTestPrice(resolvedTest),
+              percentageonstandard: resolvedTest.percentageonstandard,
               max_discount:
-                Number(
-                  hasResolvedPrice ? price?.max_discount : test?.max_discount || 0,
-                ) || 0,
+                Number(hasResolvedPrice ? price?.max_discount : test?.max_discount || 0) ||
+                Math.max(0, resolvedTest.mrp - getDiscountedTestPrice(resolvedTest)),
               max_allowed_discount:
                 Number(
                   hasResolvedPrice
@@ -616,7 +855,6 @@ export const useAppShellController = () => {
     bookings.isAddingPatient ||
     bookings.isUpdatingPatient ||
     Boolean(bookings.cancellingPatientId) ||
-    Boolean(bookings.addingTestPatientId) ||
     Boolean(localDatabaseLoadingMessage);
 
   const loadingOverlayCopy = localDatabaseLoadingMessage
@@ -695,13 +933,23 @@ export const useAppShellController = () => {
     }
 
     setAppointmentDetailDrafts(previousDrafts => {
-      if (previousDrafts[draftKey] === appointmentDetailState) {
+      const nextDraft = buildAppointmentDetailDraftForStorage({
+        state: appointmentDetailState,
+        selectedBooking,
+      });
+
+      if (
+        JSON.stringify(previousDrafts[draftKey]?.data || previousDrafts[draftKey]) ===
+          JSON.stringify(nextDraft.data) &&
+        JSON.stringify(previousDrafts[draftKey]?.removedSeedTestIdentitiesMap || {}) ===
+          JSON.stringify(nextDraft.removedSeedTestIdentitiesMap)
+      ) {
         return previousDrafts;
       }
 
       return {
         ...previousDrafts,
-        [draftKey]: appointmentDetailState,
+        [draftKey]: nextDraft,
       };
     });
   }, [appointmentDetailState, selectedBooking]);
@@ -791,6 +1039,17 @@ export const useAppShellController = () => {
         return;
       }
 
+      if (nextTab === 'saved') {
+        setAppointmentsViewMode('default');
+        setTabHistory(previousHistory => [...previousHistory, activeTab]);
+        setActiveTab(nextTab);
+
+        if (session.accessToken) {
+          await bookings.fetchCompletedAppointments();
+        }
+        return;
+      }
+
       setAppointmentsViewMode('default');
       setTabHistory(previousHistory => [...previousHistory, activeTab]);
       setActiveTab(nextTab);
@@ -874,8 +1133,10 @@ export const useAppShellController = () => {
         });
         setActiveTab('appointments');
         setAppointmentsViewMode(
-          Number(finalBooking?.bookingStatusCode || 0) === 2 ||
-            finalBooking?.status === 'Started'
+          ['assigned', 'started', 'completed'].includes(appointmentsViewMode)
+            ? appointmentsViewMode
+            : Number(finalBooking?.bookingStatusCode || 0) === 2 ||
+              finalBooking?.status === 'Started'
             ? 'started'
             : 'assigned',
         );
@@ -909,33 +1170,56 @@ export const useAppShellController = () => {
             setAppointmentDetailState(previousState =>
               mergeAppointmentDetailStateWithDraft(
                 buildAppointmentDetailStateFromBooking(pricedBooking),
-                previousState,
+                buildAppointmentDetailDraftForStorage({
+                  state: previousState,
+                  selectedBooking: pricedBooking,
+                }),
               ),
             );
           })
           .catch(() => {});
       }
     },
-    [appointmentDetailDrafts, bookings],
+    [appointmentDetailDrafts, appointmentsViewMode, bookings],
   );
 
   const handleOpenSampleCollection = useCallback(
-    async (patient, panelCompany = null) => {
+    (patient, panelCompany = null) => {
       if (!selectedBooking || !patient) {
         return;
       }
 
-      let resolvedPanelCompany = panelCompany;
-      if (!resolvedPanelCompany) {
-        setLocalDatabaseLoadingMessage(
-          'Resolving patient panel company from local database...',
-        );
-        try {
-          resolvedPanelCompany = await resolvePanelCompanyFromPatientName(patient);
-        } finally {
-          setLocalDatabaseLoadingMessage('');
+      const applyResolvedPanelCompany = resolvedPanelCompany => {
+        if (!resolvedPanelCompany) {
+          return;
         }
-      }
+
+        setSelectedSamplePanelCompany(resolvedPanelCompany);
+        const patientId = getPatientMutationId(patient);
+        if (!patientId) {
+          return;
+        }
+
+        setAppointmentDetailState(previousState => {
+          const patientSelectedTestsMap =
+            previousState?.patientSelectedTestsMap || {};
+
+          return {
+            ...previousState,
+            patientSelectedTestsMap: {
+              ...patientSelectedTestsMap,
+              [patientId]: withPanelContextForTests(
+                patientSelectedTestsMap[patientId] ||
+                  buildSeededPatientTests(patient, resolvedPanelCompany),
+                patient,
+                resolvedPanelCompany,
+              ),
+            },
+          };
+        });
+      };
+
+      const resolvedPanelCompany = panelCompany || null;
       const patientId = getPatientMutationId(patient);
       if (patientId) {
         setAppointmentDetailState(previousState => {
@@ -974,6 +1258,12 @@ export const useAppShellController = () => {
       setSelectedSamplePatient(patient);
       setSelectedSamplePanelCompany(resolvedPanelCompany || null);
       setSelectedBookingScreen('sample-collection');
+
+      if (!resolvedPanelCompany) {
+        resolvePanelCompanyFromPatientName(patient)
+          .then(applyResolvedPanelCompany)
+          .catch(() => {});
+      }
     },
     [selectedBooking],
   );
@@ -1035,6 +1325,19 @@ export const useAppShellController = () => {
             childTest?.child_tests || childTest?.childTests,
             childContext,
           );
+      const selectedCatalogTest = childTest || test;
+      const selectedMrp =
+        Number(
+          childTest?.mrp || test?.mrp || childTest?.charge || test?.charge || 0,
+        ) || 0;
+      const selectedStandardDiscount = getTestStandardDiscountPercent(
+        selectedCatalogTest,
+      );
+      const selectedDiscountedPrice = getDiscountedTestPrice({
+        ...selectedCatalogTest,
+        mrp: selectedMrp,
+        percentageonstandard: selectedStandardDiscount,
+      });
       const nextEntry = {
         key,
         panelCompanyName: panelCompany?.name || 'Selected Panel',
@@ -1062,10 +1365,9 @@ export const useAppShellController = () => {
         test_code: childTest?.test_code || test?.test_code || '',
         description:
           childTest?.description || test?.description || 'Unnamed Test',
-        mrp: Number(childTest?.mrp || test?.mrp || childTest?.charge || test?.charge || 0) || 0,
-        charge:
-          Number(childTest?.charge || test?.charge || childTest?.mrp || test?.mrp || 0) ||
-          0,
+        mrp: selectedMrp,
+        charge: selectedDiscountedPrice,
+        percentageonstandard: selectedStandardDiscount,
         max_discount:
           Number(
             childTest?.max_discount ||
@@ -1073,7 +1375,7 @@ export const useAppShellController = () => {
               childTest?.maxDiscount ||
               test?.maxDiscount ||
               0,
-          ) || 0,
+          ) || Math.max(0, selectedMrp - selectedDiscountedPrice),
         max_allowed_discount:
           Number(
             childTest?.max_allowed_discount ||
@@ -1188,6 +1490,7 @@ export const useAppShellController = () => {
     selectedTubes = [],
     selectedSpecimens = {},
     selectedSpecimenTests = {},
+    selectedAdditionalTubes = [],
     unselectedTubes = [],
     unselectedTests = [],
   }) => {
@@ -1220,6 +1523,9 @@ export const useAppShellController = () => {
             selectedSpecimenTests && typeof selectedSpecimenTests === 'object'
               ? selectedSpecimenTests
               : {},
+          selectedAdditionalTubes: Array.isArray(selectedAdditionalTubes)
+            ? selectedAdditionalTubes
+            : [],
           unselectedTubes: Array.isArray(unselectedTubes)
             ? unselectedTubes
             : [],
@@ -1242,6 +1548,13 @@ export const useAppShellController = () => {
         booking: selectedBooking,
         action,
         statusPayload,
+        localCompletedBooking:
+          toStableValue(action).toLowerCase() === 'completed'
+            ? buildCompletedBookingForHandover(
+                selectedBooking,
+                appointmentDetailState,
+              )
+            : null,
         onLocalBookingUpdate: nextStatusUpdate => {
           setSelectedBooking(previousBooking =>
             previousBooking
@@ -1279,7 +1592,7 @@ export const useAppShellController = () => {
 
       return didUpdate;
     },
-    [bookings, selectedBooking],
+    [appointmentDetailState, bookings, selectedBooking],
   );
 
   const handleAddPatient = useCallback(
@@ -1326,7 +1639,7 @@ export const useAppShellController = () => {
   );
 
   const handleCancelPatient = useCallback(
-    async patient => {
+    async (patient, cancelPayload = {}) => {
       if (!selectedBooking) {
         return false;
       }
@@ -1334,6 +1647,7 @@ export const useAppShellController = () => {
       const updatedBookingDetail = await bookings.cancelAssignedBookingPatient({
         booking: selectedBooking,
         patient,
+        cancelPayload,
       });
 
       if (updatedBookingDetail) {

@@ -5,6 +5,7 @@ import PatientSampleCollectionSection from '../../../components/bookings/appoint
 import PatientTestsAccordion from '../../../components/bookings/patient/PatientTestsAccordion';
 import {
   buildPatientDisplayTests,
+  getDisplayTestPrice,
   getPatientCceTestBookingStatus,
   getPatientDisplayTubes,
 } from './patientDisplay';
@@ -28,7 +29,6 @@ function SelectedPatientAppointmentSection({
   patientCghsDocumentsMap,
   patientManualSlipDocumentsMap,
   patientCompletionDocumentsMap,
-  patientReportCourierMap,
   addingTestPatientId,
   cancellingPatientId,
   defaultTestBookingStatus,
@@ -36,12 +36,12 @@ function SelectedPatientAppointmentSection({
   getPatientPanelCompanies,
   isManualHcSlipSelected,
   doesPatientNeedPaymentProof,
+  doesPatientRequireIdentityDocuments,
   handlePrimaryPanelCompanyPress,
   openPanelCompanyTests,
   handleRemovePatientPanelCompany,
   handlePatientCancelBooking,
   handleEditPatientPress,
-  handleReportCourierChange,
   handleTestBookingStatusChange,
   handlePatientCghsEnabledChange,
   handlePatientCghsIdChange,
@@ -90,7 +90,7 @@ function SelectedPatientAppointmentSection({
     selectedTestsSourceReady: Boolean(hasSelectedTestsOverride),
   });
   const testsSubtotal = displayTests.reduce(
-    (total, test) => total + (Number(test?.mrp) || 0),
+    (total, test) => total + getDisplayTestPrice(test),
     0,
   );
   const displayTubes = getPatientDisplayTubes({
@@ -137,9 +137,6 @@ function SelectedPatientAppointmentSection({
         onEditPatient={
           canUseThisPatientActions ? handleEditPatientPress : undefined
         }
-        onReportCourierChange={
-          canUseThisPatientActions ? handleReportCourierChange : undefined
-        }
         testBookingStatusValue={testBookingStatus}
         testBookingStatusFromCce={getPatientCceTestBookingStatus(patient)}
         onTestBookingStatusChange={
@@ -184,12 +181,8 @@ function SelectedPatientAppointmentSection({
           !isManualHcSlipSelected(testBookingStatus) &&
           doesPatientNeedPaymentProof(patient)
         }
+        requiresIdentityDocuments={doesPatientRequireIdentityDocuments(patient)}
         sampleCollected={sampleCollected}
-        reportCourierValue={
-          patientId && patientReportCourierMap[patientId]
-            ? patientReportCourierMap[patientId]
-            : ''
-        }
         onOpenSampleCollection={
           canUseThisPatientTestActions ? onOpenSampleCollection : undefined
         }
