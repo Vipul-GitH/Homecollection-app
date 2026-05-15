@@ -8,6 +8,7 @@ import {
   fetchAssignedBookingsApi,
   fetchPanelCatalogByCompanyApi,
   fetchMatchedPanelCompaniesForPatientApi,
+  updateAssignedBookingAddressApi,
   updateAssignedBookingPatientApi,
   updateAssignedBookingStatusApi,
 } from '../services/api/bookingApi';
@@ -17,6 +18,7 @@ import {
   getCachedBookingDetail,
   getCachedCompletedBookings,
   getPendingBookingActions,
+  getPendingOfflineActionCount,
   getPendingPatientActions,
   persistAssignedBookings,
   persistBookingDetail,
@@ -493,9 +495,18 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     }
   }, [accessToken, persistUpdatedBookingDetail]);
 
-  const syncPendingOfflineWork = useCallback(async () => {
+  const syncPendingOfflineWork = useCallback(async (options = {}) => {
+    const {force = false} = options;
+
     if (isPendingOfflineSyncRunningRef.current) {
       return;
+    }
+
+    if (!force) {
+      const pendingOfflineActionCount = await getPendingOfflineActionCount();
+      if (!pendingOfflineActionCount) {
+        return;
+      }
     }
 
     isPendingOfflineSyncRunningRef.current = true;
@@ -590,7 +601,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     try {
       setIsLoadingAssignedAppointments(true);
       setAssignedAppointmentsError('');
-      await syncPendingOfflineWork();
+      await syncPendingOfflineWork({force: true});
       const normalizedBookings = await fetchAssignedBookingsApi({
         accessToken,
         loggedInUser,
@@ -679,7 +690,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
 
       try {
         setLoadingAssignedBookingId(bookingId);
-        await syncPendingOfflineWork();
+        await syncPendingOfflineWork({force: true});
         const bookingDetail = await fetchAssignedBookingDetailApi({
           accessToken,
           booking,
@@ -1086,6 +1097,52 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     ],
   );
 
+  const updateAssignedBookingAddress = useCallback(
+    async ({booking, addressPayload}) => {
+      const bookingId = booking?.id;
+
+      if (!bookingId) {
+        Alert.alert(
+          'Missing Booking',
+          'The selected appointment does not include a booking ID.',
+        );
+        return null;
+      }
+
+      if (!accessToken) {
+        Alert.alert(
+          'Missing Session',
+          'A valid login token is required before updating address.',
+        );
+        return null;
+      }
+
+      try {
+        await updateAssignedBookingAddressApi({
+          accessToken,
+          bookingId,
+          addressPayload,
+        });
+
+        const updatedBookingDetail = await fetchAssignedBookingDetailApi({
+          accessToken,
+          booking,
+        });
+        await persistUpdatedBookingDetail({bookingId, updatedBookingDetail});
+
+        showPlatformMessage('Success', 'Address updated successfully.');
+        return updatedBookingDetail;
+      } catch (error) {
+        Alert.alert(
+          'Unable to Update Address',
+          error?.message || 'Unable to update address right now.',
+        );
+        return null;
+      }
+    },
+    [accessToken, persistUpdatedBookingDetail],
+  );
+
   const addTestForPatient = useCallback(
     async ({booking, patient}) => {
       const bookingId = booking?.id;
@@ -1255,6 +1312,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     submitAssignedBookingPatient,
     updateAssignedBookingPatient,
     cancelAssignedBookingPatient,
+    updateAssignedBookingAddress,
     addTestForPatient,
     fetchPanelCatalogForCompany,
     clearAssignedState,

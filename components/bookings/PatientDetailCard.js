@@ -17,6 +17,10 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import GetLocation from 'react-native-get-location';
 import {getAddressFromCoords} from '../../utils/location/getAddressFromCoords';
+import {
+  getLastKnownGeoCapture,
+  persistLastKnownGeoCapture,
+} from '../../utils/location/lastKnownGeoCapture';
 import {BRAND} from '../../styles/appStyles';
 import PatientDocumentsList from './patient/PatientDocumentsList';
 import RequiredLabel from './appointmentDetails/RequiredLabel';
@@ -24,7 +28,6 @@ import RequiredLabel from './appointmentDetails/RequiredLabel';
 const {LocalDocumentPickerModule, LocalGeoCameraModule} = NativeModules;
 const DOCUMENT_ZOOM_MIN = 1;
 const DOCUMENT_ZOOM_MAX = 3;
-const EMPTY_PAYMENT_PROOF_DOCUMENTS = [];
 const EMPTY_MANUAL_SLIP_DOCUMENTS = [];
 const MANUAL_HC_SLIP_STATUS = 'manual_hc_slip';
 const PATIENT_DOCUMENT_BASE_URL = 'https://labmate.bhasinpathlabs.com:2010/';
@@ -335,6 +338,23 @@ const formatPhotoTimestamp = () => {
   });
 };
 
+const formatStoredLocationTimestamp = value => {
+  const dateValue = value ? new Date(value) : null;
+
+  if (!dateValue || Number.isNaN(dateValue.getTime())) {
+    return '';
+  }
+
+  return dateValue.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+};
+
 const normalizePickedDocuments = (pickedFiles, fileNamePrefix) =>
   (Array.isArray(pickedFiles) ? pickedFiles : [])
     .filter(file => file?.uri)
@@ -483,7 +503,6 @@ function PatientDetailCard({
     },
     [showAlert],
   );
-  const previousShouldShowPaymentProofUploadRef = useRef(false);
   const documentGestureRef = useRef({
     mode: 'idle',
     startDistance: 0,
@@ -500,7 +519,6 @@ function PatientDetailCard({
       : bookingPatientStatusCode === 5
       ? 'Partial Complete'
       : '';
-  const hasPanelCompanies = panelCompanies.length > 0;
   const activePanelCompany = useMemo(() => {
     if (!panelCompanies.length) {
       return null;
@@ -525,7 +543,8 @@ function PatientDetailCard({
     }) ||
     (paymentSourceTests.length ? getFirstBillingChargeMode(panelCompanies) : '');
   const paymentDisplayLabel = getPaymentLabelFromBillingMode(paymentBillingMode);
-  const shouldShowPaymentProofUpload = requiresPaymentProof;
+  const shouldShowPaymentProofUpload = false;
+  const shouldHighlightPaymentProofRequired = requiresPaymentProof;
   const shouldShowManualSlipUpload = testBookingStatusValue === MANUAL_HC_SLIP_STATUS;
   const genderBadge = getGenderBadgeConfig(patient.gender);
   const labmatePid = toStableValue(patient.labmatePid || patient.labmate_pid);
@@ -580,17 +599,14 @@ function PatientDetailCard({
       tat: test.tat || test.TAT || test.turnaroundTime || test.turnaround_time || '',
       isAppAdded: false,
       removeKey: '',
-      panelCompanyName: patient.panelCompany || '',
-      panelCompanyId: patient.compCatId || patient.comp_cat_id || '',
+      panelCompanyName: '',
+      panelCompanyId: '',
       parentDescription: '',
       mrp: Number(test?.mrp || test?.charge || test?.amount || 0) || 0,
       charge: getDisplayTestPrice(test),
       percentageonstandard: getStandardDiscountPercent(test),
     }));
   }, [
-    patient.compCatId,
-    patient.comp_cat_id,
-    patient.panelCompany,
     patient.tests,
     selectedTests,
     selectedTestsSourceReady,
@@ -910,6 +926,8 @@ function PatientDetailCard({
       try {
         let location = null;
         let addressText = '';
+        let locationStatusLabel = '';
+        let fallbackLocationTimestamp = '';
 
         if (requireLocationMeta && Platform.OS === 'android') {
           const granted = await PermissionsAndroid.request(
@@ -926,31 +944,78 @@ function PatientDetailCard({
         }
 
         if (requireLocationMeta) {
-          location = await GetLocation.getCurrentPosition({
-            enableHighAccuracy: true,
-            timeout: 20000,
-          });
+          let lastKnownGeoCapture = null;
 
           try {
-            const address = await getAddressFromCoords(
-              location.latitude,
-              location.longitude,
-            );
-            addressText = address?.fullAddress || address?.displayName || '';
+            location = await GetLocation.getCurrentPosition({
+              enableHighAccuracy: true,
+              timeout: 20000,
+            });
+            locationStatusLabel = 'Live GPS';
+
+            try {
+              const address = await getAddressFromCoords(
+                location.latitude,
+                location.longitude,
+              );
+              addressText = address?.fullAddress || address?.displayName || '';
+            } catch {
+              addressText = '';
+            }
+
+            if (addressText) {
+              await persistLastKnownGeoCapture({
+                latitude: location.latitude,
+                longitude: location.longitude,
+                addressText,
+              });
+            } else {
+              lastKnownGeoCapture = await getLastKnownGeoCapture();
+
+              if (lastKnownGeoCapture?.addressText) {
+                addressText = lastKnownGeoCapture.addressText;
+                locationStatusLabel = 'Live GPS + last known address';
+                fallbackLocationTimestamp = formatStoredLocationTimestamp(
+                  lastKnownGeoCapture.capturedAt,
+                );
+              }
+            }
           } catch {
-            addressText = '';
+            lastKnownGeoCapture = await getLastKnownGeoCapture();
+
+            if (!lastKnownGeoCapture) {
+              showPatientAlert(
+                'Location Unavailable',
+                'Unable to get live or last known location for this photo. Please enable GPS and try again.',
+              );
+              return;
+            }
+
+            location = {
+              latitude: lastKnownGeoCapture.latitude,
+              longitude: lastKnownGeoCapture.longitude,
+            };
+            addressText = lastKnownGeoCapture.addressText || '';
+            locationStatusLabel = 'Last known location fallback';
+            fallbackLocationTimestamp = formatStoredLocationTimestamp(
+              lastKnownGeoCapture.capturedAt,
+            );
           }
         }
 
         const stampText = [
           `Patient: ${patient?.name || 'N/A'}`,
           `Document: ${documentLabel || 'Document'}`,
+          locationStatusLabel ? `Location Status: ${locationStatusLabel}` : '',
           location
             ? `Lat: ${formatGeoCoordinate(location.latitude)}, Long: ${formatGeoCoordinate(
                 location.longitude,
               )}`
             : '',
           addressText ? `Address: ${addressText}` : '',
+          fallbackLocationTimestamp
+            ? `Last Known Captured: ${fallbackLocationTimestamp}`
+            : '',
           `Time: ${formatPhotoTimestamp()}`,
         ]
           .filter(Boolean)
@@ -989,26 +1054,16 @@ function PatientDetailCard({
     [patient?.name, showPatientAlert],
   );
   const openUploadSourceOptions = useCallback(
-    ({title, onCameraPress, onScreenshotPress}) => {
+    ({title, onCameraPress, onGalleryPress}) => {
       showPatientAlert(title, 'Choose how to add this file.', [
         {text: 'Camera', onPress: onCameraPress},
-        {text: 'Screenshot', onPress: onScreenshotPress},
+        {text: 'Gallery', onPress: onGalleryPress},
         {text: 'Cancel', style: 'cancel'},
       ]);
     },
     [showPatientAlert],
   );
 
-  useEffect(() => {
-    if (
-      previousShouldShowPaymentProofUploadRef.current &&
-      !shouldShowPaymentProofUpload
-    ) {
-      setPaymentProofDocuments(EMPTY_PAYMENT_PROOF_DOCUMENTS);
-      onPaymentProofDocumentsChange?.(patient, EMPTY_PAYMENT_PROOF_DOCUMENTS);
-    }
-    previousShouldShowPaymentProofUploadRef.current = shouldShowPaymentProofUpload;
-  }, [onPaymentProofDocumentsChange, patient, shouldShowPaymentProofUpload]);
   useEffect(() => {
     if (!shouldShowManualSlipUpload && manualSlipDocuments.length) {
       setManualSlipDocuments(EMPTY_MANUAL_SLIP_DOCUMENTS);
@@ -1030,7 +1085,7 @@ function PatientDetailCard({
           fileNamePrefix: 'prescription',
           onDocumentsPicked: appendPaymentProofDocuments,
         }),
-      onScreenshotPress: () =>
+      onGalleryPress: () =>
         pickDocumentsFromDevice({
           fileNamePrefix: 'payment-proof',
           onDocumentsPicked: appendPaymentProofDocuments,
@@ -1056,7 +1111,7 @@ function PatientDetailCard({
           fileNamePrefix: 'manual-hc-slip',
           onDocumentsPicked: appendManualSlipDocuments,
         }),
-      onScreenshotPress: () =>
+      onGalleryPress: () =>
         pickDocumentsFromDevice({
           fileNamePrefix: 'manual-hc-slip',
           onDocumentsPicked: appendManualSlipDocuments,
@@ -1117,7 +1172,7 @@ function PatientDetailCard({
           onDocumentsPicked: pickedDocuments =>
             appendCghsDocuments(sectionKey, pickedDocuments),
         }),
-      onScreenshotPress: () => handleUploadCghsDocuments(sectionKey),
+      onGalleryPress: () => handleUploadCghsDocuments(sectionKey),
     });
   };
   const handleUploadPatientInfoDocument = () => {
@@ -1127,7 +1182,7 @@ function PatientDetailCard({
       uploadOptions.push(
         {
           text: 'CGHS Card',
-          onPress: () => handleUploadCghsDocuments('cghsCard'),
+          onPress: () => handlePickCghsDocuments('cghsCard'),
         },
         {
           text: 'Patient Photo',
@@ -1267,24 +1322,6 @@ function PatientDetailCard({
               ) : null}
             </View>
             <View style={styles.patientBadgeStack}>
-              {!hasPanelCompanies ? (
-                <TouchableOpacity
-                  activeOpacity={onPrimaryPanelCompanyPress ? 0.85 : 1}
-                  style={styles.patientPanelBadge}
-                  onPress={() => onPrimaryPanelCompanyPress?.(patient)}
-                  disabled={!onPrimaryPanelCompanyPress}>
-                  <View style={styles.patientPanelBadgeRow}>
-                    <Text style={styles.patientPanelText}>{patient.panelCompany}</Text>
-                    {onPrimaryPanelCompanyPress ? (
-                      <Ionicons
-                        name="chevron-forward"
-                        size={13}
-                        style={styles.patientPanelBadgeIcon}
-                      />
-                    ) : null}
-                  </View>
-                </TouchableOpacity>
-              ) : null}
               {patientStatusLabel ? (
                 <View
                   style={[
@@ -1559,7 +1596,7 @@ function PatientDetailCard({
           styles.patientDetailInfoRow,
           isNarrowCard && styles.patientDetailInfoRowStacked,
         ]}>
-        <Text style={styles.patientDetailLabel}>Test booking status</Text>
+        <RequiredLabel styles={styles}>Test booking status</RequiredLabel>
         <View
           style={[
             styles.patientTestBookingStatusControl,
@@ -1697,13 +1734,13 @@ function PatientDetailCard({
           <View
             style={[
               styles.patientPaymentReadOnlyChip,
-              shouldShowPaymentProofUpload &&
+              shouldHighlightPaymentProofRequired &&
                 styles.patientPaymentReadOnlyChipCredit,
             ]}>
             <Text
               style={[
                 styles.patientPaymentReadOnlyText,
-                shouldShowPaymentProofUpload &&
+                shouldHighlightPaymentProofRequired &&
                   styles.patientPaymentReadOnlyTextCredit,
               ]}>
               {paymentDisplayLabel}

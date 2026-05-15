@@ -18,6 +18,29 @@ const TARGET_TABLES = new Set([
   'testspecimen',
 ]);
 
+const EXTRA_TABLE_SPECS = {
+  hcolony_master: {
+    columns: ['id', 'colony_name', 'pincode', 'route_no', 'color', 'city', 'is_active'],
+  },
+  tag_master: {
+    columns: [
+      'id',
+      'tag_name',
+      'allow_in_permanent',
+      'allow_in_transactional',
+      'allow_in_patient_tag',
+      'is_active',
+      'created_at',
+      'updated_at',
+    ],
+  },
+};
+
+const IMPORT_TABLES = new Set([
+  ...TARGET_TABLES,
+  ...Object.keys(EXTRA_TABLE_SPECS),
+]);
+
 const SKIP_TABLES = new Set([
   'address_allowed_center',
   'testwarning',
@@ -500,7 +523,7 @@ const iterInsertBlocks = function* (sqlPath) {
       return;
     }
 
-    if (!SKIP_TABLES.has(tableName) && TARGET_TABLES.has(tableName)) {
+    if (!SKIP_TABLES.has(tableName) && IMPORT_TABLES.has(tableName)) {
       yield content.slice(insertIndex, statementEnd + 1);
     }
 
@@ -617,6 +640,25 @@ CREATE TABLE test_profiles (
   profile_code TEXT,
   child_testcode1 TEXT
 );
+CREATE TABLE hcolony_master (
+  id INTEGER PRIMARY KEY,
+  colony_name TEXT NOT NULL,
+  pincode TEXT NOT NULL,
+  route_no TEXT NOT NULL,
+  color TEXT DEFAULT 'green',
+  city TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE tag_master (
+  id INTEGER PRIMARY KEY,
+  tag_name TEXT NOT NULL,
+  allow_in_permanent INTEGER NOT NULL DEFAULT 0,
+  allow_in_transactional INTEGER NOT NULL DEFAULT 0,
+  allow_in_patient_tag INTEGER NOT NULL DEFAULT 0,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 INSERT OR REPLACE INTO catalog_meta (key, value) VALUES ('version', ${sqlValue(version)});
 `;
 
@@ -636,6 +678,10 @@ CREATE INDEX idx_panel_rates_company_test
 CREATE INDEX idx_tests_testcode1 ON tests(testcode1);
 CREATE INDEX idx_tests_specimen ON tests(specimen_id);
 CREATE INDEX idx_test_profiles_parent ON test_profiles(gcode, scode, profile_code);
+CREATE INDEX idx_hcolony_pincode ON hcolony_master(pincode);
+CREATE INDEX idx_hcolony_route_no ON hcolony_master(route_no);
+CREATE UNIQUE INDEX idx_tag_master_name ON tag_master(tag_name);
+CREATE INDEX idx_tag_master_patient ON tag_master(allow_in_patient_tag, is_active);
 COMMIT;
 VACUUM;
 `;
@@ -645,7 +691,19 @@ const getArg = (name, fallback = '') => {
   return index >= 0 ? process.argv[index + 1] || fallback : fallback;
 };
 
-const buildDatabase = ({input, output, version, sqlite3Path, seedTs}) => {
+const getArgs = name => {
+  const values = [];
+
+  process.argv.forEach((arg, index) => {
+    if (arg === name && process.argv[index + 1]) {
+      values.push(process.argv[index + 1]);
+    }
+  });
+
+  return values;
+};
+
+const buildDatabase = ({input, extraInputs, output, version, sqlite3Path, seedTs}) => {
   const outputDir = path.dirname(output);
   fs.mkdirSync(outputDir, {recursive: true});
 
@@ -658,133 +716,182 @@ const buildDatabase = ({input, output, version, sqlite3Path, seedTs}) => {
   const compCategories = new Map();
   const addressRows = [];
   const counts = {};
-  const columnsByTable = parseCreateTableColumns(input);
+  const sqlInputs = [input, ...(Array.isArray(extraInputs) ? extraInputs : [])];
+  const columnsByTable = new Map();
+
+  sqlInputs.forEach(sqlPath => {
+    parseCreateTableColumns(sqlPath).forEach((columns, tableName) => {
+      columnsByTable.set(tableName, columns);
+    });
+  });
 
   stream.write(schemaSql(version, seedTs));
 
-  for (const block of iterInsertBlocks(input)) {
-    const parsed = parseInsertBlock(block, columnsByTable);
-    if (!parsed) {
-      continue;
-    }
+  for (const sqlInput of sqlInputs) {
+    for (const block of iterInsertBlocks(sqlInput)) {
+      const parsed = parseInsertBlock(block, columnsByTable);
+      if (!parsed) {
+        continue;
+      }
 
-    const {tableName, columns, rows} = parsed;
-    const index = Object.fromEntries(columns.map((column, columnIndex) => [column, columnIndex]));
-    counts[tableName] = (counts[tableName] || 0) + rows.length;
-    rows.forEach(row => writeRawSyncInsert(stream, tableName, index, row, seedTs));
+      const {tableName, columns, rows} = parsed;
+      const index = Object.fromEntries(columns.map((column, columnIndex) => [column, columnIndex]));
+      counts[tableName] = (counts[tableName] || 0) + rows.length;
 
-    if (tableName === 'compcategory') {
-      rows.forEach(row => {
-        const compCatId = toInt(row[index.CompCatID]);
-        const catDetails = cleanText(row[index.CatDetails]);
-        compCategories.set(compCatId, catDetails);
-        writeInsert(stream, 'panel_categories', ['comp_cat_id', 'cat_details'], [
-          compCatId,
-          catDetails,
-        ]);
-      });
-    } else if (tableName === 'address') {
-      rows.forEach(row => {
-        addressRows.push({
-          centerId: toInt(row[index.CenterID]),
-          centerIdText: cleanText(row[index.CenterID]),
-          atype: cleanText(row[index.Atype]),
-          code: cleanText(row[index.code]),
-          abarid: cleanText(row[index.ABARID]),
-          pname: cleanText(row[index.pname]),
-          compCatId: toInt(row[index.category]),
-          category: cleanText(row[index.category]),
-          billingChargeMode: cleanText(row[index.BillingChargeMode]),
+      if (SYNC_TABLE_SPECS[tableName]) {
+        rows.forEach(row => writeRawSyncInsert(stream, tableName, index, row, seedTs));
+      }
+
+      if (tableName === 'compcategory') {
+        rows.forEach(row => {
+          const compCatId = toInt(row[index.CompCatID]);
+          const catDetails = cleanText(row[index.CatDetails]);
+          compCategories.set(compCatId, catDetails);
+          writeInsert(stream, 'panel_categories', ['comp_cat_id', 'cat_details'], [
+            compCatId,
+            catDetails,
+          ]);
         });
-      });
-    } else if (tableName === 'groupmaster') {
-      rows.forEach(row => {
-        writeInsert(stream, 'groups', ['gcode', 'description'], [
-          cleanText(row[index.Gcode]),
-          cleanText(row[index.Description]),
-        ]);
-      });
-    } else if (tableName === 'subgroup') {
-      rows.forEach(row => {
-        writeInsert(stream, 'subgroups', ['gcode', 'scode', 'description'], [
-          cleanText(row[index.Gcode]),
-          cleanText(row[index.Scode]),
-          cleanText(row[index.Description]),
-        ]);
-      });
-    } else if (tableName === 'test') {
-      rows.forEach(row => {
-        writeInsert(
-          stream,
-          'tests',
-          ['gcode', 'scode', 'test_code', 'testcode1', 'description', 'profile', 'specimen_id'],
-          [
+      } else if (tableName === 'address') {
+        rows.forEach(row => {
+          addressRows.push({
+            centerId: toInt(row[index.CenterID]),
+            centerIdText: cleanText(row[index.CenterID]),
+            atype: cleanText(row[index.Atype]),
+            code: cleanText(row[index.code]),
+            abarid: cleanText(row[index.ABARID]),
+            pname: cleanText(row[index.pname]),
+            compCatId: toInt(row[index.category]),
+            category: cleanText(row[index.category]),
+            billingChargeMode: cleanText(row[index.BillingChargeMode]),
+          });
+        });
+      } else if (tableName === 'groupmaster') {
+        rows.forEach(row => {
+          writeInsert(stream, 'groups', ['gcode', 'description'], [
+            cleanText(row[index.Gcode]),
+            cleanText(row[index.Description]),
+          ]);
+        });
+      } else if (tableName === 'subgroup') {
+        rows.forEach(row => {
+          writeInsert(stream, 'subgroups', ['gcode', 'scode', 'description'], [
             cleanText(row[index.Gcode]),
             cleanText(row[index.Scode]),
-            cleanText(row[index.TestCode]),
-            cleanText(row[index.Testcode1]),
             cleanText(row[index.Description]),
-            toInt(row[index.Profile]),
+          ]);
+        });
+      } else if (tableName === 'test') {
+        rows.forEach(row => {
+          writeInsert(
+            stream,
+            'tests',
+            ['gcode', 'scode', 'test_code', 'testcode1', 'description', 'profile', 'specimen_id'],
+            [
+              cleanText(row[index.Gcode]),
+              cleanText(row[index.Scode]),
+              cleanText(row[index.TestCode]),
+              cleanText(row[index.Testcode1]),
+              cleanText(row[index.Description]),
+              toInt(row[index.Profile]),
+              toInt(row[index.SpecimenID]),
+            ],
+          );
+        });
+      } else if (tableName === 'testspecimen') {
+        rows.forEach(row => {
+          writeInsert(stream, 'test_specimens', ['specimen_id', 'sp_name'], [
             toInt(row[index.SpecimenID]),
-          ],
-        );
-      });
-    } else if (tableName === 'testspecimen') {
-      rows.forEach(row => {
-        writeInsert(stream, 'test_specimens', ['specimen_id', 'sp_name'], [
-          toInt(row[index.SpecimenID]),
-          cleanText(row[index.SpName]),
-        ]);
-      });
-    } else if (tableName === 'panelrates') {
-      rows.forEach(row => {
-        const percentageOnStandard =
-          toFloat(row[index.PercentageOnStandard]) ||
-          toFloat(row[index.percentageonstandard]);
+            cleanText(row[index.SpName]),
+          ]);
+        });
+      } else if (tableName === 'panelrates') {
+        rows.forEach(row => {
+          const percentageOnStandard =
+            toFloat(row[index.PercentageOnStandard]) ||
+            toFloat(row[index.percentageonstandard]);
 
-        writeInsert(
-          stream,
-          'panel_rates',
-          [
-            'comp_cat_id',
-            'gcode',
-            'scode',
-            'test_code',
-            'ctest_code',
-            'ctest_name',
-            'charge',
-            'mrp',
-            'max_discount',
-            'base_discount_percent',
-            'max_allowed_discount_percent',
-            'booked_flag',
-          ],
-          [
-            toInt(row[index.CompCatID]),
-            cleanText(row[index.GCode]),
+          writeInsert(
+            stream,
+            'panel_rates',
+            [
+              'comp_cat_id',
+              'gcode',
+              'scode',
+              'test_code',
+              'ctest_code',
+              'ctest_name',
+              'charge',
+              'mrp',
+              'max_discount',
+              'base_discount_percent',
+              'max_allowed_discount_percent',
+              'booked_flag',
+            ],
+            [
+              toInt(row[index.CompCatID]),
+              cleanText(row[index.GCode]),
+              cleanText(row[index.SCode]),
+              cleanText(row[index.TestCode]),
+              cleanText(row[index.CTestCode]),
+              cleanText(row[index.CTestName]),
+              toFloat(row[index.Charge]),
+              toFloat(row[index.MRP]),
+              toFloat(row[index.MaxDiscount]),
+              toFloat(row[index.FBillingRDiscountPrecent]) ||
+                percentageOnStandard,
+              toFloat(row[index.MaximumpercentageAllowed]),
+              toInt(row[index.BookedFlag]),
+            ],
+          );
+        });
+      } else if (tableName === 'testprofile') {
+        rows.forEach(row => {
+          writeInsert(stream, 'test_profiles', ['gcode', 'scode', 'profile_code', 'child_testcode1'], [
+            cleanText(row[index.Gcode]),
             cleanText(row[index.SCode]),
+            cleanText(row[index.ProfileCode]),
             cleanText(row[index.TestCode]),
-            cleanText(row[index.CTestCode]),
-            cleanText(row[index.CTestName]),
-            toFloat(row[index.Charge]),
-            toFloat(row[index.MRP]),
-            toFloat(row[index.MaxDiscount]),
-            toFloat(row[index.FBillingRDiscountPrecent]) ||
-              percentageOnStandard,
-            toFloat(row[index.MaximumpercentageAllowed]),
-            toInt(row[index.BookedFlag]),
-          ],
-        );
-      });
-    } else if (tableName === 'testprofile') {
-      rows.forEach(row => {
-        writeInsert(stream, 'test_profiles', ['gcode', 'scode', 'profile_code', 'child_testcode1'], [
-          cleanText(row[index.Gcode]),
-          cleanText(row[index.SCode]),
-          cleanText(row[index.ProfileCode]),
-          cleanText(row[index.TestCode]),
-        ]);
-      });
+          ]);
+        });
+      } else if (tableName === 'hcolony_master') {
+        rows.forEach(row => {
+          writeInsert(
+            stream,
+            'hcolony_master',
+            EXTRA_TABLE_SPECS.hcolony_master.columns,
+            [
+              toInt(row[index.id]),
+              cleanText(row[index.colony_name]),
+              cleanText(row[index.pincode]),
+              cleanText(row[index.route_no]),
+              cleanText(row[index.color]) || 'green',
+              cleanText(row[index.city]),
+              toInt(row[index.is_active]),
+            ],
+            'REPLACE',
+          );
+        });
+      } else if (tableName === 'tag_master') {
+        rows.forEach(row => {
+          writeInsert(
+            stream,
+            'tag_master',
+            EXTRA_TABLE_SPECS.tag_master.columns,
+            [
+              toInt(row[index.id]),
+              cleanText(row[index.tag_name]),
+              toInt(row[index.allow_in_permanent]),
+              toInt(row[index.allow_in_transactional]),
+              toInt(row[index.allow_in_patient_tag]),
+              toInt(row[index.is_active]),
+              cleanText(row[index.created_at]),
+              cleanText(row[index.updated_at]),
+            ],
+            'REPLACE',
+          );
+        });
+      }
     }
   }
 
@@ -862,6 +969,7 @@ const buildDatabase = ({input, output, version, sqlite3Path, seedTs}) => {
 };
 
 const input = getArg('--input');
+const extraInputs = getArgs('--extra-input');
 const output = getArg('--output');
 const version = getArg('--version', 'bhasin_7001_v1');
 const sqlite3Path = getArg('--sqlite3', 'sqlite3');
@@ -880,7 +988,7 @@ if (!seedTs) {
   process.exit(1);
 }
 
-buildDatabase({input, output, version, sqlite3Path, seedTs}).catch(error => {
+buildDatabase({input, extraInputs, output, version, sqlite3Path, seedTs}).catch(error => {
   console.error(error.message || error);
   process.exit(1);
 });

@@ -1,4 +1,4 @@
-import {normalizeFormText} from './helpers';
+import {getMimeTypeFromFileName, normalizeFormText} from './helpers';
 
 export const COMPLETE_PAYMENT_MODE_OPTIONS = ['Cash', 'UPI', 'Online'];
 
@@ -12,6 +12,17 @@ export const createCompletePaymentEntry = (overrides = {}) => ({
   proofDocuments: [],
   ...overrides,
 });
+
+const normalizePaymentProofDocuments = documents =>
+  (Array.isArray(documents) ? documents : [])
+    .filter(document => document?.uri)
+    .map((document, index) => ({
+      uri: document.uri,
+      name:
+        document.name || `upi-payment-proof-${Date.now()}-${index}`,
+      type:
+        document.type || getMimeTypeFromFileName(document.name) || 'image/jpeg',
+    }));
 
 export const normalizeCompletePaymentDrafts = payments => {
   const normalizedPayments = (Array.isArray(payments) ? payments : [])
@@ -36,9 +47,7 @@ export const normalizeCompletePaymentDrafts = payments => {
         payment?.amount === null || payment?.amount === undefined
           ? ''
           : String(payment.amount),
-      proofDocuments: Array.isArray(payment?.proofDocuments)
-        ? payment.proofDocuments
-        : [],
+      proofDocuments: normalizePaymentProofDocuments(payment?.proofDocuments),
     }))
     .filter(payment => payment.id);
 

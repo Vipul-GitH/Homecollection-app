@@ -6,11 +6,13 @@ function OptionSelectModal({
   styles,
   visible,
   title,
-  options,
+  options = [],
   selectedValue,
   onSelect,
   onClose,
   scrollable = true,
+  isLoading = false,
+  emptyText = 'No options found',
 }) {
   const Content = scrollable ? ScrollView : View;
   const contentProps = scrollable
@@ -47,14 +49,25 @@ function OptionSelectModal({
             </TouchableOpacity>
           </View>
           <Content {...contentProps}>
-            {options.map(option => {
+            {isLoading || !options.length ? (
+              <View style={styles.cancelOptionEmptyState}>
+                <Text style={styles.cancelOptionEmptyText}>
+                  {isLoading ? 'Loading...' : emptyText}
+                </Text>
+              </View>
+            ) : null}
+            {!isLoading && options.map((option, index) => {
               const value = typeof option === 'string' ? option : option.value;
               const label = typeof option === 'string' ? option : option.label;
+              const optionKey =
+                typeof option === 'string'
+                  ? `${option}-${index}`
+                  : option.key || `${value}-${index}`;
               const isSelected = selectedValue === value;
 
               return (
                 <TouchableOpacity
-                  key={value}
+                  key={optionKey}
                   activeOpacity={0.85}
                   style={[
                     styles.cancelSelectOption,

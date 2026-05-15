@@ -18,7 +18,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
   override fun getName(): String = "CatalogDatabaseModule"
 
   private val assetName = "catalog_preload.db"
-  private val databaseVersion = "bhasin_7001_v19"
+  private val databaseVersion = "1"
   private val seedSyncedAt = "2026-05-09 14:56:55"
   private val maxProfileTreeDepth = 8
   private val maxProfileChildrenPerNode = 150
@@ -242,12 +242,33 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     }
   }
 
+  private fun databaseHasTable(file: File, tableName: String): Boolean {
+    if (!file.exists()) {
+      return false
+    }
+
+    var db: SQLiteDatabase? = null
+    return try {
+      db = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+      db.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+          arrayOf(tableName),
+        ).use { cursor ->
+          cursor.moveToFirst()
+        }
+    } catch (error: Exception) {
+      false
+    } finally {
+      db?.close()
+    }
+  }
+
   @Synchronized
   private fun openDatabase(): SQLiteDatabase {
     val targetFile = databaseFile()
     val currentVersion = readDatabaseVersion(targetFile)
 
-    if (currentVersion != databaseVersion) {
+    if (currentVersion != databaseVersion || !databaseHasTable(targetFile, "hcolony_master")) {
       database?.close()
       database = null
       copyBundledDatabase(targetFile)
@@ -491,6 +512,100 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       promise.resolve(JSONObject().put("ok", true).put("items", items).toString())
     } catch (error: Exception) {
       promise.reject("CATALOG_DB_ERROR", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun getAddressCities(promise: Promise) {
+    try {
+      val db = openDatabase()
+      val items = JSONArray()
+
+      db.rawQuery(
+        """
+        SELECT DISTINCT city
+        FROM hcolony_master
+        WHERE is_active = 1 AND TRIM(city) != ''
+        ORDER BY city COLLATE NOCASE
+        """.trimIndent(),
+        emptyArray<String>(),
+      ).use { cursor ->
+        while (cursor.moveToNext()) {
+          items.put(cursor.stringValue("city"))
+        }
+      }
+
+      promise.resolve(JSONObject().put("ok", true).put("items", items).toString())
+    } catch (error: Exception) {
+      promise.reject("ADDRESS_CITIES_ERROR", error)
+    }
+  }
+
+  @ReactMethod
+  fun getAddressColoniesByCity(city: String, promise: Promise) {
+    try {
+      val db = openDatabase()
+      val items = JSONArray()
+
+      db.rawQuery(
+        """
+        SELECT id, colony_name, pincode, route_no, color, city
+        FROM hcolony_master
+        WHERE is_active = 1
+          AND LOWER(TRIM(city)) = LOWER(TRIM(?))
+          AND TRIM(colony_name) != ''
+        ORDER BY colony_name COLLATE NOCASE
+        """.trimIndent(),
+        arrayOf(city),
+      ).use { cursor ->
+        while (cursor.moveToNext()) {
+          items.put(
+            JSONObject()
+              .put("id", cursor.stringValue("id"))
+              .put("colony_name", cursor.stringValue("colony_name"))
+              .put("pincode", cursor.stringValue("pincode"))
+              .put("route_no", cursor.stringValue("route_no"))
+              .put("color", cursor.stringValue("color"))
+              .put("city", cursor.stringValue("city")),
+          )
+        }
+      }
+
+      promise.resolve(JSONObject().put("ok", true).put("items", items).toString())
+    } catch (error: Exception) {
+      promise.reject("ADDRESS_COLONIES_ERROR", error)
+    }
+  }
+
+  @ReactMethod
+  fun getAddressRoutesByPincode(pincode: String, promise: Promise) {
+    try {
+      val db = openDatabase()
+      val items = JSONArray()
+
+      db.rawQuery(
+        """
+        SELECT DISTINCT pincode, route_no, city, colony_name
+        FROM hcolony_master
+        WHERE is_active = 1 AND TRIM(pincode) = TRIM(?)
+        ORDER BY route_no COLLATE NOCASE, colony_name COLLATE NOCASE
+        """.trimIndent(),
+        arrayOf(pincode),
+      ).use { cursor ->
+        while (cursor.moveToNext()) {
+          items.put(
+            JSONObject()
+              .put("pincode", cursor.stringValue("pincode"))
+              .put("route_no", cursor.stringValue("route_no"))
+              .put("city", cursor.stringValue("city"))
+              .put("colony_name", cursor.stringValue("colony_name")),
+          )
+        }
+      }
+
+      promise.resolve(JSONObject().put("ok", true).put("items", items).toString())
+    } catch (error: Exception) {
+      promise.reject("ADDRESS_PINCODE_ERROR", error)
     }
   }
 

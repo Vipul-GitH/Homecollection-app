@@ -20,15 +20,14 @@ const getTestCompanyKey = test =>
 const getTestIdentity = (test, index = 0) =>
   toStableValue(test?.id || test?.removeKey || test?.code || `test-${index}`);
 
-const getPanelNameFromTest = (test, patient) =>
-  toStableValue(test?.panelCompanyName || patient?.panelCompany) ||
-  'Current Panel';
+const getPanelNameFromTest = test =>
+  toStableValue(test?.panelCompanyName) || 'Current Panel';
 
-const getPanelKeyFromTest = (test, patient) =>
+const getPanelKeyFromTest = test =>
   [
     toStableValue(test?.panelCompanyChipId),
-    toStableValue(test?.panelCompanyId || patient?.compCatId || patient?.comp_cat_id),
-    getPanelNameFromTest(test, patient).toLowerCase(),
+    toStableValue(test?.panelCompanyId),
+    getPanelNameFromTest(test).toLowerCase(),
     toStableValue(test?.panelCompanySource).toUpperCase(),
   ].join('|');
 
@@ -122,10 +121,9 @@ const buildFallbackCompanyFromTests = ({patient, tests}) => {
   );
   const name =
     toStableValue(firstTestWithPanel?.panelCompanyName) ||
-    toStableValue(patient?.panelCompany);
+    '';
   const compCatId =
-    toStableValue(firstTestWithPanel?.panelCompanyId) ||
-    toStableValue(patient?.compCatId || patient?.comp_cat_id);
+    toStableValue(firstTestWithPanel?.panelCompanyId);
 
   if (!name && !compCatId) {
     return null;
@@ -161,8 +159,8 @@ const buildTestDerivedPanelGroups = ({patient, tests, consumedTestIds}) => {
       return;
     }
 
-    const groupKey = getPanelKeyFromTest(test, patient);
-    const groupName = getPanelNameFromTest(test, patient);
+    const groupKey = getPanelKeyFromTest(test);
+    const groupName = getPanelNameFromTest(test);
 
     if (!groupMap.has(groupKey)) {
       groupMap.set(groupKey, {
@@ -186,7 +184,7 @@ const buildPanelGroups = ({patient, tests, panelCompanies}) => {
 
   panelCompanies.forEach((company, index) => {
     const companyKey = getCompanyKey(company);
-    const companyName = toStableValue(company?.name || patient?.panelCompany);
+    const companyName = toStableValue(company?.name);
     const panelTests = tests.filter(test => {
       const isMatch = doesTestBelongToCompany(test, company);
 
@@ -225,7 +223,7 @@ const buildPanelGroups = ({patient, tests, panelCompanies}) => {
       key: 'current-panel-tests',
       company: fallbackCompany,
       name:
-        toStableValue(currentPanelTests[0]?.panelCompanyName || patient?.panelCompany) ||
+        toStableValue(currentPanelTests[0]?.panelCompanyName) ||
         'Current Panel',
       tests: currentPanelTests,
     });

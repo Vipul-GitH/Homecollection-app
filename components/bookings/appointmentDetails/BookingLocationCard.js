@@ -47,6 +47,7 @@ function BookingLocationCard({
   hasLocationUrl,
   disabled,
   onOpenLocation,
+  onEditAddress,
 }) {
   return (
     <TouchableOpacity
@@ -73,6 +74,18 @@ function BookingLocationCard({
         ) : null}
       </View>
       <View style={styles.bookingDetailLocationActionGroup}>
+        {onEditAddress ? (
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.bookingDetailLocationEditButton}
+            onPress={onEditAddress}>
+            <Ionicons
+              name="create-outline"
+              size={16}
+              style={styles.bookingDetailLocationEditIcon}
+            />
+          </TouchableOpacity>
+        ) : null}
         <LocationStatusIcon
           styles={styles}
           variant={hasLocationUrl ? 'success' : 'error'}

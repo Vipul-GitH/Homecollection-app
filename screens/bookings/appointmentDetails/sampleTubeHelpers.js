@@ -114,14 +114,20 @@ export const buildSampleTubeRootTests = normalizedTests =>
 
 export const getSampleTubeMappingCacheKey = rootTests =>
   JSON.stringify(
-    rootTests.map(test => ({
-      code: test.code,
-      compCatId: test.compCatId,
-      centerId: test.centerId,
-      atype: test.atype,
-      gcode: test.gcode,
-      scode: test.scode,
-    })),
+    rootTests
+      .map(test => ({
+        code: normalizeFormText(test?.code),
+        compCatId: normalizeFormText(test?.compCatId),
+        centerId: normalizeFormText(test?.centerId),
+        atype: normalizeFormText(test?.atype),
+        gcode: normalizeFormText(test?.gcode),
+        scode: normalizeFormText(test?.scode),
+      }))
+      .sort((leftItem, rightItem) =>
+        `${leftItem.code}|${leftItem.compCatId}|${leftItem.centerId}|${leftItem.atype}|${leftItem.gcode}|${leftItem.scode}`.localeCompare(
+          `${rightItem.code}|${rightItem.compCatId}|${rightItem.centerId}|${rightItem.atype}|${rightItem.gcode}|${rightItem.scode}`,
+        ),
+      ),
   );
 
 export const areSampleTubeListsEqual = (leftTubes = [], rightTubes = []) =>

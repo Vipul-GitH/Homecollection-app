@@ -177,6 +177,7 @@ export const loginUserApi = async ({username, password}) => {
     });
 
     const responseData = await parseLoginResponse(response);
+    logDebug('[Login] Response body', maskLoginResponseSecrets(responseData));
     const bodyIndicatesFailure =
       responseData?.ok === false ||
       responseData?.success === false ||

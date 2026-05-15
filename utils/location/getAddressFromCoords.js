@@ -1,5 +1,52 @@
 import {logDebug, warnDebug} from '../app/logger';
 
+const normalizeAddressPart = value => String(value || '').trim();
+
+const buildReadableAddress = (address, displayName = '') => {
+  if (!address || typeof address !== 'object') {
+    return normalizeAddressPart(displayName);
+  }
+
+  const orderedParts = [
+    address.house_number,
+    address.building,
+    address.hamlet,
+    address.road,
+    address.neighbourhood,
+    address.suburb,
+    address.residential,
+    address.quarter,
+    address.city_district,
+    address.state_district,
+    address.village,
+    address.town,
+    address.city,
+    address.county,
+    address.state,
+    address.postcode,
+    address.country,
+  ];
+
+  const uniqueParts = [];
+  orderedParts.forEach(part => {
+    const normalizedPart = normalizeAddressPart(part);
+    if (!normalizedPart) {
+      return;
+    }
+
+    const alreadyIncluded = uniqueParts.some(
+      existingPart => existingPart.toLowerCase() === normalizedPart.toLowerCase(),
+    );
+
+    if (!alreadyIncluded) {
+      uniqueParts.push(normalizedPart);
+    }
+  });
+
+  const composedAddress = uniqueParts.join(', ');
+  return composedAddress || normalizeAddressPart(displayName);
+};
+
 export const getAddressFromCoords = async (latitude, longitude) => {
   const apiKey = 'pk.34c15fb687fb4687a184493f2e00382d';
   const url = `https://us1.locationiq.com/v1/reverse?key=${apiKey}&lat=${latitude}&lon=${longitude}&format=json`;
@@ -26,26 +73,8 @@ export const getAddressFromCoords = async (latitude, longitude) => {
     });
 
     if (data && data.address) {
-      const {
-        city,
-        county,
-        state_district,
-        state,
-        postcode,
-        country,
-      } = data.address;
-
       const displayName = data.display_name;
-      const fullAddress = [
-        city,
-        county,
-        state_district,
-        state,
-        postcode,
-        country,
-      ]
-        .filter(Boolean)
-        .join(', ');
+      const fullAddress = buildReadableAddress(data.address, displayName);
 
       return {
         fullAddress,

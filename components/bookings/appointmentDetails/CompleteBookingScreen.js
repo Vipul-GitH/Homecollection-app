@@ -61,6 +61,7 @@ function CompleteBookingScreen({
   handleRemoveCompletePaymentProof,
 }) {
   const linkedAppointmentValue = isLinkedAppointmentSelected ? 'Yes' : 'No';
+  const hasSampleCompletionPatients = patientOptions.length > 0;
   const shouldShowPatientSelect = patientOptions.length > 1;
 
   const renderQuestionLabel = text => (
@@ -261,85 +262,91 @@ function CompleteBookingScreen({
             </View>
           ) : null}
 
-          <View style={styles.cancelFormSection}>
-            {renderQuestionLabel('No. of Pricks in Sample Collection')}
-            <View style={styles.cancelSegmentedRow}>
-              {['1', '2', '>2'].map(value => {
-                const isSelected = samplePickCount === value;
+          {hasSampleCompletionPatients ? (
+            <>
+              <View style={styles.cancelFormSection}>
+                {renderQuestionLabel('No. of Pricks in Sample Collection')}
+                <View style={styles.cancelSegmentedRow}>
+                  {['1', '2', '>2'].map(value => {
+                    const isSelected = samplePickCount === value;
 
-                return (
-                  <TouchableOpacity
-                    key={value}
-                    activeOpacity={0.85}
-                    style={[
-                      styles.cancelSegmentButton,
-                      isSelected && styles.cancelSegmentButtonActive,
-                    ]}
-                    onPress={() => onSamplePickCountChange(value)}>
-                    <Text
-                      style={[
-                        styles.cancelSegmentButtonText,
-                        isSelected && styles.cancelSegmentButtonTextActive,
-                      ]}>
-                      {value}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            {samplePickCount && samplePickCount !== '1' && shouldShowPatientSelect ? (
-              <View style={styles.completeBookingPatientSelectWrap}>
-                <Text style={styles.addPatientFieldLabel}>Patient Name</Text>
-                {renderPatientMultiSelect(
-                  samplePickPatientIds,
-                  onSamplePickPatientToggle,
-                )}
+                    return (
+                      <TouchableOpacity
+                        key={value}
+                        activeOpacity={0.85}
+                        style={[
+                          styles.cancelSegmentButton,
+                          isSelected && styles.cancelSegmentButtonActive,
+                        ]}
+                        onPress={() => onSamplePickCountChange(value)}>
+                        <Text
+                          style={[
+                            styles.cancelSegmentButtonText,
+                            isSelected && styles.cancelSegmentButtonTextActive,
+                          ]}>
+                          {value}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                {samplePickCount &&
+                samplePickCount !== '1' &&
+                shouldShowPatientSelect ? (
+                  <View style={styles.completeBookingPatientSelectWrap}>
+                    <Text style={styles.addPatientFieldLabel}>Patient Name</Text>
+                    {renderPatientMultiSelect(
+                      samplePickPatientIds,
+                      onSamplePickPatientToggle,
+                    )}
+                  </View>
+                ) : null}
               </View>
-            ) : null}
-          </View>
 
-          <View style={styles.cancelFormSection}>
-            {renderQuestionLabel('Was Sample Collection Easy/Tough?')}
-            <View style={styles.cancelSegmentedRow}>
-              {[
-                {label: 'Easy', value: 'easy'},
-                {label: 'Tough', value: 'tough'},
-              ].map(option => {
-                const isSelected = sampleCollectionEasyTough === option.value;
+              <View style={styles.cancelFormSection}>
+                {renderQuestionLabel('Was Sample Collection Easy/Tough?')}
+                <View style={styles.cancelSegmentedRow}>
+                  {[
+                    {label: 'Easy', value: 'easy'},
+                    {label: 'Tough', value: 'tough'},
+                  ].map(option => {
+                    const isSelected = sampleCollectionEasyTough === option.value;
 
-                return (
-                  <TouchableOpacity
-                    key={option.value}
-                    activeOpacity={0.85}
-                    style={[
-                      styles.cancelSegmentButton,
-                      isSelected && styles.cancelSegmentButtonActive,
-                    ]}
-                    onPress={() =>
-                      onSampleCollectionEasyToughChange(option.value)
-                    }>
-                    <Text
-                      style={[
-                        styles.cancelSegmentButtonText,
-                        isSelected && styles.cancelSegmentButtonTextActive,
-                      ]}>
-                      {option.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            {sampleCollectionEasyTough === 'tough' &&
-            shouldShowPatientSelect ? (
-              <View style={styles.completeBookingPatientSelectWrap}>
-                <Text style={styles.addPatientFieldLabel}>Patient Name</Text>
-                {renderPatientMultiSelect(
-                  sampleCollectionEasyToughPatientIds,
-                  onSampleCollectionEasyToughPatientToggle,
-                )}
+                    return (
+                      <TouchableOpacity
+                        key={option.value}
+                        activeOpacity={0.85}
+                        style={[
+                          styles.cancelSegmentButton,
+                          isSelected && styles.cancelSegmentButtonActive,
+                        ]}
+                        onPress={() =>
+                          onSampleCollectionEasyToughChange(option.value)
+                        }>
+                        <Text
+                          style={[
+                            styles.cancelSegmentButtonText,
+                            isSelected && styles.cancelSegmentButtonTextActive,
+                          ]}>
+                          {option.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                {sampleCollectionEasyTough === 'tough' &&
+                shouldShowPatientSelect ? (
+                  <View style={styles.completeBookingPatientSelectWrap}>
+                    <Text style={styles.addPatientFieldLabel}>Patient Name</Text>
+                    {renderPatientMultiSelect(
+                      sampleCollectionEasyToughPatientIds,
+                      onSampleCollectionEasyToughPatientToggle,
+                    )}
+                  </View>
+                ) : null}
               </View>
-            ) : null}
-          </View>
+            </>
+          ) : null}
         </View>
       </ScrollView>
 

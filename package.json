@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "android": "react-native run-android",
-    "build:catalog-db": "node scripts/build-catalog-db.js --input data/bhasin_7001.sql --output android/app/src/main/assets/catalog_preload.db --version bhasin_7001_v19 --seed-ts \"2026-05-09 14:56:55\"",
+    "build:catalog-db": "node scripts/build-catalog-db.js --input data/bhasin_7001.sql --extra-input data/hcolony_master.sql --extra-input data/tag_master.sql --output android/app/src/main/assets/catalog_preload.db --version 1 --seed-ts \"2026-05-15 11:18:00\"",
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start",
@@ -12,8 +12,6 @@
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",
-    "@react-native-masked-view/masked-view": "^0.3.2",
-    "@react-native/new-app-screen": "0.84.1",
     "@react-navigation/bottom-tabs": "^7.15.9",
     "@react-navigation/native": "^7.2.2",
     "@react-navigation/native-stack": "^7.14.10",
@@ -22,11 +20,9 @@
     "react-native-android-location-services-dialog-box": "^2.8.2",
     "react-native-gesture-handler": "^2.30.1",
     "react-native-get-location": "^6.0.1",
-    "react-native-linear-gradient": "^2.8.3",
     "react-native-reanimated": "^4.3.0",
     "react-native-safe-area-context": "^5.5.2",
     "react-native-screens": "^4.24.0",
-    "react-native-svg": "^15.15.4",
     "react-native-vector-icons": "^10.3.0",
     "react-native-worklets": "^0.8.1"
   },

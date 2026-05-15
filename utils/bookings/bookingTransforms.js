@@ -890,6 +890,11 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
         ? patients.length
         : patientCount,
     address: {
+      addressId: firstNonEmptyValue(
+        getAddressValue(booking, 'address.address_id', 'address.addressId'),
+        booking?.address_id,
+        booking?.addressId,
+      ),
       addressType:
         getAddressValue(booking, 'address.address_type', 'address.addressType') ||
         'N/A',
@@ -935,7 +940,15 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
           'pincode_snapshot',
           'pincode',
         ) || 'N/A',
-      routeNumber: 'N/A',
+      routeNumber:
+        getAddressValue(
+          booking,
+          'address.route_no',
+          'address.routeNumber',
+          'address.route_number',
+          'route_no',
+          'routeNumber',
+        ) || 'N/A',
       city:
         getAddressValue(
           booking,

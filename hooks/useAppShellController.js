@@ -407,6 +407,7 @@ const buildEmptyAppointmentDetailState = () => ({
   patientCghsEnabledMap: {},
   patientCghsIdMap: {},
   patientCghsDocumentsMap: {},
+  patientCancellationMap: {},
   patientAdditionalDiscountMap: {},
   completePayments: [],
   isAdditionalDiscountEnabled: false,
@@ -606,6 +607,10 @@ const mergeAppointmentDetailStateWithDraft = (seedState, draftState) => {
       ...(seed.patientCghsDocumentsMap || {}),
       ...(draft.patientCghsDocumentsMap || {}),
     },
+    patientCancellationMap: {
+      ...(seed.patientCancellationMap || {}),
+      ...(draft.patientCancellationMap || {}),
+    },
     patientAdditionalDiscountMap: {
       ...(seed.patientAdditionalDiscountMap || {}),
       ...(draft.patientAdditionalDiscountMap || {}),
@@ -681,6 +686,7 @@ const buildAppointmentDetailDraftForStorage = ({state, selectedBooking}) => {
       patientCghsEnabledMap: safeState.patientCghsEnabledMap || {},
       patientCghsIdMap: safeState.patientCghsIdMap || {},
       patientCghsDocumentsMap: safeState.patientCghsDocumentsMap || {},
+      patientCancellationMap: safeState.patientCancellationMap || {},
       patientAdditionalDiscountMap: safeState.patientAdditionalDiscountMap || {},
       completePayments: safeState.completePayments || [],
       isAdditionalDiscountEnabled: safeState.isAdditionalDiscountEnabled,
@@ -702,6 +708,12 @@ const buildAppointmentDetailDraftForStorage = ({state, selectedBooking}) => {
     },
   };
 };
+
+const serializeAppointmentDetailDraft = draft =>
+  JSON.stringify({
+    data: draft?.data || {},
+    removedSeedTestIdentitiesMap: draft?.removedSeedTestIdentitiesMap || {},
+  });
 
 const buildBookingTestPriceRequests = booking =>
   (Array.isArray(booking?.patients) ? booking.patients : [])
@@ -911,6 +923,8 @@ export const useAppShellController = () => {
   const [isShowingSplash, setIsShowingSplash] = useState(true);
   const isAppointmentDetailStateHydratedRef = useRef(false);
   const clearedAppointmentDraftKeysRef = useRef(new Set());
+  const appointmentDraftUpdateTimerRef = useRef(null);
+  const latestDraftSignatureByKeyRef = useRef({});
   const lastAppointmentsViewModeRef = useRef('assigned');
   const {width, height} = useWindowDimensions();
   const session = useSessionAuth();
@@ -984,6 +998,12 @@ export const useAppShellController = () => {
         }
 
         if (Object.keys(cachedDrafts).length) {
+          latestDraftSignatureByKeyRef.current = Object.fromEntries(
+            Object.entries(cachedDrafts).map(([draftKey, draftValue]) => [
+              draftKey,
+              serializeAppointmentDetailDraft(draftValue),
+            ]),
+          );
           setAppointmentDetailDrafts(cachedDrafts);
         }
       } catch (error) {
@@ -1023,26 +1043,40 @@ export const useAppShellController = () => {
       return;
     }
 
-    setAppointmentDetailDrafts(previousDrafts => {
+    if (appointmentDraftUpdateTimerRef.current) {
+      clearTimeout(appointmentDraftUpdateTimerRef.current);
+    }
+
+    appointmentDraftUpdateTimerRef.current = setTimeout(() => {
       const nextDraft = buildAppointmentDetailDraftForStorage({
         state: appointmentDetailState,
         selectedBooking,
       });
+      const nextDraftSignature = serializeAppointmentDetailDraft(nextDraft);
 
       if (
-        JSON.stringify(previousDrafts[draftKey]?.data || previousDrafts[draftKey]) ===
-          JSON.stringify(nextDraft.data) &&
-        JSON.stringify(previousDrafts[draftKey]?.removedSeedTestIdentitiesMap || {}) ===
-          JSON.stringify(nextDraft.removedSeedTestIdentitiesMap)
+        latestDraftSignatureByKeyRef.current[draftKey] === nextDraftSignature
       ) {
-        return previousDrafts;
+        return;
       }
 
-      return {
+      latestDraftSignatureByKeyRef.current = {
+        ...latestDraftSignatureByKeyRef.current,
+        [draftKey]: nextDraftSignature,
+      };
+
+      setAppointmentDetailDrafts(previousDrafts => ({
         ...previousDrafts,
         [draftKey]: nextDraft,
-      };
-    });
+      }));
+    }, 250);
+
+    return () => {
+      if (appointmentDraftUpdateTimerRef.current) {
+        clearTimeout(appointmentDraftUpdateTimerRef.current);
+        appointmentDraftUpdateTimerRef.current = null;
+      }
+    };
   }, [appointmentDetailState, selectedBooking]);
 
   useEffect(() => {
@@ -1668,6 +1702,11 @@ export const useAppShellController = () => {
         const draftKey = getAppointmentDetailDraftKey(selectedBooking);
         if (draftKey) {
           clearedAppointmentDraftKeysRef.current.add(draftKey);
+          const nextSignatures = {
+            ...latestDraftSignatureByKeyRef.current,
+          };
+          delete nextSignatures[draftKey];
+          latestDraftSignatureByKeyRef.current = nextSignatures;
           setAppointmentDetailDrafts(previousDrafts => {
             if (!Object.prototype.hasOwnProperty.call(previousDrafts, draftKey)) {
               return previousDrafts;
@@ -1751,6 +1790,27 @@ export const useAppShellController = () => {
     [bookings, selectedBooking],
   );
 
+  const handleUpdateBookingAddress = useCallback(
+    async addressPayload => {
+      if (!selectedBooking) {
+        return false;
+      }
+
+      const updatedBookingDetail = await bookings.updateAssignedBookingAddress({
+        booking: selectedBooking,
+        addressPayload,
+      });
+
+      if (updatedBookingDetail) {
+        setSelectedBooking(updatedBookingDetail);
+        return true;
+      }
+
+      return false;
+    },
+    [bookings, selectedBooking],
+  );
+
   const handleAddTestForPatient = useCallback(
     async patient => {
       if (!selectedBooking) {
@@ -1805,6 +1865,7 @@ export const useAppShellController = () => {
     setAppointmentDetailState(buildEmptyAppointmentDetailState());
     setAppointmentDetailDrafts({});
     clearedAppointmentDraftKeysRef.current.clear();
+    latestDraftSignatureByKeyRef.current = {};
   }, [bookings]);
 
   const handleClearAllAppData = useCallback(async () => {
@@ -1815,6 +1876,7 @@ export const useAppShellController = () => {
       resetHomeNavigation();
       setAppointmentDetailDrafts({});
       clearedAppointmentDraftKeysRef.current.clear();
+      latestDraftSignatureByKeyRef.current = {};
       await session.resetSession();
     }
   }, [bookings, resetHomeNavigation, session]);
@@ -1899,6 +1961,7 @@ export const useAppShellController = () => {
       handleStartedCardPress,
       handleTabChange,
       handleTogglePatientTestSelection,
+      handleUpdateBookingAddress,
       handleUpdatePatient,
       performLogout,
       setShowLogoutModal,

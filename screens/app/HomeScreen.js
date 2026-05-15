@@ -150,6 +150,7 @@ function HomeScreen({
   onAddPatient,
   onUpdatePatient,
   onCancelPatient,
+  onUpdateBookingAddress,
   onAddTestPatient,
   onPanelCompanySelect,
   onTogglePatientTestSelection,
@@ -169,7 +170,7 @@ function HomeScreen({
     activeTab === 'appointments' && Boolean(selectedBooking);
   const isFullHeightBookingSubScreen =
     isBookingDetailScreen &&
-    ['billing-summary', 'add-test', 'sample-collection'].includes(
+    ['billing-summary', 'add-test', 'sample-collection', 'edit-address'].includes(
       selectedBookingScreen,
     );
   const activeTabConfig = isBookingDetailScreen
@@ -435,6 +436,7 @@ function HomeScreen({
             onAddPatient={onAddPatient}
             onUpdatePatient={onUpdatePatient}
             onCancelPatient={onCancelPatient}
+            onUpdateBookingAddress={onUpdateBookingAddress}
             onAddTestPatient={onAddTestPatient}
             onPanelCompanySelect={onPanelCompanySelect}
             onOpenAddTest={onOpenAddTest}

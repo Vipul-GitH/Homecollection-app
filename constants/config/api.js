@@ -64,6 +64,9 @@ export const getAssignedBookingDetailApiUrl = (
 export const getAssignedBookingStatusApiUrl = bookingId =>
   `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/${bookingId}/status`;
 
+export const getAssignedBookingAddressApiUrl = bookingId =>
+  `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/${bookingId}/address`;
+
 export const getAssignedBookingPatientsApiUrl = bookingId =>
   `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/${bookingId}/patients`;
 

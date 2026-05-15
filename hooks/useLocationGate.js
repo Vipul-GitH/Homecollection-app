@@ -13,6 +13,8 @@ import {getAddressFromCoords} from '../utils/location/getAddressFromCoords';
 import {isAndroidEmulator} from '../utils/app/runtimeHelpers';
 import {logDebug, warnDebug} from '../utils/app/logger';
 
+const LOCATION_SERVICE_CHECK_INTERVAL_MS = 15000;
+
 export const useLocationGate = () => {
   const [stateDistrict, setStateDistrict] = useState('');
   const [suburb, setSuburb] = useState('');
@@ -86,7 +88,10 @@ export const useLocationGate = () => {
       }
     });
 
-    const intervalId = setInterval(checkLocationStillEnabled, 3000);
+    const intervalId = setInterval(
+      checkLocationStillEnabled,
+      LOCATION_SERVICE_CHECK_INTERVAL_MS,
+    );
 
     return () => {
       clearInterval(intervalId);

@@ -1,4 +1,4 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -51,6 +51,7 @@ export default function HandoverScreen({
   const [selectedTubeKeys, setSelectedTubeKeys] = useState({});
   const [handoverTo, setHandoverTo] = useState('');
   const [riderName, setRiderName] = useState('');
+  const initializedSelectionSignatureRef = useRef('');
 
   useEffect(() => {
     let isMounted = true;
@@ -151,6 +152,65 @@ export default function HandoverScreen({
         ),
     };
   }, [selectedTubeKeys]);
+
+  const handoverSelectionSignature = useMemo(
+    () =>
+      handoverBookings
+        .map(booking =>
+          [
+            toStableValue(booking?.id),
+            ...(Array.isArray(booking?.patients) ? booking.patients : []).flatMap(
+              patient =>
+                (Array.isArray(patient?.tubes) ? patient.tubes : []).map(tubeName =>
+                  getTubeSelectionKey({
+                    bookingId: booking?.id,
+                    patientId: patient?.handoverPatientKey,
+                    tubeName,
+                  }),
+                ),
+            ),
+          ].join('|'),
+        )
+        .join('||'),
+    [handoverBookings],
+  );
+
+  useEffect(() => {
+    if (!handoverSelectionSignature) {
+      initializedSelectionSignatureRef.current = '';
+      setSelectedTubeKeys({});
+      return;
+    }
+
+    if (initializedSelectionSignatureRef.current === handoverSelectionSignature) {
+      return;
+    }
+
+    const nextSelectedTubeKeys = {};
+
+    handoverBookings.forEach(booking => {
+      (Array.isArray(booking?.patients) ? booking.patients : []).forEach(patient => {
+        const patientId = patient?.handoverPatientKey;
+        (Array.isArray(patient?.tubes) ? patient.tubes : []).forEach(tubeName => {
+          const selectionKey = getTubeSelectionKey({
+            bookingId: booking?.id,
+            patientId,
+            tubeName,
+          });
+
+          nextSelectedTubeKeys[selectionKey] = {
+            bookingId: toStableValue(booking?.id),
+            patientKey: `${toStableValue(booking?.id)}|${toStableValue(patientId)}`,
+            patientName: toStableValue(patient?.name),
+            tubeName: toStableValue(tubeName),
+          };
+        });
+      });
+    });
+
+    initializedSelectionSignatureRef.current = handoverSelectionSignature;
+    setSelectedTubeKeys(nextSelectedTubeKeys);
+  }, [handoverBookings, handoverSelectionSignature]);
 
   const toggleExpanded = bookingId => {
     setExpandedBookings(previousState => ({
@@ -312,6 +372,103 @@ export default function HandoverScreen({
         </Text>
       </View>
 
+      {handoverSummary.selectedTubeCount ? (
+        <View style={styles.handoverSummaryCard}>
+          <Text style={styles.handoverSummaryTitle}>Final Summary</Text>
+          <View style={styles.handoverSummaryRow}>
+            <View style={styles.handoverSummaryStat}>
+              <Text style={styles.handoverSummaryStatValue}>
+                {handoverSummary.selectedBookingCount}
+              </Text>
+              <Text style={styles.handoverSummaryStatLabel}>Bookings</Text>
+            </View>
+            <View style={styles.handoverSummaryStat}>
+              <Text style={styles.handoverSummaryStatValue}>
+                {handoverSummary.selectedPatientCount}
+              </Text>
+              <Text style={styles.handoverSummaryStatLabel}>Patients</Text>
+            </View>
+            <View style={styles.handoverSummaryStat}>
+              <Text style={styles.handoverSummaryStatValue}>
+                {handoverSummary.selectedTubeCount}
+              </Text>
+              <Text style={styles.handoverSummaryStatLabel}>Tubes</Text>
+            </View>
+          </View>
+          {handoverSummary.selectedTubeBreakdown.length ? (
+            <View style={styles.handoverSummaryTubeList}>
+              {handoverSummary.selectedTubeBreakdown.map(item => (
+                <View
+                  key={`handover-summary-${item.tubeName}`}
+                  style={styles.handoverSummaryTubeChip}>
+                  <Text style={styles.handoverSummaryTubeName}>
+                    {item.tubeName}
+                  </Text>
+                  <Text style={styles.handoverSummaryTubeCount}>
+                    x{item.count}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+          <View style={styles.handoverActionCard}>
+            <Text style={styles.handoverActionTitle}>Handover To</Text>
+            <View style={styles.handoverActionSegment}>
+              {[
+                {value: 'rider', label: 'Rider'},
+                {value: 'lab', label: 'Lab'},
+              ].map(option => {
+                const isSelected = handoverTo === option.value;
+
+                return (
+                  <TouchableOpacity
+                    key={`handover-to-${option.value}`}
+                    activeOpacity={0.85}
+                    style={[
+                      styles.cancelSegmentButton,
+                      isSelected && styles.cancelSegmentButtonActive,
+                    ]}
+                    onPress={() => setHandoverTo(option.value)}>
+                    <Text
+                      style={[
+                        styles.cancelSegmentButtonText,
+                        isSelected && styles.cancelSegmentButtonTextActive,
+                      ]}>
+                      {option.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            {handoverTo === 'rider' ? (
+              <TextInput
+                value={riderName}
+                onChangeText={setRiderName}
+                placeholder="Enter rider name"
+                placeholderTextColor="#7B8AA3"
+                style={styles.handoverRiderInput}
+              />
+            ) : null}
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={[
+                styles.handoverSaveButton,
+                (!handoverTo ||
+                  (handoverTo === 'rider' && !toStableValue(riderName))) &&
+                  styles.handoverSaveButtonDisabled,
+              ]}
+              onPress={handleSaveHandover}>
+              <Ionicons
+                name="save-outline"
+                size={16}
+                style={styles.handoverSaveButtonIcon}
+              />
+              <Text style={styles.handoverSaveButtonText}>Save</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
+
       {handoverBookings.map(booking => {
         const isExpanded = Boolean(expandedBookings[booking.id]);
         const patients = Array.isArray(booking?.patients) ? booking.patients : [];
@@ -444,102 +601,6 @@ export default function HandoverScreen({
         );
       })}
 
-      {handoverSummary.selectedTubeCount ? (
-        <View style={styles.handoverSummaryCard}>
-          <Text style={styles.handoverSummaryTitle}>Final Summary</Text>
-          <View style={styles.handoverSummaryRow}>
-            <View style={styles.handoverSummaryStat}>
-              <Text style={styles.handoverSummaryStatValue}>
-                {handoverSummary.selectedBookingCount}
-              </Text>
-              <Text style={styles.handoverSummaryStatLabel}>Bookings</Text>
-            </View>
-            <View style={styles.handoverSummaryStat}>
-              <Text style={styles.handoverSummaryStatValue}>
-                {handoverSummary.selectedPatientCount}
-              </Text>
-              <Text style={styles.handoverSummaryStatLabel}>Patients</Text>
-            </View>
-            <View style={styles.handoverSummaryStat}>
-              <Text style={styles.handoverSummaryStatValue}>
-                {handoverSummary.selectedTubeCount}
-              </Text>
-              <Text style={styles.handoverSummaryStatLabel}>Tubes</Text>
-            </View>
-          </View>
-          {handoverSummary.selectedTubeBreakdown.length ? (
-            <View style={styles.handoverSummaryTubeList}>
-              {handoverSummary.selectedTubeBreakdown.map(item => (
-                <View
-                  key={`handover-summary-${item.tubeName}`}
-                  style={styles.handoverSummaryTubeChip}>
-                  <Text style={styles.handoverSummaryTubeName}>
-                    {item.tubeName}
-                  </Text>
-                  <Text style={styles.handoverSummaryTubeCount}>
-                    x{item.count}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          ) : null}
-          <View style={styles.handoverActionCard}>
-            <Text style={styles.handoverActionTitle}>Handover To</Text>
-            <View style={styles.handoverActionSegment}>
-              {[
-                {value: 'rider', label: 'Rider'},
-                {value: 'lab', label: 'Lab'},
-              ].map(option => {
-                const isSelected = handoverTo === option.value;
-
-                return (
-                  <TouchableOpacity
-                    key={`handover-to-${option.value}`}
-                    activeOpacity={0.85}
-                    style={[
-                      styles.cancelSegmentButton,
-                      isSelected && styles.cancelSegmentButtonActive,
-                    ]}
-                    onPress={() => setHandoverTo(option.value)}>
-                    <Text
-                      style={[
-                        styles.cancelSegmentButtonText,
-                        isSelected && styles.cancelSegmentButtonTextActive,
-                      ]}>
-                      {option.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            {handoverTo === 'rider' ? (
-              <TextInput
-                value={riderName}
-                onChangeText={setRiderName}
-                placeholder="Enter rider name"
-                placeholderTextColor="#7B8AA3"
-                style={styles.handoverRiderInput}
-              />
-            ) : null}
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={[
-                styles.handoverSaveButton,
-                (!handoverTo ||
-                  (handoverTo === 'rider' && !toStableValue(riderName))) &&
-                  styles.handoverSaveButtonDisabled,
-              ]}
-              onPress={handleSaveHandover}>
-              <Ionicons
-                name="save-outline"
-                size={16}
-                style={styles.handoverSaveButtonIcon}
-              />
-              <Text style={styles.handoverSaveButtonText}>Save</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : null}
     </ScrollView>
   );
 }

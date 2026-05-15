@@ -626,7 +626,7 @@ function AddTestScreen({
       setAppAlert({
         title: 'Reset Sample Collection?',
         message:
-          'Is patient ka sample collect ho chuka hai. Test change karne par sample collection reset ho jayega aur tubes phir se select karni padegi.',
+          'Sample collection has already been completed for this patient. Changing the tests will reset sample collection and the tubes will need to be selected again.',
         actions: [
           {text: 'Cancel', style: 'cancel'},
           {

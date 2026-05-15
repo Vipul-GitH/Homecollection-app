@@ -158,6 +158,37 @@ const isUndefinedSpecimenName = value => {
   return !normalizedValue || normalizedValue === 'none' || normalizedValue === 'n/a';
 };
 
+const groupSpecimenTestsByParent = tests => {
+  const groupedMap = new Map();
+
+  (Array.isArray(tests) ? tests : []).forEach((test, index) => {
+    const parentCode =
+      toStableValue(test?.rootBookedCode) ||
+      toStableValue(test?.booked_code) ||
+      `test-${index}`;
+    const parentName =
+      toStableValue(test?.rootTestName) ||
+      toStableValue(test?.description) ||
+      `Test ${index + 1}`;
+    const parentKey = `${parentCode}|${parentName}`;
+
+    if (!groupedMap.has(parentKey)) {
+      groupedMap.set(parentKey, {
+        parentKey,
+        parentCode,
+        parentName,
+        tests: [],
+      });
+    }
+
+    groupedMap.get(parentKey).tests.push(test);
+  });
+
+  return Array.from(groupedMap.values()).sort((leftItem, rightItem) =>
+    leftItem.parentName.localeCompare(rightItem.parentName),
+  );
+};
+
 const ADDITIONAL_TUBE_OPTIONS = [
   'EDTA',
   'Plain',
@@ -236,6 +267,7 @@ function SampleCollectionScreen({
 }) {
   const [appAlert, setAppAlert] = useState(null);
   const [expandedSpecimens, setExpandedSpecimens] = useState({});
+  const [expandedParentTests, setExpandedParentTests] = useState({});
   const [expandedAdditionalTubes, setExpandedAdditionalTubes] = useState(false);
   const [selectedSpecimens, setSelectedSpecimens] = useState(
     () => sampleCollectionDraft?.selectedSpecimens || {},
@@ -262,6 +294,7 @@ function SampleCollectionScreen({
   useEffect(() => {
     const currentDraft = sampleCollectionDraftRef.current || {};
     setExpandedSpecimens({});
+    setExpandedParentTests({});
     setExpandedAdditionalTubes(false);
     setSelectedSpecimens(currentDraft?.selectedSpecimens || {});
     setSelectedSpecimenTests(currentDraft?.selectedSpecimenTests || {});
@@ -506,6 +539,13 @@ function SampleCollectionScreen({
     setExpandedSpecimens(previousState => ({
       ...previousState,
       [specimenName]: !previousState[specimenName],
+    }));
+  };
+
+  const toggleParentTestExpansion = parentKey => {
+    setExpandedParentTests(previousState => ({
+      ...previousState,
+      [parentKey]: !previousState[parentKey],
     }));
   };
 
@@ -1155,103 +1195,161 @@ function SampleCollectionScreen({
 
                     {isExpanded ? (
                       <View style={styles.sampleCollectionSpecimenTestsList}>
-                        {item.tests.map(test => {
-                          const isTestSelected = Boolean(
-                            selectedDisplayMap[test.key],
+                        {groupSpecimenTestsByParent(item.tests).map(parentGroup => {
+                          const parentSelectedCount = parentGroup.tests.filter(
+                            test => Boolean(selectedDisplayMap[test.key]),
+                          ).length;
+                          const isParentExpanded = Boolean(
+                            expandedParentTests[
+                              `${item.specimenName}|${parentGroup.parentKey}`
+                            ],
                           );
-                          const parentChain = Array.isArray(test.parentDescriptions)
-                            ? test.parentDescriptions.filter(Boolean)
-                            : test.parentDescription
-                            ? [test.parentDescription]
-                            : [];
-                          const hierarchyLevel = Math.min(
-                            Number(test.level || 0),
-                            3,
-                          );
+                          const parentExpansionKey = `${item.specimenName}|${parentGroup.parentKey}`;
 
                           return (
                             <View
-                              key={test.key}
-                              style={[
-                                styles.sampleCollectionSelectedCard,
-                                test.isProfileContext &&
-                                  styles.sampleCollectionSelectedParentCard,
-                                test.level > 0 &&
-                                  styles.sampleCollectionSelectedChildCard,
-                                hierarchyLevel === 1 &&
-                                  styles.sampleCollectionSelectedLevelOne,
-                                hierarchyLevel === 2 &&
-                                  styles.sampleCollectionSelectedLevelTwo,
-                                hierarchyLevel >= 3 &&
-                                  styles.sampleCollectionSelectedLevelThree,
-                                isUndefinedSpecimen &&
-                                  styles.sampleCollectionUndefinedTestCard,
-                              ]}>
-                              {isUndefinedSpecimen ? (
-                                <View
-                                  style={[
-                                    styles.sampleCollectionTestInfoIconWrap,
-                                  ]}>
-                                  <Ionicons
-                                    name="information-circle-outline"
-                                    size={17}
-                                    style={styles.sampleCollectionSpecimenInfoIcon}
-                                  />
+                              key={parentExpansionKey}
+                              style={styles.sampleCollectionParentAccordionCard}>
+                              <TouchableOpacity
+                                activeOpacity={0.85}
+                                style={styles.sampleCollectionParentAccordionHeader}
+                                onPress={() =>
+                                  toggleParentTestExpansion(parentExpansionKey)
+                                }>
+                                <View style={styles.sampleCollectionParentAccordionTextWrap}>
+                                  <Text
+                                    style={styles.sampleCollectionParentAccordionTitle}>
+                                    {parentGroup.parentName}
+                                  </Text>
+                                  <Text
+                                    style={styles.sampleCollectionParentAccordionMeta}>
+                                    {parentSelectedCount}/{parentGroup.tests.length}{' '}
+                                    test{parentGroup.tests.length === 1 ? '' : 's'} selected
+                                  </Text>
                                 </View>
-                              ) : (
-                                <TouchableOpacity
-                                  activeOpacity={0.85}
-                                  style={styles.sampleCollectionTestCheckButton}
-                                  onPress={() =>
-                                    toggleSpecimenTestSelection(test)
-                                  }>
-                                  <View
-                                    style={[
-                                      styles.sampleCollectionSpecimenCheck,
-                                      !isTestSelected &&
-                                        styles.sampleCollectionSpecimenCheckUnchecked,
-                                    ]}>
-                                    {isTestSelected ? (
-                                      <Ionicons
-                                        name="checkmark"
-                                        size={13}
-                                        style={
-                                          styles.sampleCollectionSpecimenCheckIcon
-                                        }
-                                      />
-                                    ) : null}
-                                  </View>
-                                </TouchableOpacity>
-                              )}
-                              <View style={styles.sampleCollectionSelectedTextWrap}>
-                                {test.isProfileContext ? (
-                                  <Text
-                                    style={styles.sampleCollectionSelectedHierarchy}>
-                                    Parent level {Number(test.level || 0) + 1}
-                                  </Text>
-                                ) : parentChain.length ? (
-                                  <Text
-                                    style={[
-                                      styles.sampleCollectionSelectedHierarchy,
-                                      styles.sampleCollectionSelectedLeafBadge,
-                                    ]}>
-                                    Test
-                                  </Text>
-                                ) : null}
-                                <Text style={styles.sampleCollectionSelectedTitle}>
-                                  {test.description}
-                                </Text>
-                                {isUndefinedSpecimen ? (
-                                  <Text style={styles.sampleCollectionSelectedMeta}>
-                                    Sample tube is not defined for this test.
-                                  </Text>
-                                ) : null}
-                                {parentChain.length ? (
-                                  <Text style={styles.sampleCollectionSelectedMeta}>
-                                    test in {parentChain.join(' > ')}
-                                  </Text>
-                                ) : null}
-                              </View>
+                                <Ionicons
+                                  name={isParentExpanded ? 'chevron-up' : 'chevron-down'}
+                                  size={17}
+                                  style={styles.sampleCollectionSpecimenChevron}
+                                />
+                              </TouchableOpacity>
+
+                              {isParentExpanded ? (
+                                <View style={styles.sampleCollectionParentAccordionBody}>
+                                  {parentGroup.tests.map(test => {
+                                    const isTestSelected = Boolean(
+                                      selectedDisplayMap[test.key],
+                                    );
+                                    const parentChain = Array.isArray(
+                                      test.parentDescriptions,
+                                    )
+                                      ? test.parentDescriptions.filter(Boolean)
+                                      : test.parentDescription
+                                      ? [test.parentDescription]
+                                      : [];
+                                    const hierarchyLevel = Math.min(
+                                      Number(test.level || 0),
+                                      3,
+                                    );
+
+                                    return (
+                                      <View
+                                        key={test.key}
+                                        style={[
+                                          styles.sampleCollectionSelectedCard,
+                                          test.isProfileContext &&
+                                            styles.sampleCollectionSelectedParentCard,
+                                          test.level > 0 &&
+                                            styles.sampleCollectionSelectedChildCard,
+                                          hierarchyLevel === 1 &&
+                                            styles.sampleCollectionSelectedLevelOne,
+                                          hierarchyLevel === 2 &&
+                                            styles.sampleCollectionSelectedLevelTwo,
+                                          hierarchyLevel >= 3 &&
+                                            styles.sampleCollectionSelectedLevelThree,
+                                          isUndefinedSpecimen &&
+                                            styles.sampleCollectionUndefinedTestCard,
+                                        ]}>
+                                        {isUndefinedSpecimen ? (
+                                          <View
+                                            style={[
+                                              styles.sampleCollectionTestInfoIconWrap,
+                                            ]}>
+                                            <Ionicons
+                                              name="information-circle-outline"
+                                              size={17}
+                                              style={
+                                                styles.sampleCollectionSpecimenInfoIcon
+                                              }
+                                            />
+                                          </View>
+                                        ) : (
+                                          <TouchableOpacity
+                                            activeOpacity={0.85}
+                                            style={
+                                              styles.sampleCollectionTestCheckButton
+                                            }
+                                            onPress={() =>
+                                              toggleSpecimenTestSelection(test)
+                                            }>
+                                            <View
+                                              style={[
+                                                styles.sampleCollectionSpecimenCheck,
+                                                !isTestSelected &&
+                                                  styles.sampleCollectionSpecimenCheckUnchecked,
+                                              ]}>
+                                              {isTestSelected ? (
+                                                <Ionicons
+                                                  name="checkmark"
+                                                  size={13}
+                                                  style={
+                                                    styles.sampleCollectionSpecimenCheckIcon
+                                                  }
+                                                />
+                                              ) : null}
+                                            </View>
+                                          </TouchableOpacity>
+                                        )}
+                                        <View
+                                          style={styles.sampleCollectionSelectedTextWrap}>
+                                          {test.isProfileContext ? (
+                                            <Text
+                                              style={
+                                                styles.sampleCollectionSelectedHierarchy
+                                              }>
+                                              Parent level {Number(test.level || 0) + 1}
+                                            </Text>
+                                          ) : parentChain.length ? (
+                                            <Text
+                                              style={[
+                                                styles.sampleCollectionSelectedHierarchy,
+                                                styles.sampleCollectionSelectedLeafBadge,
+                                              ]}>
+                                              Test
+                                            </Text>
+                                          ) : null}
+                                          <Text
+                                            style={styles.sampleCollectionSelectedTitle}>
+                                            {test.description}
+                                          </Text>
+                                          {isUndefinedSpecimen ? (
+                                            <Text
+                                              style={styles.sampleCollectionSelectedMeta}>
+                                              Sample tube is not defined for this test.
+                                            </Text>
+                                          ) : null}
+                                          {parentChain.length ? (
+                                            <Text
+                                              style={styles.sampleCollectionSelectedMeta}>
+                                              test in {parentChain.join(' > ')}
+                                            </Text>
+                                          ) : null}
+                                        </View>
+                                      </View>
+                                    );
+                                  })}
+                                </View>
+                              ) : null}
                             </View>
                           );
                         })}

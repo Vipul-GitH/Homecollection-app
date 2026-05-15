@@ -170,7 +170,6 @@ export const buildApiPanelCompaniesFromPatient = patient => {
 
       const name =
         normalizeFormText(names[index]) ||
-        normalizeFormText(patient?.panelCompany || patient?.panel_company) ||
         `Panel ${compCatId}`;
       const billingChargeMode = normalizeFormText(chargeModes[index]);
 

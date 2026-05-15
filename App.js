@@ -117,6 +117,7 @@ function App() {
           onAddPatient={actions.handleAddPatient}
           onUpdatePatient={actions.handleUpdatePatient}
           onCancelPatient={actions.handleCancelPatient}
+          onUpdateBookingAddress={actions.handleUpdateBookingAddress}
           onAddTestPatient={actions.handleAddTestForPatient}
           onPanelCompanySelect={actions.handlePanelCompanySelect}
           onTogglePatientTestSelection={actions.handleTogglePatientTestSelection}

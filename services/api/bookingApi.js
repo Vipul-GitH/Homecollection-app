@@ -4,6 +4,7 @@ import {
   PANEL_TEST_CATALOG_API_URL,
   getPanelCatalogByCompanyApiUrl,
   getAssignedBookingDetailApiUrl,
+  getAssignedBookingAddressApiUrl,
   getAssignedBookingPatientApiUrl,
   getAssignedBookingPatientCancelApiUrl,
   getAssignedBookingPatientsApiUrl,
@@ -122,6 +123,40 @@ const isUploadableDocument = document => {
 const hasDocumentsWithUri = documents =>
   (Array.isArray(documents) ? documents : []).some(isUploadableDocument);
 
+const countUploadableDocuments = documents =>
+  (Array.isArray(documents) ? documents : []).filter(isUploadableDocument).length;
+
+const buildUploadCountMap = documentsMap =>
+  Object.entries(documentsMap || {}).reduce((accumulator, [patientId, documents]) => {
+    const count = countUploadableDocuments(documents);
+    if (count) {
+      accumulator[patientId] = count;
+    }
+
+    return accumulator;
+  }, {});
+
+const buildSectionUploadCountMap = sectionMap =>
+  Object.entries(sectionMap || {}).reduce((accumulator, [patientId, sections]) => {
+    const sectionCounts = Object.entries(sections || {}).reduce(
+      (sectionAccumulator, [sectionKey, documents]) => {
+        const count = countUploadableDocuments(documents);
+        if (count) {
+          sectionAccumulator[sectionKey] = count;
+        }
+
+        return sectionAccumulator;
+      },
+      {},
+    );
+
+    if (Object.keys(sectionCounts).length) {
+      accumulator[patientId] = sectionCounts;
+    }
+
+    return accumulator;
+  }, {});
+
 const hasCompleteBookingAttachments = ({
   patientDocumentsMap,
   manualSlipDocumentsMap,
@@ -150,6 +185,84 @@ const hasCompleteBookingAttachments = ({
     hasPaymentProofDocuments ||
     hasCghsDocuments
   );
+};
+
+const appendUploadDocumentToFormData = (formData, fieldName, document) => {
+  if (!isUploadableDocument(document)) {
+    return;
+  }
+
+  formData.append(fieldName, {
+    uri: document.uri,
+    name: document.name || `${fieldName}-${Date.now()}`,
+    type: document.type || 'application/octet-stream',
+  });
+};
+
+const appendDocumentListToFormData = (formData, fieldName, documents) => {
+  (Array.isArray(documents) ? documents : []).forEach(document => {
+    appendUploadDocumentToFormData(formData, fieldName, document);
+  });
+};
+
+const appendPatientDocumentsToFormData = ({
+  formData,
+  patientDocumentsMap,
+  manualSlipDocumentsMap,
+  patientCghsDocumentsMap,
+}) => {
+  Object.entries(patientDocumentsMap || {}).forEach(([patientId, documents]) => {
+    appendDocumentListToFormData(
+      formData,
+      `patient_documents_${patientId}`,
+      documents,
+    );
+  });
+
+  Object.entries(manualSlipDocumentsMap || {}).forEach(([patientId, documents]) => {
+    appendDocumentListToFormData(
+      formData,
+      `patient_documents_${patientId}`,
+      documents,
+    );
+  });
+
+  Object.entries(patientCghsDocumentsMap || {}).forEach(([patientId, sections]) => {
+    Object.values(sections || {}).forEach(documents => {
+      appendDocumentListToFormData(
+        formData,
+        `patient_documents_${patientId}`,
+        documents,
+      );
+    });
+  });
+};
+
+const appendPaymentProofsToFormData = ({
+  formData,
+  bookingDetail,
+  paymentProofs,
+}) => {
+  (Array.isArray(paymentProofs) ? paymentProofs : []).forEach(paymentProof => {
+    const sourcePatientId =
+      paymentProof?.patient_id ||
+      paymentProof?.patientId ||
+      paymentProof?.payment_patient_id ||
+      paymentProof?.paymentPatientId;
+    const patientId =
+      getMappedMasterPatientId(bookingDetail, sourcePatientId) ||
+      String(sourcePatientId || '').trim();
+
+    if (!patientId) {
+      return;
+    }
+
+    appendDocumentListToFormData(
+      formData,
+      `payment_shot_${patientId}`,
+      paymentProof?.documents,
+    );
+  });
 };
 
 const fetchWithTimeout = async (url, options = {}, timeoutMs = WRITE_REQUEST_TIMEOUT_MS) => {
@@ -187,6 +300,7 @@ const postCompleteBookingStatus = async ({
   accessToken,
   bookingId,
   payload,
+  bookingDetail,
   patientDocumentsMap,
   manualSlipDocumentsMap,
   paymentProofs,
@@ -202,28 +316,45 @@ const postCompleteBookingStatus = async ({
 
   logAppointmentDetailDebug('[Complete Booking API Request]', {
     url: apiUrl,
-    transport: 'json-secure',
+    transport: 'multipart-secure',
     hasUploadableAttachments,
     payload,
     patientDocumentPatientIds: Object.keys(patientDocumentsMap || {}),
     manualSlipPatientIds: Object.keys(manualSlipDocumentsMap || {}),
+    patientDocumentCounts: buildUploadCountMap(patientDocumentsMap),
+    manualSlipDocumentCounts: buildUploadCountMap(manualSlipDocumentsMap),
     paymentProofCount: Array.isArray(paymentProofs) ? paymentProofs.length : 0,
     cghsPatientIds: Object.keys(patientCghsDocumentsMap || {}),
+    cghsDocumentCounts: buildSectionUploadCountMap(patientCghsDocumentsMap),
   });
 
-  const response = await secureFetch(apiUrl, {
+  const formData = new FormData();
+  formData.append('payload', JSON.stringify(payload));
+  appendPatientDocumentsToFormData({
+    formData,
+    patientDocumentsMap,
+    manualSlipDocumentsMap,
+    patientCghsDocumentsMap,
+  });
+  appendPaymentProofsToFormData({
+    formData,
+    bookingDetail,
+    paymentProofs,
+  });
+
+  // SecureApiModule accepts string bodies only. Multipart uploads must use
+  // React Native fetch so FormData file parts reach the native networking stack.
+  const response = await fetchWithTimeout(apiUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
     },
-    body: JSON.stringify(payload),
-    timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
-  });
+    body: formData,
+  }, WRITE_REQUEST_TIMEOUT_MS);
   logAppointmentDetailDebug('[Complete Booking API HTTP Status]', {
     status: response.status,
     ok: response.ok,
-    transport: 'json-secure',
+    transport: 'multipart-secure',
   });
 
   const responseData = await parseJsonResponse(response, '[Booking Status]');
@@ -319,6 +450,11 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
   });
 
   const responseData = await parseJsonResponse(response, '[Assigned Detail]');
+  logAppointmentDetailDebug('[Appointment Details API URL]', apiUrl);
+  logAppointmentDetailDebug('[Appointment Details API HTTP Status]', {
+    status: response.status,
+    ok: response.ok,
+  });
   logAppointmentDetailDebug('[Appointment Details API Response]', responseData);
   const errorMessage = getApiErrorMessage(
     response,
@@ -418,6 +554,7 @@ export const updateAssignedBookingStatusApi = async ({
         accessToken,
         bookingId,
         payload,
+        bookingDetail: latestBookingDetail,
         patientDocumentsMap: resolvedPatientDocumentsMap,
         manualSlipDocumentsMap: resolvedManualSlipDocumentsMap,
         paymentProofs,
@@ -459,6 +596,7 @@ export const updateAssignedBookingStatusApi = async ({
         accessToken,
         bookingId,
         payload,
+        bookingDetail: refreshedBookingDetail,
         patientDocumentsMap: resolvedPatientDocumentsMap,
         manualSlipDocumentsMap: resolvedManualSlipDocumentsMap,
         paymentProofs,
@@ -640,6 +778,34 @@ export const addAssignedBookingPatientApi = async ({
     response,
     responseData,
     'Unable to add patient right now.',
+  );
+
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
+
+  return responseData;
+};
+
+export const updateAssignedBookingAddressApi = async ({
+  accessToken,
+  bookingId,
+  addressPayload,
+}) => {
+  const response = await secureFetch(getAssignedBookingAddressApiUrl(bookingId), {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(addressPayload || {}),
+  });
+
+  const responseData = await parseJsonResponse(response, '[Update Address]');
+  const errorMessage = getApiErrorMessage(
+    response,
+    responseData,
+    'Unable to update booking address right now.',
   );
 
   if (errorMessage) {

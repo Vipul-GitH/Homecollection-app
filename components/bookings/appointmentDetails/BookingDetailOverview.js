@@ -27,6 +27,7 @@ function BookingDetailOverview({
   canCallBookingPhone,
   handleCallBookingPhone,
   handleOpenLocation,
+  onEditAddress,
   handleAddPatientPress,
   openCancelBookingModal,
   onBookingAction,
@@ -101,6 +102,7 @@ function BookingDetailOverview({
         hasLocationUrl={Boolean(locationUrl)}
         disabled={!locationUrl && !resolvedAddress && (!latitude || !longitude)}
         onOpenLocation={handleOpenLocation}
+        onEditAddress={onEditAddress}
       />
 
       {isTerminalBooking ? (
