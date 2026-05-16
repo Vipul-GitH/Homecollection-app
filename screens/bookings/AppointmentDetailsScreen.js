@@ -839,9 +839,9 @@ function AppointmentDetailsScreen({
   const [dobCalendarMonth, setDobCalendarMonth] = useState(() => new Date());
   const [patientForm, setPatientForm] = useState(INITIAL_PATIENT_FORM);
   const [patientCompletionDocumentsMap, setPatientCompletionDocumentsMap] =
-    useState({});
+    useState(() => appointmentDetailState?.patientCompletionDocumentsMap || {});
   const [patientManualSlipDocumentsMap, setPatientManualSlipDocumentsMap] =
-    useState({});
+    useState(() => appointmentDetailState?.patientManualSlipDocumentsMap || {});
   const [patientFormPanelCompanyItems, setPatientFormPanelCompanyItems] =
     useState([]);
   const [isPatientFormPanelCompanyFocused, setIsPatientFormPanelCompanyFocused] =
@@ -917,6 +917,16 @@ function AppointmentDetailsScreen({
     () => appointmentDetailState?.patientCancellationMap || {},
     [appointmentDetailState?.patientCancellationMap],
   );
+  useEffect(() => {
+    setPatientCompletionDocumentsMap(
+      appointmentDetailState?.patientCompletionDocumentsMap || {},
+    );
+  }, [appointmentDetailState?.patientCompletionDocumentsMap]);
+  useEffect(() => {
+    setPatientManualSlipDocumentsMap(
+      appointmentDetailState?.patientManualSlipDocumentsMap || {},
+    );
+  }, [appointmentDetailState?.patientManualSlipDocumentsMap]);
   useEffect(() => {
     setPatientAdditionalDiscountDraftMap(previousDraftMap => {
       const nextDraftMap = {};
@@ -1589,8 +1599,6 @@ function AppointmentDetailsScreen({
     }
   }, [patientSelectorItems, selectedPatientKey]);
   useEffect(() => {
-    setPatientCompletionDocumentsMap({});
-    setPatientManualSlipDocumentsMap({});
     setSamplePickCount('');
     setSamplePickPatientIds([]);
     setSampleCollectionEasyTough('');
@@ -2635,22 +2643,9 @@ function AppointmentDetailsScreen({
     try {
       const response = await getLocalAddressCitiesResponse();
       const cities = Array.isArray(response?.items) ? response.items : [];
-      if (__DEV__) {
-        console.log('[Address City Lookup]', {
-          ok: response?.ok ?? false,
-          count: cities.length,
-          cities,
-        });
-      }
       setAddressCityOptions(cities);
       return cities;
     } catch (error) {
-      if (__DEV__) {
-        console.log('[Address City Lookup Error]', {
-          message: error?.message || String(error),
-          name: error?.name,
-        });
-      }
       warnDebug('Address city lookup failed:', error);
       setAddressCityOptions([]);
       return [];
@@ -2671,23 +2666,9 @@ function AppointmentDetailsScreen({
       const colonies = Array.isArray(response?.items)
         ? response.items.filter(colony => normalizeFormText(colony?.colony_name))
         : [];
-      if (__DEV__) {
-        console.log('[Address Colony Lookup]', {
-          city: normalizedCity,
-          ok: response?.ok ?? false,
-          count: colonies.length,
-        });
-      }
       setAddressColonyOptions(colonies);
       return colonies;
     } catch (error) {
-      if (__DEV__) {
-        console.log('[Address Colony Lookup Error]', {
-          city: normalizedCity,
-          message: error?.message || String(error),
-          name: error?.name,
-        });
-      }
       warnDebug('Address colony lookup failed:', error);
       setAddressColonyOptions([]);
       return [];
@@ -3266,11 +3247,12 @@ function AppointmentDetailsScreen({
       return;
     }
 
+    const nextDocuments = normalizeStoredUploadDocuments(
+      documents,
+      'prescription',
+    );
+
     setPatientCompletionDocumentsMap(previousMap => {
-      const nextDocuments = normalizeStoredUploadDocuments(
-        documents,
-        'prescription',
-      );
       const previousDocuments = previousMap[patientId] || EMPTY_UPLOAD_DOCUMENTS;
 
       if (previousDocuments === nextDocuments) {
@@ -3282,7 +3264,19 @@ function AppointmentDetailsScreen({
         [patientId]: nextDocuments,
       };
     });
-  }, [canUsePatientActions, showBookingStartRequiredAlert]);
+
+    onAppointmentDetailStateChange?.(previousState => ({
+      ...previousState,
+      patientCompletionDocumentsMap: {
+        ...(previousState?.patientCompletionDocumentsMap || {}),
+        [patientId]: nextDocuments,
+      },
+    }));
+  }, [
+    canUsePatientActions,
+    onAppointmentDetailStateChange,
+    showBookingStartRequiredAlert,
+  ]);
 
   const handlePatientManualSlipDocumentsChange = useCallback((patient, documents) => {
     if (!canUsePatientActions) {
@@ -3296,11 +3290,28 @@ function AppointmentDetailsScreen({
       return;
     }
 
+    const nextDocuments = normalizeStoredUploadDocuments(
+      documents,
+      'manual-hc-slip',
+    );
+
     setPatientManualSlipDocumentsMap(previousMap => ({
       ...previousMap,
-      [patientId]: normalizeStoredUploadDocuments(documents, 'manual-hc-slip'),
+      [patientId]: nextDocuments,
     }));
-  }, [canUsePatientActions, showBookingStartRequiredAlert]);
+
+    onAppointmentDetailStateChange?.(previousState => ({
+      ...previousState,
+      patientManualSlipDocumentsMap: {
+        ...(previousState?.patientManualSlipDocumentsMap || {}),
+        [patientId]: nextDocuments,
+      },
+    }));
+  }, [
+    canUsePatientActions,
+    onAppointmentDetailStateChange,
+    showBookingStartRequiredAlert,
+  ]);
 
   const openCancelBookingModal = () => {
     resetCancelForm();
@@ -3728,13 +3739,6 @@ function AppointmentDetailsScreen({
       return;
     }
 
-    if (__DEV__) {
-      console.log(
-        '[Complete Booking Final Payload]',
-        JSON.stringify(completeBookingPayload, null, 2),
-      );
-    }
-
     const didComplete = await onBookingAction('completed', completeBookingPayload);
 
     if (!didComplete) {
@@ -3764,6 +3768,10 @@ function AppointmentDetailsScreen({
           ? {
               ...payment,
               ...updates,
+              ...(Object.prototype.hasOwnProperty.call(updates || {}, 'mode') &&
+              updates?.mode !== 'UPI'
+                ? {proofDocuments: []}
+                : {}),
               ...(Object.prototype.hasOwnProperty.call(
                 updates || {},
                 'proofDocuments',
@@ -3815,7 +3823,7 @@ function AppointmentDetailsScreen({
             return payment;
           }
 
-          return {
+          const nextPayment = {
             ...payment,
             proofDocuments: normalizeStoredUploadDocuments(
               [
@@ -3827,6 +3835,8 @@ function AppointmentDetailsScreen({
               'upi-payment-proof',
             ),
           };
+
+          return nextPayment;
         }),
       );
     },

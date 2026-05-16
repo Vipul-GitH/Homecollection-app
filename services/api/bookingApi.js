@@ -33,19 +33,8 @@ const parseJsonResponse = async response => {
   }
 };
 
-const stringifyForDebugLog = value => {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch (error) {
-    return String(value);
-  }
-};
-
 const logAppointmentDetailDebug = (label, payload) => {
-  // Intentionally scoped to appointment/patient detail debugging.
-  if (__DEV__) {
-    console.log(label, stringifyForDebugLog(payload));
-  }
+  return undefined;
 };
 
 const isPatientBookingMappingError = message =>
@@ -76,6 +65,31 @@ const getMappedMasterPatientId = (bookingDetail, sourcePatientId) => {
   return String(
     matchedPatient?.patientId || matchedPatient?.patient_id || '',
   ).trim();
+};
+
+const getSingleMasterPatientId = bookingDetail => {
+  const patients = Array.isArray(bookingDetail?.patients) ? bookingDetail.patients : [];
+  if (patients.length !== 1) {
+    return '';
+  }
+
+  return String(
+    patients[0]?.patientId || patients[0]?.patient_id || '',
+  ).trim();
+};
+
+const getPaymentProofMasterPatientId = (bookingDetail, paymentProof) => {
+  const sourcePatientId =
+    paymentProof?.patient_id ||
+    paymentProof?.patientId ||
+    paymentProof?.payment_patient_id ||
+    paymentProof?.paymentPatientId;
+
+  return (
+    getMappedMasterPatientId(bookingDetail, sourcePatientId) ||
+    String(sourcePatientId || '').trim() ||
+    getSingleMasterPatientId(bookingDetail)
+  );
 };
 
 const buildMasterPatientDocumentMap = (bookingDetail, patientDocumentsMap) => {
@@ -156,6 +170,21 @@ const buildSectionUploadCountMap = sectionMap =>
 
     return accumulator;
   }, {});
+
+const buildPaymentProofUploadCountMap = (bookingDetail, paymentProofs) =>
+  (Array.isArray(paymentProofs) ? paymentProofs : []).reduce(
+    (accumulator, paymentProof) => {
+      const patientId = getPaymentProofMasterPatientId(bookingDetail, paymentProof);
+      const count = countUploadableDocuments(paymentProof?.documents);
+
+      if (patientId && count) {
+        accumulator[patientId] = (accumulator[patientId] || 0) + count;
+      }
+
+      return accumulator;
+    },
+    {},
+  );
 
 const hasCompleteBookingAttachments = ({
   patientDocumentsMap,
@@ -244,14 +273,7 @@ const appendPaymentProofsToFormData = ({
   paymentProofs,
 }) => {
   (Array.isArray(paymentProofs) ? paymentProofs : []).forEach(paymentProof => {
-    const sourcePatientId =
-      paymentProof?.patient_id ||
-      paymentProof?.patientId ||
-      paymentProof?.payment_patient_id ||
-      paymentProof?.paymentPatientId;
-    const patientId =
-      getMappedMasterPatientId(bookingDetail, sourcePatientId) ||
-      String(sourcePatientId || '').trim();
+    const patientId = getPaymentProofMasterPatientId(bookingDetail, paymentProof);
 
     if (!patientId) {
       return;
@@ -314,6 +336,13 @@ const postCompleteBookingStatus = async ({
     patientCghsDocumentsMap,
   });
 
+  if (__DEV__) {
+    console.log(
+      '[Complete Booking API Payload]',
+      JSON.stringify(payload, null, 2),
+    );
+  }
+
   logAppointmentDetailDebug('[Complete Booking API Request]', {
     url: apiUrl,
     transport: 'multipart-secure',
@@ -324,6 +353,10 @@ const postCompleteBookingStatus = async ({
     patientDocumentCounts: buildUploadCountMap(patientDocumentsMap),
     manualSlipDocumentCounts: buildUploadCountMap(manualSlipDocumentsMap),
     paymentProofCount: Array.isArray(paymentProofs) ? paymentProofs.length : 0,
+    paymentProofDocumentCounts: buildPaymentProofUploadCountMap(
+      bookingDetail,
+      paymentProofs,
+    ),
     cghsPatientIds: Object.keys(patientCghsDocumentsMap || {}),
     cghsDocumentCounts: buildSectionUploadCountMap(patientCghsDocumentsMap),
   });
@@ -374,7 +407,10 @@ const getApiErrorMessage = (response, responseData, fallbackMessage) => {
 
   if (!response.ok || bodyIndicatesFailure) {
     return (
-      responseData?.message || responseData?.error || fallbackMessage
+      responseData?.message ||
+      responseData?.detail ||
+      responseData?.error ||
+      fallbackMessage
     );
   }
 
@@ -391,10 +427,6 @@ export const fetchAssignedBookingsApi = async ({accessToken, loggedInUser}) => {
   });
 
   const responseData = await parseJsonResponse(response, '[Assigned]');
-  if (__DEV__) {
-    console.log('[My Assigned API URL]', MY_ASSIGNED_BOOKINGS_API_URL);
-    console.log('[My Assigned API Response]', stringifyForDebugLog(responseData));
-  }
   const errorMessage = getApiErrorMessage(
     response,
     responseData,

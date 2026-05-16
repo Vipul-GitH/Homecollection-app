@@ -543,9 +543,9 @@ function PatientDetailCard({
     }) ||
     (paymentSourceTests.length ? getFirstBillingChargeMode(panelCompanies) : '');
   const paymentDisplayLabel = getPaymentLabelFromBillingMode(paymentBillingMode);
+  const shouldShowManualSlipUpload = testBookingStatusValue === MANUAL_HC_SLIP_STATUS;
   const shouldShowPaymentProofUpload = false;
   const shouldHighlightPaymentProofRequired = requiresPaymentProof;
-  const shouldShowManualSlipUpload = testBookingStatusValue === MANUAL_HC_SLIP_STATUS;
   const genderBadge = getGenderBadgeConfig(patient.gender);
   const labmatePid = toStableValue(patient.labmatePid || patient.labmate_pid);
   const cceTestBookingStatusLabel = toStableValue(testBookingStatusFromCce)
@@ -1087,7 +1087,7 @@ function PatientDetailCard({
         }),
       onGalleryPress: () =>
         pickDocumentsFromDevice({
-          fileNamePrefix: 'payment-proof',
+          fileNamePrefix: 'prescription',
           onDocumentsPicked: appendPaymentProofDocuments,
           failureMessage: 'Unable to select documents right now. Please try again.',
         }),
@@ -1750,7 +1750,7 @@ function PatientDetailCard({
       </View>
       {shouldShowPaymentProofUpload ? (
         <View style={styles.patientPaymentProofSection}>
-          {renderConditionalFieldLabel('Billing Proof / Prescription')}
+          {renderConditionalFieldLabel('Prescription')}
           <TouchableOpacity
             activeOpacity={0.85}
             style={styles.completeUploadBox}
@@ -1763,9 +1763,9 @@ function PatientDetailCard({
               />
             </View>
             <View style={styles.completeUploadTextWrap}>
-              <Text style={styles.completeUploadTitle}>Upload document</Text>
+              <Text style={styles.completeUploadTitle}>Upload prescription</Text>
               <Text style={styles.completeUploadHint}>
-                Billing proof or prescription
+                This file will be sent with complete booking
               </Text>
             </View>
             <Ionicons

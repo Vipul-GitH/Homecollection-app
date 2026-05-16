@@ -607,6 +607,14 @@ const mergeAppointmentDetailStateWithDraft = (seedState, draftState) => {
       ...(seed.patientCghsDocumentsMap || {}),
       ...(draft.patientCghsDocumentsMap || {}),
     },
+    patientCompletionDocumentsMap: {
+      ...(seed.patientCompletionDocumentsMap || {}),
+      ...(draft.patientCompletionDocumentsMap || {}),
+    },
+    patientManualSlipDocumentsMap: {
+      ...(seed.patientManualSlipDocumentsMap || {}),
+      ...(draft.patientManualSlipDocumentsMap || {}),
+    },
     patientCancellationMap: {
       ...(seed.patientCancellationMap || {}),
       ...(draft.patientCancellationMap || {}),
@@ -686,6 +694,10 @@ const buildAppointmentDetailDraftForStorage = ({state, selectedBooking}) => {
       patientCghsEnabledMap: safeState.patientCghsEnabledMap || {},
       patientCghsIdMap: safeState.patientCghsIdMap || {},
       patientCghsDocumentsMap: safeState.patientCghsDocumentsMap || {},
+      patientCompletionDocumentsMap:
+        safeState.patientCompletionDocumentsMap || {},
+      patientManualSlipDocumentsMap:
+        safeState.patientManualSlipDocumentsMap || {},
       patientCancellationMap: safeState.patientCancellationMap || {},
       patientAdditionalDiscountMap: safeState.patientAdditionalDiscountMap || {},
       completePayments: safeState.completePayments || [],

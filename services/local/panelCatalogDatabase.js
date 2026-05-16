@@ -105,12 +105,6 @@ export const getDatabaseSpecimenNameForTestCode = testCode => {
 
 export const getDatabaseAddressCitiesResponse = async () => {
   if (!isCatalogDatabaseAvailable() || !CatalogDatabaseModule.getAddressCities) {
-    if (__DEV__) {
-      console.log('[Address City Lookup Unavailable]', {
-        hasCatalogDatabaseModule: Boolean(CatalogDatabaseModule),
-        hasGetAddressCities: Boolean(CatalogDatabaseModule?.getAddressCities),
-      });
-    }
     return null;
   }
 
@@ -122,14 +116,6 @@ export const getDatabaseAddressColoniesByCityResponse = async city => {
     !isCatalogDatabaseAvailable() ||
     !CatalogDatabaseModule.getAddressColoniesByCity
   ) {
-    if (__DEV__) {
-      console.log('[Address Colony Lookup Unavailable]', {
-        hasCatalogDatabaseModule: Boolean(CatalogDatabaseModule),
-        hasGetAddressColoniesByCity: Boolean(
-          CatalogDatabaseModule?.getAddressColoniesByCity,
-        ),
-      });
-    }
     return null;
   }
 
@@ -143,14 +129,6 @@ export const getDatabaseAddressRoutesByPincodeResponse = async pincode => {
     !isCatalogDatabaseAvailable() ||
     !CatalogDatabaseModule.getAddressRoutesByPincode
   ) {
-    if (__DEV__) {
-      console.log('[Address Route Lookup Unavailable]', {
-        hasCatalogDatabaseModule: Boolean(CatalogDatabaseModule),
-        hasGetAddressRoutesByPincode: Boolean(
-          CatalogDatabaseModule?.getAddressRoutesByPincode,
-        ),
-      });
-    }
     return null;
   }
 

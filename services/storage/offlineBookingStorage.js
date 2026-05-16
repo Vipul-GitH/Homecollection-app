@@ -49,6 +49,20 @@ export const persistAssignedBookings = async bookings => {
   );
 };
 
+export const removeCachedAssignedBooking = async bookingId => {
+  if (!bookingId) {
+    return;
+  }
+
+  const normalizedBookingId = String(bookingId);
+  const cachedBookings = await getCachedAssignedBookings();
+  const nextCachedBookings = cachedBookings.filter(
+    booking => String(booking?.id) !== normalizedBookingId,
+  );
+
+  await persistAssignedBookings(nextCachedBookings);
+};
+
 export const getCachedCompletedBookings = async () => {
   const value = await AsyncStorage.getItem(CACHED_COMPLETED_BOOKINGS_KEY);
   const parsedValue = safelyParseJson(value, []);

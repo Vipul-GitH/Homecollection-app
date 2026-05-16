@@ -13,6 +13,7 @@ if (!__DEV__) {
   console.info = () => {};
   console.debug = () => {};
   console.warn = () => {};
+  console.error = () => {};
 }
 
 const styles = StyleSheet.create({

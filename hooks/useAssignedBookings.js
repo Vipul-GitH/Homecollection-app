@@ -23,6 +23,7 @@ import {
   persistAssignedBookings,
   persistBookingDetail,
   persistCompletedBookings,
+  removeCachedAssignedBooking,
   queuePendingBookingAction,
   queuePendingPatientAction,
   removePendingBookingAction,
@@ -191,6 +192,17 @@ const getBookingDisplayCode = booking =>
   toDisplayValue(booking?.bookingCode || booking?.booking_code || booking?.id) ||
   'the active booking';
 
+const isReloginRequiredError = error =>
+  String(error?.message || '')
+    .trim()
+    .toLowerCase()
+    .includes('token is invalidated');
+
+const isTerminalBookingAction = action =>
+  ['complete', 'completed', 'cancel', 'cancelled'].includes(
+    String(action || '').trim().toLowerCase(),
+  );
+
 const MAX_ASSIGNED_BOOKING_DETAIL_WARM_CACHE = 3;
 
 const selectBookingsForWarmCache = bookings => {
@@ -282,21 +294,30 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
   const applyBookingStatusLocally = useCallback(async (bookingId, action) => {
     const nextStatus = getStatusFromAction(action);
     const nextStatusCode = getStatusCodeFromAction(action);
+    const shouldRemoveFromAssigned = isTerminalBookingAction(action);
 
     setAssignedAppointments(previousAppointments =>
-      previousAppointments.map(booking =>
-        String(booking.id) === String(bookingId)
-          ? {
-              ...booking,
-              status: nextStatus,
-              bookingStatusCode: nextStatusCode,
-            }
-          : booking,
-      ),
+      shouldRemoveFromAssigned
+        ? previousAppointments.filter(
+            booking => String(booking?.id) !== String(bookingId),
+          )
+        : previousAppointments.map(booking =>
+            String(booking.id) === String(bookingId)
+              ? {
+                  ...booking,
+                  status: nextStatus,
+                  bookingStatusCode: nextStatusCode,
+                }
+              : booking,
+          ),
     );
 
     try {
-      await updateCachedBookingStatus(bookingId, nextStatus, nextStatusCode);
+      if (shouldRemoveFromAssigned) {
+        await removeCachedAssignedBooking(bookingId);
+      } else {
+        await updateCachedBookingStatus(bookingId, nextStatus, nextStatusCode);
+      }
     } catch (error) {
       warnDebug('Local booking status cache update error:', error);
     }
@@ -418,11 +439,15 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         });
 
         await removePendingBookingAction(pendingAction.id);
-        await updateCachedBookingStatus(
-          pendingAction.bookingId,
-          getStatusFromAction(pendingAction.action),
-          getStatusCodeFromAction(pendingAction.action),
-        );
+        if (isTerminalBookingAction(pendingAction.action)) {
+          await removeCachedAssignedBooking(pendingAction.bookingId);
+        } else {
+          await updateCachedBookingStatus(
+            pendingAction.bookingId,
+            getStatusFromAction(pendingAction.action),
+            getStatusCodeFromAction(pendingAction.action),
+          );
+        }
       } catch (error) {
         await updatePendingBookingAction(pendingAction.id, {
           lastError: error?.message || 'Sync failed',
@@ -629,10 +654,17 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         );
       } else {
         setAssignedAppointments([]);
-        setAssignedAppointmentsError(
-          error?.message ||
-            'Unable to reach the assigned appointments API. Please check the server and network.',
-        );
+        const requiresRelogin = isReloginRequiredError(error);
+        const errorMessage = requiresRelogin
+          ? 'Your session has expired. Please log in again.'
+          : error?.message ||
+            'Unable to reach the assigned appointments API. Please check the server and network.';
+
+        setAssignedAppointmentsError(errorMessage);
+
+        if (requiresRelogin) {
+          Alert.alert('Session Expired', 'Your session has expired. Please log in again.');
+        }
       }
     } finally {
       setIsLoadingAssignedAppointments(false);
