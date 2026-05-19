@@ -6,13 +6,11 @@ import {
   NativeModules,
   PermissionsAndroid,
   Platform,
-  ScrollView,
   Text,
   TextInput,
   TouchableOpacity,
   useWindowDimensions,
   View,
-  Image,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import GetLocation from 'react-native-get-location';
@@ -23,6 +21,7 @@ import {
 } from '../../utils/location/lastKnownGeoCapture';
 import {BRAND} from '../../styles/appStyles';
 import PatientDocumentsList from './patient/PatientDocumentsList';
+import PatientDocumentViewerModal from './patient/PatientDocumentViewerModal';
 import RequiredLabel from './appointmentDetails/RequiredLabel';
 
 const {LocalDocumentPickerModule, LocalGeoCameraModule} = NativeModules;
@@ -60,6 +59,17 @@ const CGHS_DOCUMENT_SECTIONS = [
 
 const toStableValue = value =>
   value === null || value === undefined ? '' : String(value).trim();
+
+const normalizePatientTagValues = value => {
+  if (Array.isArray(value)) {
+    return value.map(tag => toStableValue(tag)).filter(Boolean);
+  }
+
+  return toStableValue(value)
+    .split(',')
+    .map(tag => toStableValue(tag))
+    .filter(Boolean);
+};
 
 const toPriceNumber = value => {
   const numericValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
@@ -511,14 +521,17 @@ function PatientDetailCard({
     startTouch: {x: 0, y: 0},
   });
   const bookingPatientStatusCode = Number(patient.bookingPatientStatusCode || 0);
-  const patientStatusLabel =
-    bookingPatientStatusCode === 3
-      ? 'Complete'
-      : bookingPatientStatusCode === 4
-      ? 'Cancelled'
-      : bookingPatientStatusCode === 5
-      ? 'Partial Complete'
-      : '';
+  const patientStatusLabel = useMemo(
+    () =>
+      bookingPatientStatusCode === 3
+        ? 'Complete'
+        : bookingPatientStatusCode === 4
+        ? 'Cancelled'
+        : bookingPatientStatusCode === 5
+        ? 'Partial Complete'
+        : '',
+    [bookingPatientStatusCode],
+  );
   const activePanelCompany = useMemo(() => {
     if (!panelCompanies.length) {
       return null;
@@ -531,30 +544,66 @@ function PatientDetailCard({
 
     return activeCompany || panelCompanies[0];
   }, [activePanelCompanyId, panelCompanies]);
-  const paymentSourceTests =
-    selectedTestsSourceReady && selectedTests.length
-      ? selectedTests
-      : patient?.tests || [];
-  const paymentBillingMode =
-    getBillingModeFromTests({
-      tests: paymentSourceTests,
-      panelCompanies,
-      activePanelCompany,
-    }) ||
-    (paymentSourceTests.length ? getFirstBillingChargeMode(panelCompanies) : '');
-  const paymentDisplayLabel = getPaymentLabelFromBillingMode(paymentBillingMode);
+  const paymentSourceTests = useMemo(
+    () =>
+      selectedTestsSourceReady && selectedTests.length
+        ? selectedTests
+        : patient?.tests || [],
+    [patient?.tests, selectedTests, selectedTestsSourceReady],
+  );
+  const paymentBillingMode = useMemo(
+    () =>
+      getBillingModeFromTests({
+        tests: paymentSourceTests,
+        panelCompanies,
+        activePanelCompany,
+      }) ||
+      (paymentSourceTests.length
+        ? getFirstBillingChargeMode(panelCompanies)
+        : ''),
+    [activePanelCompany, panelCompanies, paymentSourceTests],
+  );
+  const paymentDisplayLabel = useMemo(
+    () => getPaymentLabelFromBillingMode(paymentBillingMode),
+    [paymentBillingMode],
+  );
   const shouldShowManualSlipUpload = testBookingStatusValue === MANUAL_HC_SLIP_STATUS;
   const shouldShowPaymentProofUpload = false;
   const shouldHighlightPaymentProofRequired = requiresPaymentProof;
-  const genderBadge = getGenderBadgeConfig(patient.gender);
-  const labmatePid = toStableValue(patient.labmatePid || patient.labmate_pid);
-  const cceTestBookingStatusLabel = toStableValue(testBookingStatusFromCce)
-    ? formatTestBookingStatusLabel(testBookingStatusFromCce)
-    : '';
-  const selectedTestBookingStatus =
-    TEST_BOOKING_STATUS_OPTIONS.find(
-      option => option.value === testBookingStatusValue,
-    ) || TEST_BOOKING_STATUS_OPTIONS[0];
+  const genderBadge = useMemo(
+    () => getGenderBadgeConfig(patient.gender),
+    [patient.gender],
+  );
+  const labmatePid = useMemo(
+    () => toStableValue(patient.labmatePid || patient.labmate_pid),
+    [patient.labmatePid, patient.labmate_pid],
+  );
+  const patientTags = useMemo(
+    () => normalizePatientTagValues(patient.tags || patient.tag),
+    [patient.tags, patient.tag],
+  );
+  const cceTestBookingStatusLabel = useMemo(
+    () =>
+      toStableValue(testBookingStatusFromCce)
+        ? formatTestBookingStatusLabel(testBookingStatusFromCce)
+        : '',
+    [testBookingStatusFromCce],
+  );
+  const selectedTestBookingStatus = useMemo(
+    () =>
+      TEST_BOOKING_STATUS_OPTIONS.find(
+        option => option.value === testBookingStatusValue,
+      ) || TEST_BOOKING_STATUS_OPTIONS[0],
+    [testBookingStatusValue],
+  );
+  const patientMobileDialable = useMemo(
+    () => getDialablePhoneNumber(patient.mobileNumber),
+    [patient.mobileNumber],
+  );
+  const patientAlternateMobileDialable = useMemo(
+    () => getDialablePhoneNumber(patient.alternateMobileNumber),
+    [patient.alternateMobileNumber],
+  );
 
   const renderConditionalFieldLabel = useCallback(
     label =>
@@ -611,69 +660,92 @@ function PatientDetailCard({
     selectedTests,
     selectedTestsSourceReady,
   ]);
-  const normalizedDocuments = [
-    ...(Array.isArray(patient.documents) ? patient.documents : []),
-    ...buildApiDocumentItems(
-      patient.patientDocumentUrls || patient.patient_document_urls,
-      'Patient Document',
-    ),
-    ...buildApiDocumentItems(
-      patient.prescriptionUrls || patient.prescription_urls,
-      'Prescription',
-    ),
-    ...(Array.isArray(cghsDocumentsBySection.patientPhotos)
-      ? cghsDocumentsBySection.patientPhotos.map((document, index) => ({
-          ...document,
-          label:
-            document?.label || document?.name || `Patient Photo ${index + 1}`,
-          documentType: 'Patient Photo',
-          canRemove: true,
-          documentSource: 'cghs',
-          documentSectionKey: 'patientPhotos',
-          documentSourceIndex: index,
-        }))
-      : []),
-    ...(Array.isArray(cghsDocumentsBySection.cghsCard)
-      ? cghsDocumentsBySection.cghsCard.map((document, index) => ({
-          ...document,
-          label: document?.label || document?.name || `CGHS Card ${index + 1}`,
-          documentType: 'CGHS Card',
-          canRemove: true,
-          documentSource: 'cghs',
-          documentSectionKey: 'cghsCard',
-          documentSourceIndex: index,
-        }))
-      : []),
-    ...(Array.isArray(paymentProofDocuments)
-      ? paymentProofDocuments.map((document, index) => ({
-          ...document,
-          label:
-            document?.label || document?.name || `Prescription ${index + 1}`,
-          documentType: 'Prescription',
-          canRemove: true,
-          documentSource: 'prescription',
-          documentSourceIndex: index,
-        }))
-      : []),
-  ]
-    .map((document, index) => {
-      const imageSource = getDocumentImageSource(document);
+  const normalizedDocuments = useMemo(
+    () =>
+      [
+        ...(Array.isArray(patient.documents) ? patient.documents : []),
+        ...buildApiDocumentItems(
+          patient.patientDocumentUrls || patient.patient_document_urls,
+          'Patient Document',
+        ),
+        ...buildApiDocumentItems(
+          patient.prescriptionUrls || patient.prescription_urls,
+          'Prescription',
+        ),
+        ...(Array.isArray(cghsDocumentsBySection.patientPhotos)
+          ? cghsDocumentsBySection.patientPhotos.map((document, index) => ({
+              ...document,
+              label:
+                document?.label ||
+                document?.name ||
+                `Patient Photo ${index + 1}`,
+              documentType: 'Patient Photo',
+              canRemove: true,
+              documentSource: 'cghs',
+              documentSectionKey: 'patientPhotos',
+              documentSourceIndex: index,
+            }))
+          : []),
+        ...(Array.isArray(cghsDocumentsBySection.cghsCard)
+          ? cghsDocumentsBySection.cghsCard.map((document, index) => ({
+              ...document,
+              label:
+                document?.label || document?.name || `CGHS Card ${index + 1}`,
+              documentType: 'CGHS Card',
+              canRemove: true,
+              documentSource: 'cghs',
+              documentSectionKey: 'cghsCard',
+              documentSourceIndex: index,
+            }))
+          : []),
+        ...(Array.isArray(paymentProofDocuments)
+          ? paymentProofDocuments.map((document, index) => ({
+              ...document,
+              label:
+                document?.label || document?.name || `Prescription ${index + 1}`,
+              documentType: 'Prescription',
+              canRemove: true,
+              documentSource: 'prescription',
+              documentSourceIndex: index,
+            }))
+          : []),
+      ]
+        .map((document, index) => {
+          const imageSource = getDocumentImageSource(document);
 
-      if (!imageSource) {
-        return null;
-      }
+          if (!imageSource) {
+            return null;
+          }
 
-      return {
-        ...document,
-        id: String(document?.id || document?.uri || document || `document-${index}`),
-        label: getDocumentDisplayLabel(document, `Document ${index + 1}`),
-        documentType: toStableValue(document?.documentType) || 'Document',
-        imageSource,
-      };
-    })
-    .filter(Boolean);
-  const activeDocument =
-    activeDocumentIndex >= 0 ? normalizedDocuments[activeDocumentIndex] : null;
+          return {
+            ...document,
+            id: String(
+              document?.id || document?.uri || document || `document-${index}`,
+            ),
+            label: getDocumentDisplayLabel(document, `Document ${index + 1}`),
+            documentType: toStableValue(document?.documentType) || 'Document',
+            imageSource,
+          };
+        })
+        .filter(Boolean),
+    [
+      cghsDocumentsBySection.cghsCard,
+      cghsDocumentsBySection.patientPhotos,
+      patient.documents,
+      patient.patientDocumentUrls,
+      patient.patient_document_urls,
+      patient.prescriptionUrls,
+      patient.prescription_urls,
+      paymentProofDocuments,
+    ],
+  );
+  const activeDocument = useMemo(
+    () =>
+      activeDocumentIndex >= 0
+        ? normalizedDocuments[activeDocumentIndex]
+        : null,
+    [activeDocumentIndex, normalizedDocuments],
+  );
   const viewerDocument = activeCghsDocument || activeDocument;
   const documentViewerTests = useMemo(
     () =>
@@ -1283,23 +1355,23 @@ function PatientDetailCard({
               </View>
               {labmatePid ? (
                 <View style={styles.patientInfoPill}>
-                  <Text style={styles.patientInfoPillText} numberOfLines={1}>
+                  <Text style={styles.patientInfoPillText}>
                     Labmate PID: {labmatePid}
                   </Text>
                 </View>
               ) : null}
-              {patient.tag ? (
-                <View style={styles.patientTagHighlightChip}>
+              {patientTags.map((tag, index) => (
+                <View
+                  key={`${tag}-${index}`}
+                  style={styles.patientTagHighlightChip}>
                   <Ionicons
                     name="pricetag-outline"
                     size={12}
                     style={styles.patientTagHighlightIcon}
                   />
-                  <Text style={styles.patientTagHighlightText} numberOfLines={1}>
-                    {patient.tag}
-                  </Text>
+                  <Text style={styles.patientTagHighlightText}>{tag}</Text>
                 </View>
-              ) : null}
+              ))}
             </View>
           </View>
           <View
@@ -1387,14 +1459,13 @@ function PatientDetailCard({
             styles.patientDetailMetaItem,
             isNarrowCard && styles.patientDetailMetaItemStacked,
           ]}
-          disabled={!getDialablePhoneNumber(patient.mobileNumber)}
+          disabled={!patientMobileDialable}
           onPress={() => handleCallPatientNumber(patient.mobileNumber)}>
           <Text style={styles.patientDetailMetaLabel}>Mobile</Text>
           <Text
             style={[
               styles.patientDetailMetaValue,
-              getDialablePhoneNumber(patient.mobileNumber) &&
-                styles.patientPhoneLinkText,
+              patientMobileDialable && styles.patientPhoneLinkText,
             ]}
             numberOfLines={1}>
             {patient.mobileNumber}
@@ -1406,14 +1477,13 @@ function PatientDetailCard({
             styles.patientDetailMetaItem,
             isNarrowCard && styles.patientDetailMetaItemStacked,
           ]}
-          disabled={!getDialablePhoneNumber(patient.alternateMobileNumber)}
+          disabled={!patientAlternateMobileDialable}
           onPress={() => handleCallPatientNumber(patient.alternateMobileNumber)}>
           <Text style={styles.patientDetailMetaLabel}>Alternate</Text>
           <Text
             style={[
               styles.patientDetailMetaValue,
-              getDialablePhoneNumber(patient.alternateMobileNumber) &&
-                styles.patientPhoneLinkText,
+              patientAlternateMobileDialable && styles.patientPhoneLinkText,
             ]}
             numberOfLines={1}>
             {patient.alternateMobileNumber}
@@ -1835,144 +1905,23 @@ function PatientDetailCard({
         </View>
       </Modal>
 
-      <Modal
-        transparent
-        animationType="fade"
+      <PatientDocumentViewerModal
+        styles={styles}
         visible={Boolean(viewerDocument)}
-        onRequestClose={handleCloseDocumentViewer}>
-        <View style={styles.patientDocumentViewerOverlay}>
-          <TouchableOpacity
-            activeOpacity={1}
-            style={styles.patientDocumentViewerBackdrop}
-            onPress={handleCloseDocumentViewer}
-          />
-          <View style={styles.patientDocumentViewerCard}>
-            <View style={styles.patientDocumentViewerHeader}>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.patientDocumentViewerCloseButton}
-                onPress={handleCloseDocumentViewer}>
-                <Ionicons
-                  name="close"
-                  size={20}
-                  style={styles.patientDocumentViewerCloseIcon}
-                />
-              </TouchableOpacity>
-            </View>
-
-            {!activeCghsDocument && documentViewerTests.length ? (
-              <View style={styles.patientDocumentViewerTestsSection}>
-                <ScrollView
-                  nestedScrollEnabled
-                  style={styles.patientDocumentViewerTestsScroll}
-                  contentContainerStyle={styles.patientDocumentViewerTestsWrap}>
-                  {documentViewerTests.map(test => (
-                    <View
-                      key={test.id}
-                      style={styles.patientDocumentViewerTestChip}>
-                      <Text
-                        style={styles.patientDocumentViewerTestChipText}
-                        numberOfLines={1}>
-                        {test.label}
-                      </Text>
-                    </View>
-                  ))}
-                </ScrollView>
-              </View>
-            ) : null}
-
-            <View
-              style={[
-                styles.patientDocumentViewerImageWrap,
-                {minHeight: documentViewerHeight},
-              ]}>
-              {viewerDocument ? (
-                <View
-                  collapsable={false}
-                  style={[
-                    styles.patientDocumentViewerGestureViewport,
-                    {height: documentViewerHeight},
-                  ]}
-                  onStartShouldSetResponder={() => true}
-                  onMoveShouldSetResponder={() => true}
-                  onResponderGrant={handleDocumentTouchStart}
-                  onResponderMove={handleDocumentTouchMove}
-                  onResponderRelease={handleDocumentTouchEnd}
-                  onResponderTerminationRequest={() => false}
-                  onResponderTerminate={handleDocumentTouchEnd}>
-                  <Image
-                    source={viewerDocument.imageSource}
-                    style={[
-                      styles.patientDocumentViewerImage,
-                      {height: documentViewerHeight},
-                      {
-                        transform: [
-                          {translateX: documentOffset.x},
-                          {translateY: documentOffset.y},
-                          {scale: documentZoom},
-                        ],
-                      },
-                    ]}
-                    resizeMode="contain"
-                  />
-                </View>
-              ) : null}
-            </View>
-
-            {activeCghsDocument ? (
-              <View style={styles.patientDocumentViewerFooter}>
-                <View style={styles.patientDocumentViewerMeta}>
-                  <Text style={styles.patientDocumentViewerType} numberOfLines={1}>
-                    {activeCghsDocument.documentType || 'Document'}
-                  </Text>
-                  <Text
-                    style={styles.patientDocumentViewerCounter}
-                    numberOfLines={1}>
-                    {activeCghsDocument.label}
-                  </Text>
-                </View>
-              </View>
-            ) : (
-          <View style={styles.patientDocumentViewerFooter}>
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={styles.patientDocumentViewerNavButton}
-              onPress={() => handleNavigateDocument(-1)}>
-                <Ionicons
-                  name="chevron-back"
-                  size={18}
-                  style={styles.patientDocumentViewerNavIcon}
-                />
-                <Text style={styles.patientDocumentViewerNavText}>Previous</Text>
-              </TouchableOpacity>
-              <View style={styles.patientDocumentViewerMeta}>
-                <Text style={styles.patientDocumentViewerType} numberOfLines={1}>
-                  {viewerDocument?.documentType || 'Document'}
-                </Text>
-                <Text style={styles.patientDocumentViewerCounter} numberOfLines={1}>
-                  {viewerDocument?.label ||
-                    `${activeDocumentIndex + 1} / ${normalizedDocuments.length}`}
-                </Text>
-                <Text style={styles.patientDocumentViewerCounter}>
-                  {activeDocumentIndex + 1} / {normalizedDocuments.length}
-                </Text>
-              </View>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.patientDocumentViewerNavButton}
-                onPress={() => handleNavigateDocument(1)}>
-                <Text style={styles.patientDocumentViewerNavText}>Next</Text>
-                <Ionicons
-                  name="chevron-forward"
-                  size={18}
-                  style={styles.patientDocumentViewerNavIcon}
-                />
-              </TouchableOpacity>
-            </View>
-            )}
-          </View>
-        </View>
-      </Modal>
+        viewerDocument={viewerDocument}
+        activeCghsDocument={activeCghsDocument}
+        documentViewerTests={documentViewerTests}
+        documentViewerHeight={documentViewerHeight}
+        documentOffset={documentOffset}
+        documentZoom={documentZoom}
+        activeDocumentIndex={activeDocumentIndex}
+        documentCount={normalizedDocuments.length}
+        onClose={handleCloseDocumentViewer}
+        onNavigate={handleNavigateDocument}
+        onTouchStart={handleDocumentTouchStart}
+        onTouchMove={handleDocumentTouchMove}
+        onTouchEnd={handleDocumentTouchEnd}
+      />
     </>
   );
 }

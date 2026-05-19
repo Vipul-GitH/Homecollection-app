@@ -1,9 +1,25 @@
 export const getGenderFromTitle = title => {
-  if (title === 'Mr' || title === 'Master') {
+  if (
+    title === 'Mr' ||
+    title === 'Mr.' ||
+    title === 'Master' ||
+    title === 'Son Of' ||
+    title === 'MST.' ||
+    title === 'Mst'
+  ) {
     return 'Male';
   }
 
-  if (title === 'Mrs' || title === 'Ms' || title === 'Baby') {
+  if (
+    title === 'Mrs' ||
+    title === 'Mrs.' ||
+    title === 'Ms' ||
+    title === 'MS.' ||
+    title === 'Miss' ||
+    title === 'Dr (Ms)' ||
+    title === 'Baby' ||
+    title === 'Daughter of'
+  ) {
     return 'Female';
   }
 
@@ -67,7 +83,12 @@ export const getCalendarDays = visibleMonth => {
 };
 
 export const normalizeOptionValue = (value, options, fallbackValue) => {
-  const normalizedValue = String(value || '').replace(/\.$/, '').trim();
+  const rawValue = String(value || '').trim();
+  if (options.includes(rawValue)) {
+    return rawValue;
+  }
+
+  const normalizedValue = rawValue.replace(/\.$/, '').trim();
   return options.includes(normalizedValue) ? normalizedValue : fallbackValue;
 };
 
@@ -137,9 +158,7 @@ export const normalizePanelCompanyItems = responseData => {
       panelAbarid: normalizeFormText(item?.ABARID || item?.abarid) || syncAbarid,
       syncKey,
       billingChargeMode: normalizeFormText(item?.BillingChargeMode),
-      searchKey: `${normalizeFormText(item?.pname)} ${normalizeFormText(
-        item?.CatDetails,
-      )} ${normalizeFormText(item?.CompCatID)} ${syncCode} ${syncAbarid}`.toLowerCase(),
+      searchKey: normalizeFormText(item?.pname).toLowerCase(),
     };
   });
 };

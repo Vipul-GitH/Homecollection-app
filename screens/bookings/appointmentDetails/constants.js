@@ -1,17 +1,39 @@
 export const TITLE_OPTIONS = [
-  'Mr',
-  'Mrs',
-  'Ms',
+  'Mr.',
+  'Mrs.',
   'Dr',
+  'Dr (Ms)',
   'Master',
   'Baby',
-  'Justice',
-  'Other',
+  'Daughter of',
+  'Son Of',
+  'Miss',
+  'Ms',
+  'Mst',
+  'Care Of',
+  'CAPT.',
+  'Prof',
+  'COL.',
+  'BRIG.',
+  'MAJ.',
+  'MAJ.GEN',
+  'JUSTIC',
+  'DSD',
 ];
 
-export const TAG_OPTIONS = ['VIP', 'High Value', 'Urgent'];
 export const GENDER_OPTIONS = ['Male', 'Female', 'Other'];
-export const EDITABLE_GENDER_TITLES = ['Baby', 'Justice', 'Other'];
+export const EDITABLE_GENDER_TITLES = [
+  'Dr',
+  'Care Of',
+  'CAPT.',
+  'Prof',
+  'COL.',
+  'BRIG.',
+  'MAJ.',
+  'MAJ.GEN',
+  'JUSTIC',
+  'DSD',
+];
 export const WEEKDAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 export const MONTH_LABELS = [
   'January',
@@ -29,7 +51,7 @@ export const MONTH_LABELS = [
 ];
 
 export const INITIAL_PATIENT_FORM = {
-  title: 'Mr',
+  title: 'Mr.',
   fullName: '',
   gender: 'Male',
   dateOfBirth: '',
@@ -40,7 +62,8 @@ export const INITIAL_PATIENT_FORM = {
   labmatePid: '',
   panelCompany: 'CGHS',
   cghsCardNo: '',
-  tag: 'VIP',
+  tag: '',
+  tags: [],
 };
 
 export const PANEL_COMPANY_DEFAULT_VISIBLE = 4;

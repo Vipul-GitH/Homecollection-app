@@ -2,15 +2,19 @@ import {
   MY_ASSIGNED_BOOKINGS_API_URL,
   MY_ASSIGNED_BOOKINGS_HISTORY_API_URL,
   PANEL_TEST_CATALOG_API_URL,
+  getAssignedBookingBatchHistoryApiUrl,
   getPanelCatalogByCompanyApiUrl,
+  getAssignedBookingBatchSaveApiUrl,
+  getAssignedBookingCancelApiUrl,
   getAssignedBookingDetailApiUrl,
   getAssignedBookingAddressApiUrl,
   getAssignedBookingPatientApiUrl,
   getAssignedBookingPatientCancelApiUrl,
   getAssignedBookingPatientsApiUrl,
   getAssignedBookingStatusApiUrl,
+  getRiderSuggestionsApiUrl,
 } from '../../constants/config/api';
-import {secureFetch} from './secureFetch';
+import {secureFetch, secureMultipartFetch} from './secureFetch';
 import {
   extractAssignedBookings,
   normalizeAssignedBooking,
@@ -18,11 +22,16 @@ import {
 } from '../../utils/bookings/bookingTransforms';
 import {
   getLocalPanelCatalogByCompanyResponse,
+  getLocalPanelCatalogGroupsByCompanyResponse,
+  getLocalPanelCatalogSubgroupsByCompanyResponse,
+  getLocalPanelCatalogTestsByCompanyResponse,
+  searchLocalPanelCatalogTestsByCompanyResponse,
   getLocalMatchedPanelCompaniesResponse,
   getLocalPanelCompaniesResponse,
 } from '../local/panelCatalogLocal';
 
-const WRITE_REQUEST_TIMEOUT_MS = 10000;
+const WRITE_REQUEST_TIMEOUT_MS = 4000;
+const COMPLETE_BOOKING_REQUEST_TIMEOUT_MS = 7000;
 
 const parseJsonResponse = async response => {
   try {
@@ -33,9 +42,7 @@ const parseJsonResponse = async response => {
   }
 };
 
-const logAppointmentDetailDebug = (label, payload) => {
-  return undefined;
-};
+const logAppointmentDetailDebug = () => {};
 
 const isPatientBookingMappingError = message =>
   /patient\s+.+\s+is\s+not\s+mapped\s+to\s+booking\s+/i.test(
@@ -216,62 +223,64 @@ const hasCompleteBookingAttachments = ({
   );
 };
 
-const appendUploadDocumentToFormData = (formData, fieldName, document) => {
+const buildUploadDocumentPart = (fieldName, document) => {
   if (!isUploadableDocument(document)) {
-    return;
+    return null;
   }
 
-  formData.append(fieldName, {
+  return {
+    fieldName,
     uri: document.uri,
     name: document.name || `${fieldName}-${Date.now()}`,
     type: document.type || 'application/octet-stream',
-  });
+  };
 };
 
-const appendDocumentListToFormData = (formData, fieldName, documents) => {
-  (Array.isArray(documents) ? documents : []).forEach(document => {
-    appendUploadDocumentToFormData(formData, fieldName, document);
-  });
-};
+const buildDocumentPartList = (fieldName, documents) =>
+  (Array.isArray(documents) ? documents : [])
+    .map(document => buildUploadDocumentPart(fieldName, document))
+    .filter(Boolean);
 
-const appendPatientDocumentsToFormData = ({
-  formData,
+const buildPatientDocumentParts = ({
   patientDocumentsMap,
   manualSlipDocumentsMap,
   patientCghsDocumentsMap,
 }) => {
-  Object.entries(patientDocumentsMap || {}).forEach(([patientId, documents]) => {
-    appendDocumentListToFormData(
-      formData,
-      `patient_documents_${patientId}`,
-      documents,
-    );
-  });
+  const fileParts = [];
 
   Object.entries(manualSlipDocumentsMap || {}).forEach(([patientId, documents]) => {
-    appendDocumentListToFormData(
-      formData,
-      `patient_documents_${patientId}`,
-      documents,
+    fileParts.push(
+      ...buildDocumentPartList(`patient_documents_${patientId}`, documents),
     );
   });
 
   Object.entries(patientCghsDocumentsMap || {}).forEach(([patientId, sections]) => {
-    Object.values(sections || {}).forEach(documents => {
-      appendDocumentListToFormData(
-        formData,
+    fileParts.push(
+      ...buildDocumentPartList(`patient_documents_${patientId}`, sections?.cghsCard),
+    );
+    fileParts.push(
+      ...buildDocumentPartList(
         `patient_documents_${patientId}`,
-        documents,
-      );
-    });
+        sections?.patientPhotos,
+      ),
+    );
   });
+
+  Object.entries(patientDocumentsMap || {}).forEach(([patientId, documents]) => {
+    fileParts.push(
+      ...buildDocumentPartList(`patient_documents_${patientId}`, documents),
+    );
+  });
+
+  return fileParts;
 };
 
-const appendPaymentProofsToFormData = ({
-  formData,
+const buildPaymentProofParts = ({
   bookingDetail,
   paymentProofs,
 }) => {
+  const fileParts = [];
+
   (Array.isArray(paymentProofs) ? paymentProofs : []).forEach(paymentProof => {
     const patientId = getPaymentProofMasterPatientId(bookingDetail, paymentProof);
 
@@ -279,12 +288,15 @@ const appendPaymentProofsToFormData = ({
       return;
     }
 
-    appendDocumentListToFormData(
-      formData,
-      `payment_shot_${patientId}`,
-      paymentProof?.documents,
+    fileParts.push(
+      ...buildDocumentPartList(
+        `payment_shot_${patientId}`,
+        paymentProof?.documents,
+      ),
     );
   });
+
+  return fileParts;
 };
 
 const fetchWithTimeout = async (url, options = {}, timeoutMs = WRITE_REQUEST_TIMEOUT_MS) => {
@@ -336,16 +348,9 @@ const postCompleteBookingStatus = async ({
     patientCghsDocumentsMap,
   });
 
-  if (__DEV__) {
-    console.log(
-      '[Complete Booking API Payload]',
-      JSON.stringify(payload, null, 2),
-    );
-  }
-
   logAppointmentDetailDebug('[Complete Booking API Request]', {
     url: apiUrl,
-    transport: 'multipart-secure',
+    transport: hasUploadableAttachments ? 'multipart-fetch' : 'json-secure',
     hasUploadableAttachments,
     payload,
     patientDocumentPatientIds: Object.keys(patientDocumentsMap || {}),
@@ -361,29 +366,51 @@ const postCompleteBookingStatus = async ({
     cghsDocumentCounts: buildSectionUploadCountMap(patientCghsDocumentsMap),
   });
 
-  const formData = new FormData();
-  formData.append('payload', JSON.stringify(payload));
-  appendPatientDocumentsToFormData({
-    formData,
-    patientDocumentsMap,
-    manualSlipDocumentsMap,
-    patientCghsDocumentsMap,
-  });
-  appendPaymentProofsToFormData({
-    formData,
-    bookingDetail,
-    paymentProofs,
-  });
+  if (!hasUploadableAttachments) {
+    const response = await secureFetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(payload),
+      timeoutMs: COMPLETE_BOOKING_REQUEST_TIMEOUT_MS,
+    });
 
-  // SecureApiModule accepts string bodies only. Multipart uploads must use
-  // React Native fetch so FormData file parts reach the native networking stack.
-  const response = await fetchWithTimeout(apiUrl, {
+    logAppointmentDetailDebug('[Complete Booking API HTTP Status]', {
+      status: response.status,
+      ok: response.ok,
+      transport: 'json-secure',
+    });
+
+    const responseData = await parseJsonResponse(response, '[Booking Status]');
+    return {response, responseData};
+  }
+
+  const files = [
+    ...buildPatientDocumentParts({
+      patientDocumentsMap,
+      manualSlipDocumentsMap,
+      patientCghsDocumentsMap,
+    }),
+    ...buildPaymentProofParts({
+      bookingDetail,
+      paymentProofs,
+    }),
+  ];
+
+  const response = await secureMultipartFetch({
+    url: apiUrl,
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
-    body: formData,
-  }, WRITE_REQUEST_TIMEOUT_MS);
+    fields: {
+      payload: JSON.stringify(payload),
+    },
+    files,
+    timeoutMs: COMPLETE_BOOKING_REQUEST_TIMEOUT_MS,
+  });
   logAppointmentDetailDebug('[Complete Booking API HTTP Status]', {
     status: response.status,
     ok: response.ok,
@@ -415,6 +442,54 @@ const getApiErrorMessage = (response, responseData, fallbackMessage) => {
   }
 
   return '';
+};
+
+const buildAssignedBookingCancelPayload = statusPayload => {
+  const payload = statusPayload || {};
+  const isRescheduleRequested = Boolean(
+    payload.reschedule_requested || payload.is_reschedule_requested,
+  );
+  const reasonText = String(
+    payload.reason_text ||
+      payload.cancel_reason ||
+      payload.cancellation_reason ||
+      payload.reason ||
+      '',
+  ).trim();
+  const remark = String(
+    payload.remark ||
+      payload.cancel_remark ||
+      payload.cancel_remarks ||
+      payload.remarks ||
+      '',
+  ).trim();
+  const proposedVisitDate = String(
+    payload.proposed_visit_date ||
+      payload.reschedule_date ||
+      payload.new_visit_date ||
+      '',
+  ).trim();
+  const proposedTimeSlot = String(
+    payload.proposed_time_slot ||
+      payload.reschedule_slot ||
+      payload.new_time_slot ||
+      '',
+  ).trim();
+  const cancelPayload = {
+    reason_text: reasonText,
+    remark,
+    reschedule_requested: isRescheduleRequested,
+  };
+  if (payload.appointment_id !== undefined && payload.appointment_id !== null) {
+    cancelPayload.appointment_id = payload.appointment_id;
+  }
+
+  if (isRescheduleRequested) {
+    cancelPayload.proposed_visit_date = proposedVisitDate || null;
+    cancelPayload.proposed_time_slot = proposedTimeSlot || null;
+  }
+
+  return cancelPayload;
 };
 
 export const fetchAssignedBookingsApi = async ({accessToken, loggedInUser}) => {
@@ -652,7 +727,53 @@ export const updateAssignedBookingStatusApi = async ({
     return responseData;
   }
 
-  if (normalizedSourceType === 'APPOINTMENT' && normalizedAppointmentId) {
+  if (payload.action === 'cancel' || payload.action === 'cancelled') {
+    if (normalizedSourceType === 'APPOINTMENT' && normalizedAppointmentId) {
+      const numericAppointmentId = Number(normalizedAppointmentId);
+      payload.appointment_id = Number.isFinite(numericAppointmentId)
+        ? numericAppointmentId
+        : normalizedAppointmentId;
+    }
+    const cancelPayload = buildAssignedBookingCancelPayload(payload);
+    const response = await secureFetch(getAssignedBookingCancelApiUrl(bookingId), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(cancelPayload),
+      timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
+    });
+
+    const responseData = await parseJsonResponse(response, '[Cancel Booking]');
+    const errorMessage = getApiErrorMessage(
+      response,
+      responseData,
+      'Unable to cancel booking right now.',
+    );
+
+    if (errorMessage) {
+      throw new Error(errorMessage);
+    }
+
+    return responseData;
+  }
+
+  if (
+    (payload.action === 'start' || payload.action === 'stop') &&
+    normalizedSourceType === 'APPOINTMENT' &&
+    normalizedAppointmentId
+  ) {
+    const numericAppointmentId = Number(normalizedAppointmentId);
+    payload.appointment_id = Number.isFinite(numericAppointmentId)
+      ? numericAppointmentId
+      : normalizedAppointmentId;
+  } else if (
+    payload.action !== 'start' &&
+    payload.action !== 'stop' &&
+    normalizedSourceType === 'APPOINTMENT' &&
+    normalizedAppointmentId
+  ) {
     const numericAppointmentId = Number(normalizedAppointmentId);
     payload.appointment_id = Number.isFinite(numericAppointmentId)
       ? numericAppointmentId
@@ -666,6 +787,7 @@ export const updateAssignedBookingStatusApi = async ({
       Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify(payload),
+    timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
   });
 
   const responseData = await parseJsonResponse(response, '[Booking Status]');
@@ -680,6 +802,209 @@ export const updateAssignedBookingStatusApi = async ({
   }
 
   return responseData;
+};
+
+export const saveAssignedBookingHandoverBatchApi = async ({
+  accessToken,
+  payload,
+}) => {
+  const url = getAssignedBookingBatchSaveApiUrl();
+
+  const response = await secureFetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(payload || {}),
+    timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
+  });
+
+  const responseData = await parseJsonResponse(response, '[Handover Batch Save]');
+  const errorMessage = getApiErrorMessage(
+    response,
+    responseData,
+    'Unable to save handover right now.',
+  );
+
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
+
+  return responseData;
+};
+
+const normalizeHandoverHistoryItems = responseData => {
+  const sourceItems =
+    responseData?.items ||
+    responseData?.data?.items ||
+    responseData?.data ||
+    responseData?.results ||
+    responseData?.batches ||
+    [];
+
+  return (Array.isArray(sourceItems) ? sourceItems : []).map((item, index) => ({
+    id:
+      item?.id ||
+      item?.batch_id ||
+      item?.batch?.id ||
+      item?.handover_id ||
+      `handover-history-${index}`,
+    handoverTo:
+      item?.handover_to ||
+      item?.handoverTo ||
+      item?.batch?.handover_to ||
+      item?.batch?.handoverTo ||
+      '',
+    riderName:
+      item?.rider_name ||
+      item?.riderName ||
+      item?.batch?.rider_name ||
+      item?.batch?.riderName ||
+      '',
+    handedOverAt:
+      item?.handed_over_at ||
+      item?.handedOverAt ||
+      item?.created_at ||
+      item?.createdAt ||
+      item?.batch?.handed_over_at ||
+      item?.batch?.handedOverAt ||
+      '',
+    bookingCount:
+      Number(
+        item?.booking_count ||
+          item?.bookingCount ||
+          item?.batch?.booking_count ||
+          item?.batch?.bookingCount ||
+          0,
+      ) || 0,
+    patientCount:
+      Number(
+        item?.patient_count ||
+          item?.patientCount ||
+          item?.batch?.patient_count ||
+          item?.batch?.patientCount ||
+          0,
+      ) || 0,
+    tubeCount:
+      Number(
+        item?.tube_count ||
+          item?.tubeCount ||
+          item?.batch?.tube_count ||
+          item?.batch?.tubeCount ||
+          0,
+      ) || 0,
+    patients: Array.isArray(item?.patients) ? item.patients : [],
+    tubes: Array.isArray(item?.tubes) ? item.tubes : [],
+    bookings: Array.isArray(item?.bookings)
+      ? item.bookings
+      : Array.isArray(item?.batch?.bookings)
+      ? item.batch.bookings
+      : [],
+  }));
+};
+
+export const fetchAssignedBookingHandoverHistoryApi = async ({
+  accessToken,
+  limit = 50,
+  offset = 0,
+}) => {
+  const url = getAssignedBookingBatchHistoryApiUrl({limit, offset});
+  const response = await secureFetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  const responseData = await parseJsonResponse(response, '[Handover Batch History]');
+  const errorMessage = getApiErrorMessage(
+    response,
+    responseData,
+    'Unable to load handover history right now.',
+  );
+
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
+
+  return normalizeHandoverHistoryItems(responseData);
+};
+
+const normalizeRiderSuggestion = rider => {
+  if (typeof rider === 'string') {
+    const name = rider.trim();
+    return name ? {id: name, name} : null;
+  }
+
+  if (!rider || typeof rider !== 'object') {
+    return null;
+  }
+
+  const name = String(
+    rider.name ||
+      rider.full_name ||
+      rider.fullName ||
+      rider.username ||
+      rider.user_name ||
+      rider.display_name ||
+      '',
+  ).trim();
+
+  if (!name) {
+    return null;
+  }
+
+  return {
+    ...rider,
+    id: String(rider.id || rider.user_id || rider.userId || name).trim(),
+    name,
+  };
+};
+
+const extractRiderSuggestions = responseData => {
+  const source =
+    responseData?.data?.riders ||
+    responseData?.data?.users ||
+    responseData?.data?.items ||
+    responseData?.data ||
+    responseData?.riders ||
+    responseData?.users ||
+    responseData?.items ||
+    responseData?.result ||
+    responseData;
+
+  return (Array.isArray(source) ? source : [])
+    .map(normalizeRiderSuggestion)
+    .filter(Boolean);
+};
+
+export const fetchRiderSuggestionsApi = async ({
+  accessToken,
+  query,
+  limit = 8,
+}) => {
+  const url = getRiderSuggestionsApiUrl({query, limit});
+
+  const response = await secureFetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  const responseData = await parseJsonResponse(response, '[Rider Suggestions]');
+  const errorMessage = getApiErrorMessage(
+    response,
+    responseData,
+    'Unable to load rider suggestions right now.',
+  );
+
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
+
+  return extractRiderSuggestions(responseData);
 };
 
 export const addAssignedBookingPatientApi = async ({
@@ -697,6 +1022,7 @@ export const addAssignedBookingPatientApi = async ({
       body: JSON.stringify({
         existing_patient_id: Number(patient.existing_patient_id),
       }),
+      timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
     });
 
     const responseData = await parseJsonResponse(response, '[Add Existing Patient]');
@@ -746,6 +1072,7 @@ export const addAssignedBookingPatientApi = async ({
         ...(patient?.card_no ? {card_no: String(patient.card_no)} : {}),
         ...(patient?.tag ? {tag: String(patient.tag)} : {}),
       }),
+      timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
     });
 
     const responseData = await parseJsonResponse(response, '[Add Patient]');
@@ -831,6 +1158,7 @@ export const updateAssignedBookingAddressApi = async ({
       Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify(addressPayload || {}),
+    timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
   });
 
   const responseData = await parseJsonResponse(response, '[Update Address]');
@@ -862,6 +1190,7 @@ export const cancelAssignedBookingPatientApi = async ({
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(cancelPayload || {}),
+      timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
     },
   );
 
@@ -999,7 +1328,60 @@ export const fetchPanelCatalogByCompanyApi = async ({
   accessToken,
   compCatId,
   panelCompany,
+  catalogLevel = 'full',
+  gcode = '',
+  scode = '',
+  query = '',
 }) => {
+  if (catalogLevel === 'groups') {
+    const localResponseData =
+      await getLocalPanelCatalogGroupsByCompanyResponse(panelCompany || {compCatId});
+
+    if (localResponseData?.ok && Array.isArray(localResponseData?.groups)) {
+      return localResponseData;
+    }
+  }
+
+  if (catalogLevel === 'subgroups') {
+    const localResponseData =
+      await getLocalPanelCatalogSubgroupsByCompanyResponse({
+        panelCompany: panelCompany || {compCatId},
+        gcode,
+      });
+
+    if (localResponseData?.ok && Array.isArray(localResponseData?.subgroups)) {
+      return localResponseData;
+    }
+  }
+
+  if (catalogLevel === 'tests') {
+    const localResponseData =
+      await getLocalPanelCatalogTestsByCompanyResponse({
+        panelCompany: panelCompany || {compCatId},
+        gcode,
+        scode,
+      });
+
+    if (localResponseData?.ok && Array.isArray(localResponseData?.tests)) {
+      return localResponseData;
+    }
+  }
+
+  if (catalogLevel === 'search') {
+    const localResponseData =
+      await searchLocalPanelCatalogTestsByCompanyResponse({
+        panelCompany: panelCompany || {compCatId},
+        query,
+        limit: 80,
+      });
+
+    if (localResponseData?.ok && Array.isArray(localResponseData?.tests)) {
+      return localResponseData;
+    }
+
+    return {ok: false, tests: []};
+  }
+
   const localResponseData = await getLocalPanelCatalogByCompanyResponse(
     panelCompany || compCatId,
   );

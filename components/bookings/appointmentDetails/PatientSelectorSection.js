@@ -1,8 +1,64 @@
-import React from 'react';
+import React, {useCallback} from 'react';
 import {ScrollView, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 import {BRAND} from '../../../styles/appStyles';
+
+const PatientSelectorChip = React.memo(function PatientSelectorChip({
+  styles,
+  item,
+  isSelected,
+  onSelect,
+}) {
+  const isDone = [3, 5].includes(item.statusCode);
+  const isCancelled = item.statusCode === 4;
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      style={[
+        styles.patientSelectorChip,
+        isSelected && styles.patientSelectorChipActive,
+        isCancelled && styles.patientSelectorChipCancelled,
+      ]}
+      onPress={() => onSelect(item.key)}>
+      <View style={styles.patientSelectorChipTopRow}>
+        <Text
+          style={[
+            styles.patientSelectorChipName,
+            isSelected && styles.patientSelectorChipNameActive,
+          ]}
+          numberOfLines={1}>
+          {item.index + 1}. {item.name}
+        </Text>
+        {isSelected ? (
+          <Ionicons
+            name="checkmark-circle"
+            size={15}
+            style={styles.patientSelectorChipCheck}
+          />
+        ) : null}
+      </View>
+      <Text
+        style={[
+          styles.patientSelectorChipMeta,
+          isSelected && styles.patientSelectorChipMetaActive,
+        ]}
+        numberOfLines={1}>
+        {item.meta || 'No PID/mobile'}
+      </Text>
+      <Text
+        style={[
+          styles.patientSelectorChipStatus,
+          isSelected && styles.patientSelectorChipStatusActive,
+          isDone && styles.patientSelectorChipStatusDone,
+          isCancelled && styles.patientSelectorChipStatusCancelled,
+        ]}>
+        {item.statusLabel}
+      </Text>
+    </TouchableOpacity>
+  );
+});
 
 function PatientSelectorSection({
   styles,
@@ -15,6 +71,13 @@ function PatientSelectorSection({
   setPatientSearchText,
   setSelectedPatientKey,
 }) {
+  const handleSelectPatient = useCallback(
+    patientKey => {
+      setSelectedPatientKey(patientKey);
+    },
+    [setSelectedPatientKey],
+  );
+
   return (
     <View style={styles.patientSelectorCard}>
       <View
@@ -63,58 +126,15 @@ function PatientSelectorSection({
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.patientSelectorList}>
         {filteredPatientSelectorItems.length ? (
-          filteredPatientSelectorItems.map(item => {
-            const isSelected = selectedPatientItem?.key === item.key;
-            const isDone = [3, 5].includes(item.statusCode);
-            const isCancelled = item.statusCode === 4;
-
-            return (
-              <TouchableOpacity
-                key={`patient-selector-${item.key}`}
-                activeOpacity={0.85}
-                style={[
-                  styles.patientSelectorChip,
-                  isSelected && styles.patientSelectorChipActive,
-                  isCancelled && styles.patientSelectorChipCancelled,
-                ]}
-                onPress={() => setSelectedPatientKey(item.key)}>
-                <View style={styles.patientSelectorChipTopRow}>
-                  <Text
-                    style={[
-                      styles.patientSelectorChipName,
-                      isSelected && styles.patientSelectorChipNameActive,
-                    ]}
-                    numberOfLines={1}>
-                    {item.index + 1}. {item.name}
-                  </Text>
-                  {isSelected ? (
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={15}
-                      style={styles.patientSelectorChipCheck}
-                    />
-                  ) : null}
-                </View>
-                <Text
-                  style={[
-                    styles.patientSelectorChipMeta,
-                    isSelected && styles.patientSelectorChipMetaActive,
-                  ]}
-                  numberOfLines={1}>
-                  {item.meta || 'No PID/mobile'}
-                </Text>
-                <Text
-                  style={[
-                    styles.patientSelectorChipStatus,
-                    isSelected && styles.patientSelectorChipStatusActive,
-                    isDone && styles.patientSelectorChipStatusDone,
-                    isCancelled && styles.patientSelectorChipStatusCancelled,
-                  ]}>
-                  {item.statusLabel}
-                </Text>
-              </TouchableOpacity>
-            );
-          })
+          filteredPatientSelectorItems.map(item => (
+            <PatientSelectorChip
+              key={`patient-selector-${item.key}`}
+              styles={styles}
+              item={item}
+              isSelected={selectedPatientItem?.key === item.key}
+              onSelect={handleSelectPatient}
+            />
+          ))
         ) : (
           <Text style={styles.patientSelectorEmptyText}>No patient found.</Text>
         )}

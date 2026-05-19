@@ -41,6 +41,7 @@ import {
 import {logDebug, warnDebug} from '../utils/app/logger';
 import {showPlatformMessage} from '../utils/ui/notifications';
 import {
+  upsertLocalPendingHandoverRowsResponse,
   getLocalMatchedPanelCompaniesResponse,
   getLocalPanelCatalogByCompanyResponse,
 } from '../services/local/panelCatalogLocal';
@@ -205,6 +206,57 @@ const isTerminalBookingAction = action =>
 
 const MAX_ASSIGNED_BOOKING_DETAIL_WARM_CACHE = 3;
 
+const toHandoverTubeName = tube =>
+  typeof tube === 'string'
+    ? toDisplayValue(tube)
+    : toDisplayValue(tube?.tubeName || tube?.name || tube?.specimenName);
+
+const buildPendingHandoverRowsFromBooking = bookingDetail => {
+  const bookingId = toDisplayValue(bookingDetail?.id);
+  if (!bookingId) {
+    return [];
+  }
+
+  const bookingCode = toDisplayValue(
+    bookingDetail?.bookingCode ||
+      bookingDetail?.booking_code ||
+      bookingDetail?.code ||
+      bookingDetail?.bookingNumber ||
+      bookingId,
+  );
+  const completedAt = new Date().toISOString();
+
+  return (Array.isArray(bookingDetail?.patients) ? bookingDetail.patients : []).flatMap(
+    patient => {
+      const bookingPatientId = toDisplayValue(
+        patient?.bookingPatientId || patient?.booking_patient_id || patient?.id,
+      );
+      const patientId = toDisplayValue(
+        patient?.patientId || patient?.patient_id || patient?.id,
+      );
+      const patientName = toDisplayValue(patient?.name || patient?.full_name);
+
+      if (!bookingPatientId) {
+        return [];
+      }
+
+      return (Array.isArray(patient?.tubes) ? patient.tubes : [])
+        .map(toHandoverTubeName)
+        .filter(Boolean)
+        .map(tubeName => ({
+          row_key: `${bookingId}|${bookingPatientId}|${tubeName.toLowerCase()}`,
+          booking_id: bookingId,
+          booking_code: bookingCode,
+          patient_id: patientId,
+          booking_patient_id: bookingPatientId,
+          patient_name: patientName,
+          tube_name: tubeName,
+          completed_at: completedAt,
+        }));
+    },
+  );
+};
+
 const selectBookingsForWarmCache = bookings => {
   const sourceBookings = Array.isArray(bookings) ? bookings : [];
   const prioritizedBookings = [];
@@ -247,9 +299,18 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
   const panelCompanyCatalogCacheRef = useRef(new Map());
   const matchedPanelCompanyCacheRef = useRef(new Map());
   const isPendingOfflineSyncRunningRef = useRef(false);
+  const inFlightBookingActionKeysRef = useRef(new Set());
+  const inFlightBookingDetailRequestsRef = useRef(new Map());
 
   const getPanelCompanyCatalogCacheKey = useCallback(
-    ({compCatId, panelCompany}) =>
+    ({
+      compCatId,
+      panelCompany,
+      catalogLevel = 'full',
+      gcode = '',
+      scode = '',
+      query = '',
+    }) =>
       [
         toDisplayValue(panelCompany?.panelCode || panelCompany?.code),
         toDisplayValue(panelCompany?.panelAbarid || panelCompany?.ABARID).toUpperCase(),
@@ -257,6 +318,10 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         toDisplayValue(panelCompany?.atype || panelCompany?.Atype).toUpperCase(),
         toDisplayValue(compCatId || panelCompany?.compCatId),
         toDisplayValue(panelCompany?.name).toLowerCase(),
+        toDisplayValue(catalogLevel).toLowerCase(),
+        toDisplayValue(gcode).toUpperCase(),
+        toDisplayValue(scode).toUpperCase(),
+        toDisplayValue(query).toLowerCase(),
       ].join('|'),
     [],
   );
@@ -327,6 +392,15 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     async bookingDetail => {
       if (!bookingDetail?.id) {
         return;
+      }
+
+      try {
+        const pendingHandoverRows = buildPendingHandoverRowsFromBooking(bookingDetail);
+        if (pendingHandoverRows.length) {
+          await upsertLocalPendingHandoverRowsResponse(pendingHandoverRows);
+        }
+      } catch (error) {
+        warnDebug('Pending handover rows update error:', error);
       }
 
       setCompletedAppointments(previousAppointments => {
@@ -623,8 +697,18 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
   }, [accessToken]);
 
   const fetchAssignedAppointments = useCallback(async () => {
+    const cachedBookings = await getCachedAssignedBookings();
+    const hasCachedBookings = cachedBookings.length > 0;
+
     try {
-      setIsLoadingAssignedAppointments(true);
+      if (hasCachedBookings) {
+        setAssignedAppointments(cachedBookings);
+        setAssignedAppointmentsError('');
+        setIsLoadingAssignedAppointments(false);
+      } else {
+        setIsLoadingAssignedAppointments(true);
+      }
+
       setAssignedAppointmentsError('');
       await syncPendingOfflineWork({force: true});
       const normalizedBookings = await fetchAssignedBookingsApi({
@@ -643,9 +727,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       });
       warnDebug('Assigned appointments error:', error);
 
-      const cachedBookings = await getCachedAssignedBookings();
-
-      if (cachedBookings.length) {
+      if (hasCachedBookings) {
         setAssignedAppointments(cachedBookings);
         setAssignedAppointmentsError('');
         showPlatformMessage(
@@ -720,8 +802,42 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         return null;
       }
 
+      const normalizedBookingId = String(bookingId);
+      const refreshBookingDetailInBackground = () => {
+        if (inFlightBookingDetailRequestsRef.current.has(normalizedBookingId)) {
+          return;
+        }
+
+        const refreshPromise = (async () => {
+          try {
+            await syncPendingOfflineWork({force: true});
+            const bookingDetail = await fetchAssignedBookingDetailApi({
+              accessToken,
+              booking,
+            });
+            await persistBookingDetail(bookingDetail);
+          } catch (error) {
+            warnDebug('Assigned booking detail background refresh skipped:', error);
+          } finally {
+            inFlightBookingDetailRequestsRef.current.delete(normalizedBookingId);
+          }
+        })();
+
+        inFlightBookingDetailRequestsRef.current.set(
+          normalizedBookingId,
+          refreshPromise,
+        );
+      };
+
       try {
-        setLoadingAssignedBookingId(bookingId);
+        const cachedBookingDetail = await getCachedBookingDetail(bookingId);
+
+        if (cachedBookingDetail) {
+          refreshBookingDetailInBackground();
+          return cachedBookingDetail;
+        }
+
+        setLoadingAssignedBookingId(normalizedBookingId);
         await syncPendingOfflineWork({force: true});
         const bookingDetail = await fetchAssignedBookingDetailApi({
           accessToken,
@@ -748,7 +864,11 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         );
         return null;
       } finally {
-        setLoadingAssignedBookingId('');
+        setLoadingAssignedBookingId(previousLoadingBookingId =>
+          previousLoadingBookingId === normalizedBookingId
+            ? ''
+            : previousLoadingBookingId,
+        );
       }
     },
     [accessToken, syncPendingOfflineWork],
@@ -780,6 +900,11 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         return false;
       }
 
+      const actionKey = `${String(bookingId)}|${String(action || '').trim().toLowerCase()}`;
+      if (inFlightBookingActionKeysRef.current.has(actionKey)) {
+        return false;
+      }
+
       if (action === 'start') {
         const activeStartedBooking = assignedAppointments.find(
           appointment =>
@@ -798,6 +923,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       }
 
       try {
+        inFlightBookingActionKeysRef.current.add(actionKey);
         setBookingActionLoading(action);
         const {appointmentId, sourceType} = resolveBookingRoutingMeta(booking);
         await updateAssignedBookingStatusApi({
@@ -860,6 +986,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         );
         return false;
       } finally {
+        inFlightBookingActionKeysRef.current.delete(actionKey);
         setBookingActionLoading('');
       }
     },
@@ -1231,7 +1358,16 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
   );
 
   const fetchPanelCatalogForCompany = useCallback(
-    async ({booking, patient, compCatId, panelCompany}) => {
+    async ({
+      booking,
+      patient,
+      compCatId,
+      panelCompany,
+      catalogLevel = 'full',
+      gcode = '',
+      scode = '',
+      query = '',
+    }) => {
       const bookingId = booking?.id;
       const bookingPatientId = getPatientMutationId(patient);
       const normalizedCompCatId = toDisplayValue(
@@ -1265,6 +1401,10 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       const cacheKey = getPanelCompanyCatalogCacheKey({
         compCatId: normalizedCompCatId,
         panelCompany,
+        catalogLevel,
+        gcode,
+        scode,
+        query,
       });
       const cachedResponse = panelCompanyCatalogCacheRef.current.get(cacheKey);
       if (cachedResponse) {
@@ -1274,8 +1414,10 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       try {
         setAddingTestPatientId(String(bookingPatientId));
         const localResponse =
-          await getLocalPanelCatalogByCompanyResponse(panelCompany);
-        if (localResponse?.groups?.length) {
+          catalogLevel === 'full'
+            ? await getLocalPanelCatalogByCompanyResponse(panelCompany)
+            : null;
+        if (catalogLevel === 'full' && localResponse?.groups?.length) {
           panelCompanyCatalogCacheRef.current.set(cacheKey, localResponse);
           return localResponse;
         }
@@ -1284,6 +1426,10 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
           accessToken,
           compCatId: normalizedCompCatId,
           panelCompany,
+          catalogLevel,
+          gcode,
+          scode,
+          query,
         });
         panelCompanyCatalogCacheRef.current.set(cacheKey, responseData);
         return responseData;

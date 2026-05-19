@@ -448,6 +448,25 @@ const buildAppointmentDetailStateFromBooking = booking => {
   return state;
 };
 
+const stripPrecomputedSampleCollectionMap = sampleCollectionMap => {
+  if (!sampleCollectionMap || typeof sampleCollectionMap !== 'object') {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(sampleCollectionMap).map(([patientId, patientState]) => [
+      patientId,
+      patientState && typeof patientState === 'object'
+        ? Object.fromEntries(
+            Object.entries(patientState).filter(
+              ([key]) => key !== 'precomputedSampleTubeData',
+            ),
+          )
+        : patientState,
+    ]),
+  );
+};
+
 const getCollectedTubeNames = (patient, sampleCollection) => {
   const selectedTubes = Array.isArray(sampleCollection?.selectedTubes)
     ? sampleCollection.selectedTubes
@@ -689,7 +708,9 @@ const buildAppointmentDetailDraftForStorage = ({state, selectedBooking}) => {
       patientSelectedTestsMap: draftSelectedTestsMap,
       patientReportCourierMap: safeState.patientReportCourierMap || {},
       patientReportScheduleMap: safeState.patientReportScheduleMap || {},
-      patientSampleCollectionMap: safeState.patientSampleCollectionMap || {},
+      patientSampleCollectionMap: stripPrecomputedSampleCollectionMap(
+        safeState.patientSampleCollectionMap,
+      ),
       patientTestBookingStatusMap: safeState.patientTestBookingStatusMap || {},
       patientCghsEnabledMap: safeState.patientCghsEnabledMap || {},
       patientCghsIdMap: safeState.patientCghsIdMap || {},
@@ -926,6 +947,7 @@ export const useAppShellController = () => {
   const [selectedSamplePanelCompany, setSelectedSamplePanelCompany] = useState(null);
   const [localDatabaseLoadingMessage, setLocalDatabaseLoadingMessage] =
     useState('');
+  const [screenTransitionOverlay, setScreenTransitionOverlay] = useState(null);
   const [appointmentDetailState, setAppointmentDetailState] = useState(
     buildEmptyAppointmentDetailState,
   );
@@ -936,6 +958,7 @@ export const useAppShellController = () => {
   const isAppointmentDetailStateHydratedRef = useRef(false);
   const clearedAppointmentDraftKeysRef = useRef(new Set());
   const appointmentDraftUpdateTimerRef = useRef(null);
+  const screenTransitionTimerRef = useRef(null);
   const latestDraftSignatureByKeyRef = useRef({});
   const lastAppointmentsViewModeRef = useRef('assigned');
   const {width, height} = useWindowDimensions();
@@ -964,7 +987,49 @@ export const useAppShellController = () => {
     [bookings.assignedAppointments],
   );
 
+  const beginScreenTransition = useCallback(
+    (title, message, minimumVisibleMs = 320) => {
+      const overlayId = `${Date.now()}-${Math.random()}`;
+      const startedAt = Date.now();
+      const normalizedMessage =
+        message === undefined
+          ? 'Preparing the next screen for you...'
+          : toStableValue(message);
+
+      if (screenTransitionTimerRef.current) {
+        clearTimeout(screenTransitionTimerRef.current);
+        screenTransitionTimerRef.current = null;
+      }
+
+      setScreenTransitionOverlay({
+        id: overlayId,
+        title: toStableValue(title) || 'Opening Screen',
+        message: normalizedMessage,
+      });
+
+      return () => {
+        const remainingTime = Math.max(
+          0,
+          minimumVisibleMs - (Date.now() - startedAt),
+        );
+
+        if (screenTransitionTimerRef.current) {
+          clearTimeout(screenTransitionTimerRef.current);
+        }
+
+        screenTransitionTimerRef.current = setTimeout(() => {
+          setScreenTransitionOverlay(currentOverlay =>
+            currentOverlay?.id === overlayId ? null : currentOverlay,
+          );
+          screenTransitionTimerRef.current = null;
+        }, remainingTime);
+      };
+    },
+    [],
+  );
+
   const isHomeOverlayVisible =
+    Boolean(screenTransitionOverlay) ||
     bookings.isLoadingAssignedAppointments ||
     bookings.isLoadingCompletedAppointments ||
     Boolean(bookings.loadingAssignedBookingId) ||
@@ -978,6 +1043,11 @@ export const useAppShellController = () => {
     ? {
         title: 'Loading Local Data',
         message: localDatabaseLoadingMessage,
+      }
+    : screenTransitionOverlay
+    ? {
+        title: screenTransitionOverlay.title,
+        message: screenTransitionOverlay.message,
       }
     : getLoadingOverlayCopy({
         appointmentsViewMode,
@@ -997,6 +1067,15 @@ export const useAppShellController = () => {
 
     return () => clearTimeout(splashTimer);
   }, []);
+
+  useEffect(
+    () => () => {
+      if (screenTransitionTimerRef.current) {
+        clearTimeout(screenTransitionTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -1125,6 +1204,15 @@ export const useAppShellController = () => {
       emptyListLength,
       missingTokenMessage,
     }) => {
+      const finishScreenTransition = beginScreenTransition(
+        viewMode === 'completed'
+          ? 'Opening Completed Appointments'
+          : viewMode === 'started'
+          ? 'Opening Started Appointments'
+          : 'Opening Assigned Appointments',
+        'Getting the latest booking list ready...',
+      );
+
       setSelectedBooking(null);
       setSelectedBookingScreen('details');
       setSelectedSamplePatient(null);
@@ -1136,12 +1224,17 @@ export const useAppShellController = () => {
 
       if (!session.accessToken) {
         errorSetter(emptyListLength ? '' : missingTokenMessage);
+        finishScreenTransition();
         return;
       }
 
-      await fetcher();
+      try {
+        await fetcher();
+      } finally {
+        finishScreenTransition();
+      }
     },
-    [session.accessToken],
+    [beginScreenTransition, session.accessToken],
   );
 
   const handleTabChange = useCallback(
@@ -1149,6 +1242,17 @@ export const useAppShellController = () => {
       if (nextTab === activeTab) {
         return;
       }
+
+      const finishScreenTransition = beginScreenTransition(
+        nextTab === 'saved'
+          ? 'Opening Handover'
+          : nextTab === 'profile'
+          ? 'Opening Profile'
+          : nextTab === 'appointments'
+          ? 'Opening Appointments'
+          : 'Opening Dashboard',
+        'Switching screens...',
+      );
 
       setSelectedBooking(null);
       setSelectedBookingScreen('details');
@@ -1169,10 +1273,15 @@ export const useAppShellController = () => {
               ? ''
               : 'A valid login token is required before opening assigned appointments.',
           );
+          finishScreenTransition();
           return;
         }
 
-        await bookings.fetchAssignedAppointments();
+        try {
+          await bookings.fetchAssignedAppointments();
+        } finally {
+          finishScreenTransition();
+        }
         return;
       }
 
@@ -1182,16 +1291,24 @@ export const useAppShellController = () => {
         setActiveTab(nextTab);
 
         if (session.accessToken) {
-          await bookings.fetchCompletedAppointments();
+          try {
+            await bookings.fetchCompletedAppointments();
+          } finally {
+            finishScreenTransition();
+          }
+          return;
         }
+
+        finishScreenTransition();
         return;
       }
 
       setAppointmentsViewMode('default');
       setTabHistory(previousHistory => [...previousHistory, activeTab]);
       setActiveTab(nextTab);
+      finishScreenTransition();
     },
-    [activeTab, bookings, session.accessToken],
+    [activeTab, beginScreenTransition, bookings, session.accessToken],
   );
 
   const handleAssignedCardPress = useCallback(
@@ -1238,7 +1355,18 @@ export const useAppShellController = () => {
 
   const handleAssignedViewDetails = useCallback(
     async booking => {
-      const bookingDetail = await bookings.openAssignedBooking(booking);
+      const finishScreenTransition = beginScreenTransition(
+        'Opening Appointment',
+        '',
+        420,
+      );
+      let bookingDetail = null;
+
+      try {
+        bookingDetail = await bookings.openAssignedBooking(booking);
+      } finally {
+        finishScreenTransition();
+      }
 
       if (bookingDetail) {
         const terminalStatusFromList = getTerminalBookingStatus(booking);
@@ -1317,7 +1445,12 @@ export const useAppShellController = () => {
           .catch(() => {});
       }
     },
-    [appointmentDetailDrafts, appointmentsViewMode, bookings],
+    [
+      appointmentDetailDrafts,
+      appointmentsViewMode,
+      beginScreenTransition,
+      bookings,
+    ],
   );
 
   const handleOpenSampleCollection = useCallback(
@@ -1325,6 +1458,12 @@ export const useAppShellController = () => {
       if (!selectedBooking || !patient) {
         return;
       }
+
+      const finishScreenTransition = beginScreenTransition(
+        'Opening Sample Collection',
+        'Preparing specimen and tube mapping...',
+        420,
+      );
 
       const applyResolvedPanelCompany = resolvedPanelCompany => {
         if (!resolvedPanelCompany) {
@@ -1395,6 +1534,7 @@ export const useAppShellController = () => {
       setSelectedSamplePatient(patient);
       setSelectedSamplePanelCompany(resolvedPanelCompany || null);
       setSelectedBookingScreen('sample-collection');
+      finishScreenTransition();
 
       if (!resolvedPanelCompany) {
         resolvePanelCompanyFromPatientName(patient)
@@ -1402,7 +1542,7 @@ export const useAppShellController = () => {
           .catch(() => {});
       }
     },
-    [selectedBooking],
+    [beginScreenTransition, selectedBooking],
   );
 
   const handleOpenAddTest = useCallback(
@@ -1410,6 +1550,12 @@ export const useAppShellController = () => {
       if (!selectedBooking || !patient || !panelCompany) {
         return;
       }
+
+      const finishScreenTransition = beginScreenTransition(
+        'Opening Add Test',
+        'Preparing panel companies and test catalog...',
+        360,
+      );
 
       const patientId = getPatientMutationId(patient);
       if (patientId) {
@@ -1439,8 +1585,9 @@ export const useAppShellController = () => {
       setSelectedSamplePatient(patient);
       setSelectedSamplePanelCompany(panelCompany);
       setSelectedBookingScreen('add-test');
+      finishScreenTransition();
     },
-    [selectedBooking],
+    [beginScreenTransition, selectedBooking],
   );
 
   const handleTogglePatientTestSelection = useCallback(
@@ -1838,7 +1985,15 @@ export const useAppShellController = () => {
   );
 
   const handlePanelCompanySelect = useCallback(
-    async ({patient, compCatId, panelCompany}) => {
+    async ({
+      patient,
+      compCatId,
+      panelCompany,
+      catalogLevel,
+      gcode,
+      scode,
+      query,
+    }) => {
       if (!selectedBooking) {
         return null;
       }
@@ -1848,6 +2003,10 @@ export const useAppShellController = () => {
         patient,
         compCatId,
         panelCompany,
+        catalogLevel,
+        gcode,
+        scode,
+        query,
       });
     },
     [bookings, selectedBooking],

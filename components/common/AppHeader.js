@@ -28,7 +28,8 @@ export default function AppHeader({
             <TouchableOpacity
               activeOpacity={0.85}
               style={styles.appHeaderBookingBackButton}
-              onPress={onBack}>
+              onPress={onBack}
+              hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
               <Ionicons
                 name="chevron-back"
                 size={22}
@@ -110,7 +111,8 @@ export default function AppHeader({
           <TouchableOpacity
             activeOpacity={0.85}
             style={styles.backButton}
-            onPress={onBack}>
+            onPress={onBack}
+            hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
             <Ionicons name="chevron-back" size={24} style={styles.backButtonIcon} />
           </TouchableOpacity>
         ) : null}

@@ -11,13 +11,15 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
-import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
+import {SafeAreaView} from 'react-native-safe-area-context';
+import {APP_DISPLAY_VERSION} from '../../../constants/config/appVersion';
 
 const logoImage = require('../../../assets/logo.png');
 
 const SPLASH_MIN_DURATION = 2800;
 const NAVY = '#0a1628';
-const TEAL = '#4db696';
+const TEAL = '#71c3a8';
+const VERSION_SURFACE = 'rgba(255,255,255,0.14)';
 
 type SplashScreenProps = {
   navigation?: {
@@ -72,7 +74,6 @@ function LoadingDot({delay}: {delay: number}) {
 }
 
 export default function SplashScreen({navigation}: SplashScreenProps) {
-  const insets = useSafeAreaInsets();
   const pulseScale = useSharedValue(0.92);
   const logoOpacity = useSharedValue(0);
   const brandProgress = useSharedValue(0);
@@ -185,13 +186,8 @@ export default function SplashScreen({navigation}: SplashScreenProps) {
           </Animated.View>
         </View>
 
-        <Animated.Text
-          style={[
-            styles.versionText,
-            {bottom: insets.bottom + 32},
-            versionStyle,
-          ]}>
-          v1.0.0
+        <Animated.Text style={[styles.versionText, versionStyle]}>
+          {APP_DISPLAY_VERSION}
         </Animated.Text>
       </View>
     </SafeAreaView>
@@ -216,7 +212,7 @@ const styles = StyleSheet.create({
     height: 280,
     borderRadius: 140,
     borderWidth: 1,
-    borderColor: 'rgba(77,182,150,0.07)',
+    borderColor: 'rgba(255,255,255,0.16)',
     alignSelf: 'center',
   },
   backgroundRingSmall: {
@@ -225,7 +221,7 @@ const styles = StyleSheet.create({
     height: 180,
     borderRadius: 90,
     borderWidth: 1,
-    borderColor: 'rgba(77,182,150,0.05)',
+    borderColor: 'rgba(113,195,168,0.20)',
     alignSelf: 'center',
   },
   centerContent: {
@@ -233,17 +229,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   logoRing: {
-    width: 150,
-    height: 150,
-    borderRadius: 75,
+    width: 166,
+    height: 166,
+    borderRadius: 83,
     borderWidth: 1.5,
-    borderColor: 'rgba(77,182,150,0.25)',
+    borderColor: 'rgba(113,195,168,0.40)',
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.05)',
   },
   logo: {
-    width: 108,
-    height: 108,
+    width: 122,
+    height: 122,
   },
   brandName: {
     marginTop: 28,
@@ -266,7 +263,7 @@ const styles = StyleSheet.create({
     marginTop: 7,
     fontSize: 11,
     lineHeight: 15,
-    color: 'rgba(255,255,255,0.38)',
+    color: 'rgba(255,255,255,0.58)',
     letterSpacing: 2.2,
     fontFamily: 'sans-serif',
     fontWeight: '400',
@@ -277,13 +274,13 @@ const styles = StyleSheet.create({
     marginTop: 24,
     marginBottom: 24,
     alignSelf: 'center',
-    backgroundColor: 'rgba(77,182,150,0.35)',
+    backgroundColor: 'rgba(113,195,168,0.55)',
   },
   loadingText: {
     marginBottom: 14,
     fontSize: 12,
     lineHeight: 16,
-    color: 'rgba(255,255,255,0.32)',
+    color: 'rgba(255,255,255,0.62)',
     letterSpacing: 0.5,
   },
   dotsRow: {
@@ -299,14 +296,20 @@ const styles = StyleSheet.create({
     backgroundColor: TEAL,
   },
   versionText: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    alignSelf: 'center',
+    marginTop: 28,
     textAlign: 'center',
-    fontSize: 11,
-    lineHeight: 14,
-    color: 'rgba(255,255,255,0.18)',
-    letterSpacing: 1,
+    fontSize: 15,
+    lineHeight: 20,
+    color: '#ffffff',
+    letterSpacing: 0.8,
+    fontWeight: '800',
+    backgroundColor: VERSION_SURFACE,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    overflow: 'hidden',
+    maxWidth: 150,
   },
 });

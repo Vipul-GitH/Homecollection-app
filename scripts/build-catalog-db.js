@@ -676,8 +676,10 @@ CREATE INDEX idx_panel_rates_company_group_subgroup
 CREATE INDEX idx_panel_rates_company_test
   ON panel_rates(comp_cat_id, gcode, scode, test_code);
 CREATE INDEX idx_tests_testcode1 ON tests(testcode1);
+CREATE INDEX idx_tests_test_code ON tests(test_code);
 CREATE INDEX idx_tests_specimen ON tests(specimen_id);
 CREATE INDEX idx_test_profiles_parent ON test_profiles(gcode, scode, profile_code);
+CREATE INDEX idx_test_profiles_parent_child ON test_profiles(gcode, scode, profile_code, child_testcode1);
 CREATE INDEX idx_hcolony_pincode ON hcolony_master(pincode);
 CREATE INDEX idx_hcolony_route_no ON hcolony_master(route_no);
 CREATE UNIQUE INDEX idx_tag_master_name ON tag_master(tag_name);

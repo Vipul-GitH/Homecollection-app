@@ -112,6 +112,7 @@ function HomeScreen({
   onBack,
   canGoBack,
   bottomTabs,
+  accessToken,
   loggedInUser,
   selectedBooking,
   selectedBookingScreen,
@@ -509,6 +510,7 @@ function HomeScreen({
       return (
         <HandoverScreen
           styles={styles}
+          accessToken={accessToken}
           completedAppointments={completedAppointments}
           isLoadingCompletedAppointments={isLoadingCompletedAppointments}
           completedAppointmentsError={completedAppointmentsError}

@@ -13,7 +13,6 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import {BRAND} from '../../../styles/appStyles';
 import {
   GENDER_OPTIONS,
-  TAG_OPTIONS,
   TITLE_OPTIONS,
 } from '../../../screens/bookings/appointmentDetails/constants';
 import RequiredLabel from './RequiredLabel';
@@ -45,8 +44,33 @@ function AddPatientModal({
   shouldShowPatientFormPanelCompanySuggestions,
   filteredPatientFormPanelCompanyItems,
   handleSelectPatientFormPanelCompany,
+  patientTagOptions,
   handleSubmitAddPatient,
 }) {
+  const [isTitleDropdownVisible, setIsTitleDropdownVisible] =
+    React.useState(false);
+  const normalizedPatientTagOptions = Array.isArray(patientTagOptions)
+    ? patientTagOptions.filter(Boolean)
+    : [];
+  const selectedPatientTags = Array.from(
+    new Set(
+      (Array.isArray(patientForm.tags)
+        ? patientForm.tags
+        : String(patientForm.tag || '').split(',')
+      )
+        .map(tag => String(tag || '').trim())
+        .filter(Boolean),
+    ),
+  );
+  const togglePatientTag = tag => {
+    const nextTags = selectedPatientTags.includes(tag)
+      ? selectedPatientTags.filter(selectedTag => selectedTag !== tag)
+      : [...selectedPatientTags, tag];
+
+    updatePatientFormField('tags', nextTags);
+    updatePatientFormField('tag', nextTags.join(', '));
+  };
+
   return (
         <Modal
           transparent
@@ -185,29 +209,68 @@ function AddPatientModal({
                   </>
                 ) : (
                   <>
-                <RequiredLabel styles={styles}>Title</RequiredLabel>
-                <View style={styles.addPatientChipGrid}>
-                  {TITLE_OPTIONS.map(title => {
-                    const isSelected = patientForm.title === title;
-                    return (
-                      <TouchableOpacity
-                        key={title}
-                        activeOpacity={0.85}
-                        style={[
-                          styles.addPatientChoiceChip,
-                          isSelected && styles.addPatientChoiceChipActive,
-                        ]}
-                        onPress={() => handleTitleChange(title)}>
-                        <Text
-                          style={[
-                            styles.addPatientChoiceChipText,
-                            isSelected && styles.addPatientChoiceChipTextActive,
-                          ]}>
-                          {title}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
+                <View style={styles.addPatientInputGroup}>
+                  <RequiredLabel styles={styles}>Title</RequiredLabel>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.addPatientDatePickerButton}
+                    onPress={() =>
+                      setIsTitleDropdownVisible(previousValue => !previousValue)
+                    }>
+                    <Text
+                      style={[
+                        styles.addPatientDatePickerText,
+                        !patientForm.title &&
+                          styles.addPatientDatePickerPlaceholder,
+                      ]}>
+                      {patientForm.title || 'Select'}
+                    </Text>
+                    <Ionicons
+                      name={
+                        isTitleDropdownVisible
+                          ? 'chevron-up'
+                          : 'chevron-down'
+                      }
+                      size={16}
+                      style={styles.addPatientDatePickerIcon}
+                    />
+                  </TouchableOpacity>
+                  {isTitleDropdownVisible ? (
+                    <View style={styles.cancelSelectList}>
+                      {TITLE_OPTIONS.map(title => {
+                        const isSelected = patientForm.title === title;
+                        return (
+                          <TouchableOpacity
+                            key={title}
+                            activeOpacity={0.85}
+                            style={[
+                              styles.cancelSelectOption,
+                              isSelected && styles.cancelSelectOptionActive,
+                            ]}
+                            onPress={() => {
+                              handleTitleChange(title);
+                              setIsTitleDropdownVisible(false);
+                            }}>
+                            <Text
+                              style={[
+                                styles.cancelSelectOptionText,
+                                isSelected &&
+                                  styles.cancelSelectOptionTextActive,
+                              ]}>
+                              {title}
+                            </Text>
+                            {isSelected ? (
+                              <Ionicons
+                                name="checkmark-circle"
+                                size={18}
+                                style={styles.cancelSelectOptionIcon}
+                              />
+                            ) : null}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  ) : null}
                 </View>
   
                 <View style={styles.addPatientInputGroup}>
@@ -476,30 +539,34 @@ function AddPatientModal({
                   />
                 </View>
   
-                <Text style={styles.addPatientFieldLabel}>Tag</Text>
-                <View style={styles.addPatientChipGrid}>
-                  {TAG_OPTIONS.map(tag => {
-                    const isSelected = patientForm.tag === tag;
-                    return (
-                      <TouchableOpacity
-                        key={tag}
-                        activeOpacity={0.85}
-                        style={[
-                          styles.addPatientChoiceChip,
-                          isSelected && styles.addPatientChoiceChipActive,
-                        ]}
-                        onPress={() => updatePatientFormField('tag', tag)}>
-                        <Text
-                          style={[
-                            styles.addPatientChoiceChipText,
-                            isSelected && styles.addPatientChoiceChipTextActive,
-                          ]}>
-                          {tag}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
+                {normalizedPatientTagOptions.length ? (
+                  <>
+                    <Text style={styles.addPatientFieldLabel}>Tags</Text>
+                    <View style={styles.addPatientChipGrid}>
+                      {normalizedPatientTagOptions.map(tag => {
+                        const isSelected = selectedPatientTags.includes(tag);
+                        return (
+                          <TouchableOpacity
+                            key={tag}
+                            activeOpacity={0.85}
+                            style={[
+                              styles.addPatientChoiceChip,
+                              isSelected && styles.addPatientChoiceChipActive,
+                            ]}
+                            onPress={() => togglePatientTag(tag)}>
+                            <Text
+                              style={[
+                                styles.addPatientChoiceChipText,
+                                isSelected && styles.addPatientChoiceChipTextActive,
+                              ]}>
+                              {tag}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </>
+                ) : null}
                   </>
                 )}
               </ScrollView>

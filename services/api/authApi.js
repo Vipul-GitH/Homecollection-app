@@ -1,7 +1,10 @@
 import {LOGIN_API_URL} from '../../constants/config/api';
 import {secureFetch} from './secureFetch';
 import {extractAccessToken} from '../../utils/bookings/bookingTransforms';
-import {logDebug} from '../../utils/app/logger';
+import {
+  APP_VERSION_CODE,
+  APP_VERSION_NAME,
+} from '../../constants/config/appVersion';
 
 const logAuthDebug = () => {};
 
@@ -39,7 +42,6 @@ const runConnectivityProbe = async ({label, url, method = 'GET'}) => {
       statusText: response.statusText,
     };
 
-    logDebug('[Login Diagnostic] Probe result', probeResult);
     return probeResult;
   } catch (error) {
     const probeResult = {
@@ -52,7 +54,6 @@ const runConnectivityProbe = async ({label, url, method = 'GET'}) => {
       causeMessage: error?.cause?.message || null,
     };
 
-    logDebug('[Login Diagnostic] Probe failure', probeResult);
     return probeResult;
   }
 };
@@ -91,11 +92,6 @@ export const diagnoseLoginConnectivity = async () => {
     diagnosticResults.push(loginGetProbe);
   }
 
-  logDebug(
-    '[Login Diagnostic] Summary',
-    JSON.stringify(diagnosticResults, null, 2),
-  );
-
   return diagnosticResults;
 };
 
@@ -106,11 +102,9 @@ const parseLoginResponse = async response => {
       '[Login] API response',
       JSON.stringify(maskLoginResponseSecrets(responseData), null, 2),
     );
-    logDebug('[Login] Response body', JSON.stringify(responseData, null, 2));
     return responseData;
   } catch (parseError) {
     logAuthDebug('[Login] API response is not valid JSON');
-    logDebug('[Login] Response body is not valid JSON');
     return null;
   }
 };
@@ -166,18 +160,13 @@ export const loginUserApi = async ({username, password}) => {
       body: JSON.stringify({
         username,
         password,
+        app_version_code: APP_VERSION_CODE,
+        app_version_name: APP_VERSION_NAME,
+        platform: 'android',
       }),
     });
 
-    logDebug('[Login] Response status', {
-      ok: response.ok,
-      status: response.status,
-      statusText: response.statusText,
-      url: response.url,
-    });
-
     const responseData = await parseLoginResponse(response);
-    logDebug('[Login] Response body', maskLoginResponseSecrets(responseData));
     const bodyIndicatesFailure =
       responseData?.ok === false ||
       responseData?.success === false ||
@@ -213,14 +202,6 @@ export const loginUserApi = async ({username, password}) => {
       accessToken,
     };
   } catch (error) {
-    logDebug('[Login] Request failure details', {
-      name: error?.name,
-      message: error?.message,
-      status: error?.status,
-      statusText: error?.statusText,
-      responseBody: error?.responseBody || null,
-      causeMessage: error?.cause?.message || null,
-    });
     throw error;
   }
 };

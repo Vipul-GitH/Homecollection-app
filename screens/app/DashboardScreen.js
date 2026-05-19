@@ -130,6 +130,24 @@ function DashboardScreen({
 
         <TouchableOpacity
           activeOpacity={0.9}
+          onPress={onCompletedCardPress}
+          style={[
+            styles.statCard,
+            styles.statCardDanger,
+            isSmallPhone && styles.statCardFullWidth,
+          ]}>
+          <View style={styles.statCardGlow} />
+          <View style={styles.statCardTopRow}>
+            <View style={styles.statIconWrap}>
+              <Ionicons name="checkmark-done" size={24} style={styles.statIcon} />
+            </View>
+            <Text style={styles.statTag}>Done</Text>
+          </View>
+          <Text style={styles.statLabel}>Completed</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          activeOpacity={0.9}
           onPress={onStartedCardPress}
           style={[
             styles.statCard,
@@ -161,24 +179,6 @@ function DashboardScreen({
           </View>
           <Text style={styles.statLabel}>Reached</Text>
         </View>
-
-        <TouchableOpacity
-          activeOpacity={0.9}
-          onPress={onCompletedCardPress}
-          style={[
-            styles.statCard,
-            styles.statCardDanger,
-            isSmallPhone && styles.statCardFullWidth,
-          ]}>
-          <View style={styles.statCardGlow} />
-          <View style={styles.statCardTopRow}>
-            <View style={styles.statIconWrap}>
-              <Ionicons name="checkmark-done" size={24} style={styles.statIcon} />
-            </View>
-            <Text style={styles.statTag}>Done</Text>
-          </View>
-          <Text style={styles.statLabel}>Completed</Text>
-        </TouchableOpacity>
       </View>
 
       <View style={styles.sectionCard}>

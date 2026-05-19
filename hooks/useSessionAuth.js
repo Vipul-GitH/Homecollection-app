@@ -1,3 +1,4 @@
+import {Alert} from 'react-native';
 import {useCallback, useEffect, useState} from 'react';
 import {
   diagnoseLoginConnectivity,
@@ -6,6 +7,26 @@ import {
 import {clearSession, persistSession} from '../services/storage/sessionStorage';
 import {runCatalogSyncOnce} from '../services/sync/catalogSyncService';
 import {logDebug, warnDebug} from '../utils/app/logger';
+
+const isUnsupportedAppVersionError = error => {
+  const detail =
+    error?.responseBody?.detail ||
+    error?.responseBody?.message ||
+    error?.message ||
+    '';
+
+  return /unsupported app version/i.test(String(detail));
+};
+
+const getUnsupportedAppVersionMessage = error => {
+  const detail =
+    error?.responseBody?.detail ||
+    error?.responseBody?.message ||
+    error?.message ||
+    'This app version is no longer supported.';
+
+  return String(detail).trim();
+};
 
 export const useSessionAuth = () => {
   const [currentScreen, setCurrentScreen] = useState('login');
@@ -123,6 +144,13 @@ export const useSessionAuth = () => {
       }
 
       warnDebug('Login error:', error);
+      if (isUnsupportedAppVersionError(error)) {
+        const versionMessage = getUnsupportedAppVersionMessage(error);
+        Alert.alert(
+          'App Update Required',
+          `${versionMessage}\n\nPlease install the latest APK and try again.`,
+        );
+      }
       setLoginError(
         error?.message ||
           'Unable to reach the login API. Please check the server and network.',

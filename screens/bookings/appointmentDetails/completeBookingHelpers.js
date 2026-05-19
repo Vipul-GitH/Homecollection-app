@@ -34,6 +34,16 @@ export const isPatientTerminalForCompletion = patient => {
 export const isManualHcSlipSelected = value =>
   normalizeFormText(value) === MANUAL_HC_SLIP_STATUS;
 
+export const getApiTestBookingStatusValue = value => {
+  const normalizedValue = normalizeFormText(value);
+
+  if (normalizedValue === MANUAL_HC_SLIP_STATUS) {
+    return 'manual hcb slip';
+  }
+
+  return normalizedValue;
+};
+
 export const isTestBookingStatusMissing = value => {
   const normalizedValue = normalizeFormText(value).toLowerCase();
 

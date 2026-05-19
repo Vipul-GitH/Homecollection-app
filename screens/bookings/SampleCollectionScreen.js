@@ -1,25 +1,32 @@
 import React, {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
-import {NativeModules, Text, TouchableOpacity, View} from 'react-native';
+import {
+  NativeModules,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AppAlertModal from '../../components/common/AppAlertModal';
+import LoadingOverlay from '../../components/common/LoadingOverlay';
+import {buildSampleTubeMapsFromTests} from '../../utils/bookings/sampleTubeMapping';
 import {
-  buildSampleTubeMapsFromTests,
-  collectTubeNodesForSelectedTest,
-  collectUniqueTubesForSelectedTests,
-} from '../../utils/bookings/sampleTubeMapping';
+  isUndefinedSpecimenName,
+  buildPrecomputedSampleCollectionData,
+} from './appointmentDetails/sampleCollectionPrecompute';
 import {
   sampleTubeMappingCache,
   sampleTubeMappingRequests,
 } from '../../utils/bookings/sampleTubeMappingCache';
 
 const {CatalogDatabaseModule} = NativeModules;
+const SAMPLE_TUBE_MAPPING_TIMEOUT_MS = 7000;
+const logSampleTubePerf = () => {};
 
 const toStableValue = value =>
   value === null || value === undefined ? '' : String(value).trim();
@@ -75,15 +82,6 @@ const getBookingPatientId = patient =>
       patient?.booking_patient_id ||
       patient?.booking_patient ||
       patient?.id,
-  );
-
-const getBookingTestId = test =>
-  toNumberOrValue(
-    test?.bookingTestId ||
-      test?.booking_test_id ||
-      test?.bookingTestID ||
-      test?.booking_test ||
-      test?.id,
   );
 
 const getTestDescription = test =>
@@ -153,41 +151,24 @@ const getSampleTubeMappingCacheKey = rootTests =>
     })),
   );
 
-const isUndefinedSpecimenName = value => {
-  const normalizedValue = String(value || '').trim().toLowerCase();
-  return !normalizedValue || normalizedValue === 'none' || normalizedValue === 'n/a';
-};
+const withPromiseTimeout = (promise, timeoutMs) =>
+  new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      const timeoutError = new Error('SAMPLE_TUBE_MAPPING_TIMEOUT');
+      timeoutError.code = 'SAMPLE_TUBE_MAPPING_TIMEOUT';
+      reject(timeoutError);
+    }, timeoutMs);
 
-const groupSpecimenTestsByParent = tests => {
-  const groupedMap = new Map();
-
-  (Array.isArray(tests) ? tests : []).forEach((test, index) => {
-    const parentCode =
-      toStableValue(test?.rootBookedCode) ||
-      toStableValue(test?.booked_code) ||
-      `test-${index}`;
-    const parentName =
-      toStableValue(test?.rootTestName) ||
-      toStableValue(test?.description) ||
-      `Test ${index + 1}`;
-    const parentKey = `${parentCode}|${parentName}`;
-
-    if (!groupedMap.has(parentKey)) {
-      groupedMap.set(parentKey, {
-        parentKey,
-        parentCode,
-        parentName,
-        tests: [],
+    promise
+      .then(result => {
+        clearTimeout(timeoutId);
+        resolve(result);
+      })
+      .catch(error => {
+        clearTimeout(timeoutId);
+        reject(error);
       });
-    }
-
-    groupedMap.get(parentKey).tests.push(test);
   });
-
-  return Array.from(groupedMap.values()).sort((leftItem, rightItem) =>
-    leftItem.parentName.localeCompare(rightItem.parentName),
-  );
-};
 
 const ADDITIONAL_TUBE_OPTIONS = [
   'EDTA',
@@ -286,6 +267,7 @@ function SampleCollectionScreen({
   const [sampleTubeMaps, setSampleTubeMaps] = useState(() =>
     buildSampleTubeMapsFromTests([]),
   );
+  const [isMappingSampleTubes, setIsMappingSampleTubes] = useState(false);
 
   useEffect(() => {
     sampleCollectionDraftRef.current = sampleCollectionDraft;
@@ -319,57 +301,99 @@ function SampleCollectionScreen({
     [selectedTests],
   );
 
-  const selectedSpecimenSummary = useMemo(() => {
-    const expandedTests = normalizedSelectedTests.flatMap(test =>
-      collectTubeNodesForSelectedTest(
-        test,
-        sampleTubeMaps.testsMap,
-        sampleTubeMaps.childrenMap,
-      ).map(node => ({
-        ...node,
-        removalKey: test?.key,
-        panelCompanyName: test?.panelCompanyName,
-        rootBookedCode: getTestCode(test),
-        rootTestName: getTestDescription(test),
-        rootBookingTestId: getBookingTestId(test),
-      })),
-    );
-
-    const summaryMap = expandedTests.reduce((accumulator, test) => {
-      const specimenName = String(test?.specimenName || 'N/A').trim() || 'N/A';
-
-      if (!accumulator[specimenName]) {
-        accumulator[specimenName] = {
-          specimenName,
-          count: 0,
-          tests: [],
-        };
-      }
-
-      if (!test.isProfileContext) {
-        accumulator[specimenName].count += 1;
-      }
-      accumulator[specimenName].tests.push(test);
-      return accumulator;
-    }, {});
-
-    return Object.values(summaryMap).sort((leftItem, rightItem) =>
-      leftItem.specimenName.localeCompare(rightItem.specimenName),
-    );
-  }, [normalizedSelectedTests, sampleTubeMaps.childrenMap, sampleTubeMaps.testsMap]);
-  const totalSpecimenTestCount = selectedSpecimenSummary.reduce(
-    (total, item) => total + item.count,
-    0,
+  const sampleTubeFallbackMaps = useMemo(
+    () => buildSampleTubeMapsFromTests(normalizedSelectedTests),
+    [normalizedSelectedTests],
   );
-  const patientLevelTubes = useMemo(
+
+  const sampleTubeRootTests = useMemo(
     () =>
-      collectUniqueTubesForSelectedTests(
-        normalizedSelectedTests,
-        sampleTubeMaps.testsMap,
-        sampleTubeMaps.childrenMap,
-      ).filter(tube => !isUndefinedSpecimenName(tube)),
-    [normalizedSelectedTests, sampleTubeMaps.childrenMap, sampleTubeMaps.testsMap],
+      normalizedSelectedTests
+        .map(test => {
+          const catalogContext = parseCatalogKey(test?.catalog_key);
+          const codeContext = parseFullCatalogCode(getResolvedRootCode(test));
+          return {
+            code: getResolvedRootCode(test),
+            catalogKey: test?.catalog_key || '',
+            compCatId:
+              test?.panelCompanyId || test?.compCatId || catalogContext.compCatId || '',
+            centerId: test?.centerId || test?.CenterID || '',
+            atype: test?.atype || test?.Atype || '',
+            panelCode: test?.panelCode || test?.panel_code || '',
+            panelAbarid: test?.panelAbarid || test?.panel_abarid || '',
+            gcode: test?.gcode || catalogContext.gcode || codeContext.gcode || '',
+            scode: test?.scode || catalogContext.scode || codeContext.scode || '',
+            testCode: test?.test_code || '',
+          };
+        })
+        .filter(test => test.code && test.code !== 'N/A'),
+    [normalizedSelectedTests],
   );
+
+  const sampleTubeCacheKey = useMemo(
+    () => getSampleTubeMappingCacheKey(sampleTubeRootTests),
+    [sampleTubeRootTests],
+  );
+  const selectedTestCount = normalizedSelectedTests.length;
+  const rootTestCount = sampleTubeRootTests.length;
+  const sampleTubePerfSessionRef = useRef({
+    sessionStartedAt: 0,
+    nativeRequestStartedAt: 0,
+  });
+  const precomputedSampleTubeData = useMemo(() => {
+    const candidate = sampleCollectionDraft?.precomputedSampleTubeData;
+    if (!candidate || typeof candidate !== 'object') {
+      return null;
+    }
+
+    return candidate.cacheKey === sampleTubeCacheKey ? candidate : null;
+  }, [sampleCollectionDraft?.precomputedSampleTubeData, sampleTubeCacheKey]);
+
+  const precomputedDerivedData = useMemo(
+    () =>
+      precomputedSampleTubeData?.derivedData &&
+      typeof precomputedSampleTubeData.derivedData === 'object'
+        ? precomputedSampleTubeData.derivedData
+        : null,
+    [precomputedSampleTubeData],
+  );
+  const hasRenderableInitialSelection = normalizedSelectedTests.length > 0;
+  const {
+    allSpecimenTests,
+    selectedSpecimenSummary,
+    totalSpecimenTestCount,
+    patientLevelTubes,
+    parentGroupsBySpecimen,
+  } = useMemo(() => {
+    if (precomputedDerivedData) {
+      return {
+        allSpecimenTests: Array.isArray(precomputedDerivedData.allSpecimenTests)
+          ? precomputedDerivedData.allSpecimenTests
+          : [],
+        selectedSpecimenSummary: Array.isArray(
+          precomputedDerivedData.selectedSpecimenSummary,
+        )
+          ? precomputedDerivedData.selectedSpecimenSummary
+          : [],
+        totalSpecimenTestCount: Number(
+          precomputedDerivedData.totalSpecimenTestCount || 0,
+        ),
+        patientLevelTubes: Array.isArray(precomputedDerivedData.patientLevelTubes)
+          ? precomputedDerivedData.patientLevelTubes
+          : [],
+        parentGroupsBySpecimen:
+          precomputedDerivedData.parentGroupsBySpecimen &&
+          typeof precomputedDerivedData.parentGroupsBySpecimen === 'object'
+            ? precomputedDerivedData.parentGroupsBySpecimen
+            : {},
+      };
+    }
+
+    return buildPrecomputedSampleCollectionData(
+      normalizedSelectedTests,
+      sampleTubeMaps,
+    );
+  }, [normalizedSelectedTests, precomputedDerivedData, sampleTubeMaps]);
   const displayedSampleTubes = useMemo(() => {
     const seenTubes = new Set();
     return [...patientLevelTubes, ...selectedAdditionalTubes].filter(tube => {
@@ -384,87 +408,158 @@ function SampleCollectionScreen({
 
   useEffect(() => {
     let isMounted = true;
-    const fallbackMaps = buildSampleTubeMapsFromTests(normalizedSelectedTests);
-    const rootTests = normalizedSelectedTests
-      .map(test => {
-        const catalogContext = parseCatalogKey(test?.catalog_key);
-        const codeContext = parseFullCatalogCode(getResolvedRootCode(test));
-        return {
-          code: getResolvedRootCode(test),
-          catalogKey: test?.catalog_key || '',
-          compCatId:
-            test?.panelCompanyId || test?.compCatId || catalogContext.compCatId || '',
-          centerId: test?.centerId || test?.CenterID || '',
-          atype: test?.atype || test?.Atype || '',
-          panelCode: test?.panelCode || test?.panel_code || '',
-          panelAbarid: test?.panelAbarid || test?.panel_abarid || '',
-          gcode: test?.gcode || catalogContext.gcode || codeContext.gcode || '',
-          scode: test?.scode || catalogContext.scode || codeContext.scode || '',
-          testCode: test?.test_code || '',
-        };
-      })
-      .filter(test => test.code && test.code !== 'N/A');
-
-    if (!rootTests.length || !CatalogDatabaseModule?.getSampleTubeMappingForTestCodes) {
+    const mappingSessionStartedAt = Date.now();
+    sampleTubePerfSessionRef.current = {
+      sessionStartedAt: mappingSessionStartedAt,
+      nativeRequestStartedAt: 0,
+    };
+    const initialMaps =
+      precomputedSampleTubeData?.maps &&
+      typeof precomputedSampleTubeData.maps === 'object'
+        ? precomputedSampleTubeData.maps
+        : sampleTubeFallbackMaps;
+    if (
+      !sampleTubeRootTests.length ||
+      !CatalogDatabaseModule?.getSampleTubeMappingForTestCodes
+    ) {
+      logSampleTubePerf('Skipped Native Mapping', {
+        reason: !sampleTubeRootTests.length
+          ? 'no-root-tests'
+          : 'native-module-missing',
+        selectedTestCount,
+        rootTestCount,
+      });
       onLocalDatabaseLoadingChange?.('');
-      setSampleTubeMaps(fallbackMaps);
+      setIsMappingSampleTubes(false);
+      setSampleTubeMaps(initialMaps);
       return () => {
         isMounted = false;
       };
     }
 
-    const cacheKey = getSampleTubeMappingCacheKey(rootTests);
-    const cachedMaps = sampleTubeMappingCache.get(cacheKey);
+    if (precomputedSampleTubeData?.source === 'native') {
+      logSampleTubePerf('Used Precomputed Native Mapping', {
+        selectedTestCount,
+        rootTestCount,
+        totalElapsedMs: Date.now() - mappingSessionStartedAt,
+      });
+      onLocalDatabaseLoadingChange?.('');
+      setIsMappingSampleTubes(false);
+      setSampleTubeMaps(initialMaps);
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    const cachedMaps = sampleTubeMappingCache.get(sampleTubeCacheKey);
 
     if (cachedMaps) {
+      logSampleTubePerf('Used Cached Native Mapping', {
+        selectedTestCount,
+        rootTestCount,
+        totalElapsedMs: Date.now() - mappingSessionStartedAt,
+      });
       onLocalDatabaseLoadingChange?.('');
-      setSampleTubeMaps(mergeSampleTubeMaps(fallbackMaps, cachedMaps));
+      setIsMappingSampleTubes(false);
+      setSampleTubeMaps(mergeSampleTubeMaps(sampleTubeFallbackMaps, cachedMaps));
       return () => {
         isMounted = false;
       };
     }
 
-    setSampleTubeMaps(fallbackMaps);
+    setIsMappingSampleTubes(true);
+    setSampleTubeMaps(initialMaps);
+    logSampleTubePerf('Started Mapping Session', {
+      selectedTestCount,
+      rootTestCount,
+      cacheKeyLength: sampleTubeCacheKey.length,
+      hasRenderableInitialSelection,
+      hasPrecomputedData: Boolean(precomputedSampleTubeData),
+    });
 
     const mappingRequest =
-      sampleTubeMappingRequests.get(cacheKey) ||
-      CatalogDatabaseModule.getSampleTubeMappingForTestCodes(JSON.stringify(rootTests))
+      sampleTubeMappingRequests.get(sampleTubeCacheKey) ||
+      (() => {
+        sampleTubePerfSessionRef.current.nativeRequestStartedAt = Date.now();
+        return withPromiseTimeout(
+          CatalogDatabaseModule.getSampleTubeMappingForTestCodes(
+            JSON.stringify(sampleTubeRootTests),
+          ),
+          SAMPLE_TUBE_MAPPING_TIMEOUT_MS,
+        );
+      })()
         .then(response => {
           const parsedResponse =
             typeof response === 'string' ? JSON.parse(response) : response;
-          sampleTubeMappingCache.set(cacheKey, parsedResponse);
-          sampleTubeMappingRequests.delete(cacheKey);
+          sampleTubeMappingCache.set(sampleTubeCacheKey, parsedResponse);
+          sampleTubeMappingRequests.delete(sampleTubeCacheKey);
           return parsedResponse;
         })
         .catch(error => {
-          sampleTubeMappingRequests.delete(cacheKey);
+          sampleTubeMappingRequests.delete(sampleTubeCacheKey);
           throw error;
         });
 
-    sampleTubeMappingRequests.set(cacheKey, mappingRequest);
+    sampleTubeMappingRequests.set(sampleTubeCacheKey, mappingRequest);
 
     mappingRequest
       .then(response => {
         if (!isMounted) {
           return;
         }
-        setSampleTubeMaps(mergeSampleTubeMaps(fallbackMaps, response));
+        const nativeElapsedMs =
+          sampleTubePerfSessionRef.current.nativeRequestStartedAt > 0
+            ? Date.now() - sampleTubePerfSessionRef.current.nativeRequestStartedAt
+            : null;
+        logSampleTubePerf('Completed Native Mapping', {
+          selectedTestCount,
+          rootTestCount,
+          nativeElapsedMs,
+          nativeDurationMs: Number(response?.duration_ms || 0) || null,
+          visitedNodeCount: Number(response?.visited_count || 0) || null,
+          testsMapCount: Number(response?.tests_map_count || 0) || null,
+          childrenMapCount: Number(response?.children_map_count || 0) || null,
+          totalElapsedMs: Date.now() - mappingSessionStartedAt,
+        });
+        setSampleTubeMaps(mergeSampleTubeMaps(sampleTubeFallbackMaps, response));
+        setIsMappingSampleTubes(false);
         onLocalDatabaseLoadingChange?.('');
       })
-      .catch(() => {
+      .catch(error => {
         if (isMounted) {
-          setSampleTubeMaps(fallbackMaps);
+          logSampleTubePerf('Native Mapping Failed', {
+            selectedTestCount,
+            rootTestCount,
+            nativeElapsedMs:
+              sampleTubePerfSessionRef.current.nativeRequestStartedAt > 0
+                ? Date.now() - sampleTubePerfSessionRef.current.nativeRequestStartedAt
+                : null,
+            totalElapsedMs: Date.now() - mappingSessionStartedAt,
+            message: error?.message || 'unknown-error',
+          });
+          setSampleTubeMaps(sampleTubeFallbackMaps);
+          setIsMappingSampleTubes(false);
           onLocalDatabaseLoadingChange?.('');
         }
       });
 
     return () => {
       isMounted = false;
+      setIsMappingSampleTubes(false);
       onLocalDatabaseLoadingChange?.('');
     };
-  }, [normalizedSelectedTests, onLocalDatabaseLoadingChange]);
+  }, [
+    hasRenderableInitialSelection,
+    onLocalDatabaseLoadingChange,
+    precomputedSampleTubeData,
+    sampleTubeCacheKey,
+    sampleTubeFallbackMaps,
+    sampleTubeRootTests,
+    rootTestCount,
+    selectedTestCount,
+  ]);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const currentDraft = sampleCollectionDraftRef.current || {};
     const draftUnselectedTests = Array.isArray(currentDraft?.unselectedTests)
       ? currentDraft.unselectedTests
@@ -553,15 +648,28 @@ function SampleCollectionScreen({
     setExpandedAdditionalTubes(isExpanded => !isExpanded);
   };
 
-  const allSpecimenTests = useMemo(
-    () => selectedSpecimenSummary.flatMap(item => item.tests),
-    [selectedSpecimenSummary],
-  );
-
   const getRootKeyFromTestKey = useCallback(
     testKey => toStableValue(testKey).split('|')[0],
     [],
   );
+
+  const parentBookedCodeLookup = useMemo(() => {
+    const nextLookup = {};
+
+    allSpecimenTests.forEach(test => {
+      const rootKey = getRootKeyFromTestKey(test?.key);
+      const description = toStableValue(test?.description);
+      const level = Number(test?.level || 0);
+
+      if (!rootKey || !description) {
+        return;
+      }
+
+      nextLookup[`${rootKey}|${description}|${level}`] = test?.booked_code;
+    });
+
+    return nextLookup;
+  }, [allSpecimenTests, getRootKeyFromTestKey]);
 
   const getParentBookedCode = useCallback(
     childTest => {
@@ -573,17 +681,13 @@ function SampleCollectionScreen({
         return childTest?.rootBookedCode || rootKey;
       }
 
-      const parentNode = allSpecimenTests.find(test => {
-        const sameRoot = getRootKeyFromTestKey(test?.key) === rootKey;
-        const sameDescription =
-          toStableValue(test?.description) === parentDescription;
-        const expectedLevel = Number(test?.level || 0) === childLevel - 1;
-        return sameRoot && sameDescription && expectedLevel;
-      });
-
-      return parentNode?.booked_code || childTest?.rootBookedCode || rootKey;
+      return (
+        parentBookedCodeLookup[`${rootKey}|${parentDescription}|${childLevel - 1}`] ||
+        childTest?.rootBookedCode ||
+        rootKey
+      );
     },
-    [allSpecimenTests, getRootKeyFromTestKey],
+    [getRootKeyFromTestKey, parentBookedCodeLookup],
   );
 
   const descendantKeysByTestKey = useMemo(() => {
@@ -1195,7 +1299,7 @@ function SampleCollectionScreen({
 
                     {isExpanded ? (
                       <View style={styles.sampleCollectionSpecimenTestsList}>
-                        {groupSpecimenTestsByParent(item.tests).map(parentGroup => {
+                        {(parentGroupsBySpecimen[item.specimenName] || []).map(parentGroup => {
                           const parentSelectedCount = parentGroup.tests.filter(
                             test => Boolean(selectedDisplayMap[test.key]),
                           ).length;
@@ -1391,6 +1495,15 @@ function SampleCollectionScreen({
             </View>
           </TouchableOpacity>
         </View>
+
+        {isMappingSampleTubes ? (
+          <LoadingOverlay
+            styles={styles}
+            visible={isMappingSampleTubes}
+            title="Mapping Sample Tubes"
+            message="Preparing specimen and tube mapping for this patient..."
+          />
+        ) : null}
       </View>
       <AppAlertModal
         alert={appAlert}

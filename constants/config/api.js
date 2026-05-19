@@ -64,6 +64,33 @@ export const getAssignedBookingDetailApiUrl = (
 export const getAssignedBookingStatusApiUrl = bookingId =>
   `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/${bookingId}/status`;
 
+export const getAssignedBookingCancelApiUrl = bookingId =>
+  `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/${bookingId}/cancel`;
+
+export const getAssignedBookingBatchSaveApiUrl = () =>
+  'https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/batch/save';
+
+export const getAssignedBookingBatchHistoryApiUrl = ({
+  limit = 50,
+  offset = 0,
+}) => {
+  const params = new URLSearchParams({
+    limit: String(limit || 50),
+    offset: String(offset || 0),
+  });
+
+  return `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/batch/history?${params.toString()}`;
+};
+
+export const getRiderSuggestionsApiUrl = ({query, limit = 8}) => {
+  const params = new URLSearchParams({
+    q: String(query || ''),
+    limit: String(limit || 8),
+  });
+
+  return `https://labmate.bhasinpathlabs.com:2010/api/v1/users/riders?${params.toString()}`;
+};
+
 export const getAssignedBookingAddressApiUrl = bookingId =>
   `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/${bookingId}/address`;
 

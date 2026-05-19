@@ -6,6 +6,37 @@ import {
   isTestBookingStatusMissing,
 } from './completeBookingHelpers';
 
+const hasPatientPrescriptionUrls = patient => {
+  const rawUrls =
+    patient?.prescriptionUrls ||
+    patient?.prescription_urls ||
+    patient?.prescriptionUrl ||
+    patient?.prescription_url;
+
+  if (Array.isArray(rawUrls)) {
+    return rawUrls.some(url => Boolean(String(url || '').trim()));
+  }
+
+  return Boolean(String(rawUrls || '').trim());
+};
+
+const hasPatientDocumentType = (patient, expectedType) => {
+  const normalizedExpectedType = String(expectedType || '').trim().toLowerCase();
+
+  if (!normalizedExpectedType) {
+    return false;
+  }
+
+  const documents = Array.isArray(patient?.patientDocuments)
+    ? patient.patientDocuments
+    : [];
+
+  return documents.some(document => {
+    const documentType = String(document?.type || '').trim().toLowerCase();
+    return documentType === normalizedExpectedType;
+  });
+};
+
 export const getAppointmentDetailsBillingValidationError = ({
   patients,
   patientTestBookingStatusMap,
@@ -93,6 +124,10 @@ export const getAppointmentDetailsBillingValidationError = ({
         return false;
       }
 
+      if (isManualHcSlipSelected(getPatientTestBookingStatus(patient))) {
+        return false;
+      }
+
       return doesPatientRequireIdentityDocuments?.(patient);
     })
     .map(patient => {
@@ -101,16 +136,27 @@ export const getAppointmentDetailsBillingValidationError = ({
         ? patientCghsDocumentsMap?.[patientId] || {}
         : {};
       const missingDocuments = [];
+      const hasExistingPatientPhoto = hasPatientDocumentType(
+        patient,
+        'patient_photo',
+      );
+      const hasExistingCghsCard = hasPatientDocumentType(patient, 'cghs_card');
 
       if (
-        !Array.isArray(cghsDocuments.patientPhotos) ||
-        !cghsDocuments.patientPhotos.length
+        !hasExistingPatientPhoto &&
+        (
+          !Array.isArray(cghsDocuments.patientPhotos) ||
+          !cghsDocuments.patientPhotos.length
+        )
       ) {
         missingDocuments.push('patient photo');
       }
       if (
-        !Array.isArray(cghsDocuments.cghsCard) ||
-        !cghsDocuments.cghsCard.length
+        !hasExistingCghsCard &&
+        (
+          !Array.isArray(cghsDocuments.cghsCard) ||
+          !cghsDocuments.cghsCard.length
+        )
       ) {
         missingDocuments.push('CGHS card');
       }
@@ -141,6 +187,12 @@ export const getAppointmentDetailsBillingValidationError = ({
     }
 
     const patientId = getPatientMutationId(patient);
+    const testBookingStatus =
+      patientTestBookingStatusMap?.[patientId] || DEFAULT_TEST_BOOKING_STATUS;
+    if (isManualHcSlipSelected(testBookingStatus)) {
+      return false;
+    }
+
     return !patientSampleCollectionMap?.[patientId]?.collected;
   });
 
@@ -159,7 +211,17 @@ export const getAppointmentDetailsBillingValidationError = ({
     }
 
     const patientId = getPatientMutationId(patient);
+    const testBookingStatus =
+      patientTestBookingStatusMap?.[patientId] || DEFAULT_TEST_BOOKING_STATUS;
+    if (isManualHcSlipSelected(testBookingStatus)) {
+      return false;
+    }
+
     if (!doesPatientNeedPaymentProof?.(patient)) {
+      return false;
+    }
+
+    if (hasPatientPrescriptionUrls(patient)) {
       return false;
     }
 
@@ -185,6 +247,11 @@ export const getAppointmentDetailsBillingValidationError = ({
 
     const patientId = getPatientMutationId(patient);
     if (!patientId) {
+      return false;
+    }
+    const testBookingStatus =
+      patientTestBookingStatusMap?.[patientId] || DEFAULT_TEST_BOOKING_STATUS;
+    if (isManualHcSlipSelected(testBookingStatus)) {
       return false;
     }
 

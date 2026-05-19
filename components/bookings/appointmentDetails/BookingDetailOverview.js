@@ -17,6 +17,7 @@ function BookingDetailOverview({
   shouldShowStartOnly,
   bookingActionLoading,
   resolvedAddress,
+  resolvedLandmark,
   latitude,
   longitude,
   locationUrl,
@@ -98,6 +99,7 @@ function BookingDetailOverview({
       <BookingLocationCard
         styles={styles}
         address={resolvedAddress}
+        landmark={resolvedLandmark}
         accessNotes={selectedBooking.address.accessNotes}
         hasLocationUrl={Boolean(locationUrl)}
         disabled={!locationUrl && !resolvedAddress && (!latitude || !longitude)}

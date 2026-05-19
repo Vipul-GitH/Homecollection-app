@@ -8,6 +8,7 @@ import React, {
 } from 'react';
 import {
   ActivityIndicator,
+  NativeModules,
   ScrollView,
   Text,
   TextInput,
@@ -16,14 +17,43 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AppAlertModal from '../../components/common/AppAlertModal';
+import LoadingOverlay from '../../components/common/LoadingOverlay';
+import {
+  buildSampleTubeRootTests,
+  getSampleTubeMappingCacheKey,
+  normalizeTestsForSampleTubeMapping,
+} from './appointmentDetails/sampleTubeHelpers';
+import {
+  sampleTubeMappingCache,
+  sampleTubeMappingRequests,
+} from '../../utils/bookings/sampleTubeMappingCache';
 import {
   normalizePanelCompanyItems,
 } from './appointmentDetails/helpers';
 
+const {CatalogDatabaseModule} = NativeModules;
 const CATALOG_PAGE_SIZE = 10;
 const CATALOG_SCROLL_LOAD_THRESHOLD = 120;
+const SAMPLE_TUBE_WARM_TIMEOUT_MS = 7000;
 const toStableValue = value =>
   value === null || value === undefined ? '' : String(value).trim();
+
+const withPromiseTimeout = (promise, timeoutMs) =>
+  new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`Request timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    Promise.resolve(promise)
+      .then(result => {
+        clearTimeout(timeoutId);
+        resolve(result);
+      })
+      .catch(error => {
+        clearTimeout(timeoutId);
+        reject(error);
+      });
+  });
 
 const getPanelIdentity = panelCompany =>
   [
@@ -54,9 +84,7 @@ const getTestDedupeKey = test =>
       test?.code,
   ).toUpperCase();
 
-const testHasChildren = test =>
-  Boolean(test?.has_children) ||
-  (Array.isArray(test?.child_tests) && test.child_tests.length > 0);
+const testHasChildren = () => false;
 
 const getCatalogGroupId = group =>
   toStableValue(group?.group_id || group?.gcode || group?.group_code);
@@ -111,14 +139,6 @@ const sortCatalogTestsByCode = tests =>
     .map((test, index) => {
       const sortedTest = {...test};
 
-      if (Array.isArray(test?.child_tests)) {
-        sortedTest.child_tests = sortCatalogTestsByCode(test.child_tests);
-      }
-
-      if (Array.isArray(test?.childTests)) {
-        sortedTest.childTests = sortCatalogTestsByCode(test.childTests);
-      }
-
       return {test: sortedTest, index};
     })
     .sort(
@@ -153,6 +173,22 @@ const sortCatalogGroups = (groups, shouldSortTests = true) =>
     .sort((leftGroup, rightGroup) =>
       compareCatalogIds(getCatalogGroupId(leftGroup), getCatalogGroupId(rightGroup)),
     );
+
+const extractSearchTestsFromCatalogResponse = response => {
+  if (Array.isArray(response?.tests)) {
+    return response.tests;
+  }
+
+  return (Array.isArray(response?.groups) ? response.groups : []).flatMap(group =>
+    (Array.isArray(group?.subgroups) ? group.subgroups : []).flatMap(subgroup =>
+      (Array.isArray(subgroup?.tests) ? subgroup.tests : []).map(test => ({
+        ...test,
+        __groupName: group?.group_name || '',
+        __subgroupName: subgroup?.subgroup_name || '',
+      })),
+    ),
+  );
+};
 
 const getCatalogGroupTitle = group => {
   const groupId = getCatalogGroupId(group);
@@ -237,9 +273,21 @@ function AddTestScreen({
   const [groups, setGroups] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [selectedSubgroup, setSelectedSubgroup] = useState(null);
-  const [expandedTests, setExpandedTests] = useState({});
+  const [, setExpandedTests] = useState({});
   const [searchText, setSearchText] = useState('');
+  const [catalogSearchResults, setCatalogSearchResults] = useState([]);
+  const [isSearchingCatalog, setIsSearchingCatalog] = useState(false);
   const [visibleItemCount, setVisibleItemCount] = useState(CATALOG_PAGE_SIZE);
+  const addTestLoadingOverlayVisible = isLoadingCompanies || isLoadingCatalog;
+  const addTestLoadingOverlayCopy = isLoadingCompanies
+    ? {
+        title: 'Loading Panel Companies',
+        message: 'Getting the available panel companies ready...',
+      }
+    : {
+        title: 'Loading Test Catalog',
+        message: 'Preparing the test catalog for this patient...',
+      };
   const deferredSearchText = useDeferredValue(searchText);
   const normalizedSearchText = useMemo(
     () => deferredSearchText.trim().toLowerCase(),
@@ -264,10 +312,22 @@ function AddTestScreen({
           toStableValue(selectedPanelCompany?.name) ||
           'Selected Panel',
         specimenName: toStableValue(test?.specimenName) || 'N/A',
-        childCount: Array.isArray(test?.childTests) ? test.childTests.length : 0,
+        childCount: 0,
         isAppAdded: Boolean(test?.isAppAdded),
       })),
     [selectedPanelCompany?.name, selectedTests],
+  );
+  const normalizedSelectedTests = useMemo(
+    () => normalizeTestsForSampleTubeMapping(selectedTests),
+    [selectedTests],
+  );
+  const sampleTubeRootTests = useMemo(
+    () => buildSampleTubeRootTests(normalizedSelectedTests),
+    [normalizedSelectedTests],
+  );
+  const sampleTubeWarmCacheKey = useMemo(
+    () => getSampleTubeMappingCacheKey(sampleTubeRootTests),
+    [sampleTubeRootTests],
   );
 
   const dedupeTests = useCallback(
@@ -346,15 +406,6 @@ function AddTestScreen({
       return groups.flatMap(group =>
         (Array.isArray(group?.subgroups) ? group.subgroups : []).flatMap(subgroup =>
           dedupeTests(Array.isArray(subgroup?.tests) ? subgroup.tests : []).map(test => {
-            const childSearchKey = (Array.isArray(test?.child_tests)
-              ? test.child_tests
-              : [])
-              .map(
-                child =>
-                  `${child?.description || ''} ${child?.booked_code || ''}`,
-              )
-              .join(' ');
-
             return {
               ...test,
               __groupName: group?.group_name || '',
@@ -363,7 +414,7 @@ function AddTestScreen({
                 test?.booked_code || ''
               } ${group?.group_name || ''} ${
                 subgroup?.subgroup_name || ''
-              } ${childSearchKey}`.toLowerCase(),
+              }`.toLowerCase(),
             };
           }),
         ),
@@ -451,15 +502,18 @@ function AddTestScreen({
     }
 
     if (normalizedSearchText) {
-      return sortCatalogTestsByCode(
-        flattenedCompanyTests.filter(test =>
-          test.__searchKey?.includes(normalizedSearchText),
-        ),
-      );
+      return catalogSearchResults.length
+        ? sortCatalogTestsByCode(catalogSearchResults)
+        : sortCatalogTestsByCode(
+            flattenedCompanyTests.filter(test =>
+              test.__searchKey?.includes(normalizedSearchText),
+            ),
+          );
     }
 
     return groups;
   }, [
+    catalogSearchResults,
     dedupeTests,
     flattenedCompanyTests,
     groups,
@@ -472,6 +526,132 @@ function AddTestScreen({
     [activeItems, visibleItemCount],
   );
   const hasMoreActiveItems = visibleItemCount < activeItems.length;
+
+  useEffect(() => {
+    if (
+      !activePanelCompany ||
+      selectedGroup ||
+      selectedSubgroup ||
+      normalizedSearchText.length < 2 ||
+      !onPanelCompanySelect ||
+      !selectedPatient
+    ) {
+      setCatalogSearchResults([]);
+      setIsSearchingCatalog(false);
+      return undefined;
+    }
+
+    let isActive = true;
+    const timeoutId = setTimeout(async () => {
+      try {
+        setIsSearchingCatalog(true);
+        const response = await onPanelCompanySelect({
+          patient: selectedPatient,
+          compCatId: activePanelCompany.compCatId,
+          panelCompany: activePanelCompany,
+          catalogLevel: 'search',
+          query: normalizedSearchText,
+        });
+
+        if (!isActive) {
+          return;
+        }
+
+        const tests = extractSearchTestsFromCatalogResponse(response).filter(test => {
+          const searchKey = `${test?.description || ''} ${
+            test?.booked_code || ''
+          } ${test?.__groupName || test?.group_name || ''} ${
+            test?.__subgroupName || test?.subgroup_name || ''
+          }`.toLowerCase();
+
+          return searchKey.includes(normalizedSearchText);
+        });
+        setCatalogSearchResults(
+          tests.map(test => ({
+            ...test,
+            __groupName: test?.__groupName || test?.group_name || '',
+            __subgroupName: test?.__subgroupName || test?.subgroup_name || '',
+            __searchKey: `${test?.description || ''} ${
+              test?.booked_code || ''
+            } ${test?.__groupName || test?.group_name || ''} ${
+              test?.__subgroupName || test?.subgroup_name || ''
+            }`.toLowerCase(),
+          })),
+        );
+      } finally {
+        if (isActive) {
+          setIsSearchingCatalog(false);
+          onLocalDatabaseLoadingChange?.('');
+        }
+      }
+    }, 120);
+
+    return () => {
+      isActive = false;
+      clearTimeout(timeoutId);
+    };
+  }, [
+    activePanelCompany,
+    normalizedSearchText,
+    onLocalDatabaseLoadingChange,
+    onPanelCompanySelect,
+    selectedGroup,
+    selectedPatient,
+    selectedSubgroup,
+  ]);
+
+  useEffect(() => {
+    if (
+      !selectedPatient ||
+      !sampleTubeRootTests.length ||
+      !sampleTubeWarmCacheKey ||
+      !CatalogDatabaseModule?.getSampleTubeMappingForTestCodes
+    ) {
+      return undefined;
+    }
+
+    if (sampleTubeMappingCache.get(sampleTubeWarmCacheKey)) {
+      return undefined;
+    }
+
+    if (sampleTubeMappingRequests.get(sampleTubeWarmCacheKey)) {
+      return undefined;
+    }
+
+    let isActive = true;
+    const timeoutId = setTimeout(() => {
+      const warmRequest = withPromiseTimeout(
+        CatalogDatabaseModule.getSampleTubeMappingForTestCodes(
+          JSON.stringify(sampleTubeRootTests),
+        ),
+        SAMPLE_TUBE_WARM_TIMEOUT_MS,
+      )
+        .then(response => {
+          const parsedResponse =
+            typeof response === 'string' ? JSON.parse(response) : response;
+          sampleTubeMappingCache.set(sampleTubeWarmCacheKey, parsedResponse);
+          sampleTubeMappingRequests.delete(sampleTubeWarmCacheKey);
+          return parsedResponse;
+        })
+        .catch(error => {
+          sampleTubeMappingRequests.delete(sampleTubeWarmCacheKey);
+          throw error;
+        });
+
+      if (isActive) {
+        sampleTubeMappingRequests.set(sampleTubeWarmCacheKey, warmRequest);
+      }
+    }, 260);
+
+    return () => {
+      isActive = false;
+      clearTimeout(timeoutId);
+    };
+  }, [
+    sampleTubeRootTests,
+    sampleTubeWarmCacheKey,
+    selectedPatient,
+  ]);
 
   useEffect(() => {
     setVisibleItemCount(CATALOG_PAGE_SIZE);
@@ -524,18 +704,20 @@ function AddTestScreen({
       }
 
       setActivePanelCompany(panelCompany);
-      setGroups([]);
-      setSelectedGroup(null);
-      setSelectedSubgroup(null);
-      setExpandedTests({});
-      setSearchText('');
-      setIsLoadingCatalog(true);
+            setGroups([]);
+            setSelectedGroup(null);
+            setSelectedSubgroup(null);
+            setExpandedTests({});
+            setSearchText('');
+            setCatalogSearchResults([]);
+            setIsLoadingCatalog(true);
 
       try {
         const catalogResponse = await onPanelCompanySelect({
           patient: selectedPatient,
           compCatId: panelCompany.compCatId,
           panelCompany,
+          catalogLevel: 'groups',
         });
 
         const nextGroups = sortCatalogGroups(catalogResponse?.groups, false);
@@ -711,22 +893,169 @@ function AddTestScreen({
     ],
   );
 
+  const handleSelectGroup = useCallback(
+    async group => {
+      if (!activePanelCompany || !selectedPatient || !onPanelCompanySelect) {
+        return;
+      }
+
+      const gcode = getCatalogGroupId(group);
+      if (!gcode) {
+        setSelectedGroup(group);
+        setSearchText('');
+        return;
+      }
+
+      setIsLoadingCatalog(true);
+      try {
+        const response = await onPanelCompanySelect({
+          patient: selectedPatient,
+          compCatId: activePanelCompany.compCatId,
+          panelCompany: activePanelCompany,
+          catalogLevel: 'subgroups',
+          gcode,
+        });
+        const subgroups = Array.isArray(response?.subgroups)
+          ? response.subgroups
+          : Array.isArray(group?.subgroups)
+          ? group.subgroups
+          : [];
+        const nextGroup = {
+          ...group,
+          subgroups: [...subgroups].sort((leftSubgroup, rightSubgroup) =>
+            compareCatalogIds(
+              getCatalogSubgroupId(leftSubgroup),
+              getCatalogSubgroupId(rightSubgroup),
+            ),
+          ),
+        };
+
+        setGroups(previousGroups =>
+          previousGroups.map(previousGroup =>
+            getCatalogGroupId(previousGroup) === gcode ? nextGroup : previousGroup,
+          ),
+        );
+        setSelectedGroup(nextGroup);
+        setSelectedSubgroup(null);
+        setExpandedTests({});
+        setSearchText('');
+        setCatalogSearchResults([]);
+      } finally {
+        setIsLoadingCatalog(false);
+        onLocalDatabaseLoadingChange?.('');
+      }
+    },
+    [
+      activePanelCompany,
+      onLocalDatabaseLoadingChange,
+      onPanelCompanySelect,
+      selectedPatient,
+    ],
+  );
+
+  const handleSelectSubgroup = useCallback(
+    async subgroup => {
+      if (!activePanelCompany || !selectedPatient || !onPanelCompanySelect) {
+        return;
+      }
+
+      const gcode = getCatalogGroupId(selectedGroup);
+      const scode = getCatalogSubgroupId(subgroup);
+      if (!gcode || !scode) {
+        setSelectedSubgroup(subgroup);
+        setSearchText('');
+        return;
+      }
+
+      setIsLoadingCatalog(true);
+      try {
+        const response = await onPanelCompanySelect({
+          patient: selectedPatient,
+          compCatId: activePanelCompany.compCatId,
+          panelCompany: activePanelCompany,
+          catalogLevel: 'tests',
+          gcode,
+          scode,
+        });
+        const tests = Array.isArray(response?.tests)
+          ? response.tests
+          : Array.isArray(subgroup?.tests)
+          ? subgroup.tests
+          : [];
+        const nextSubgroup = {
+          ...subgroup,
+          tests: sortCatalogTestsByCode(dedupeTests(tests)),
+        };
+
+        setGroups(previousGroups =>
+          previousGroups.map(previousGroup => {
+            if (getCatalogGroupId(previousGroup) !== gcode) {
+              return previousGroup;
+            }
+
+            return {
+              ...previousGroup,
+              subgroups: (Array.isArray(previousGroup?.subgroups)
+                ? previousGroup.subgroups
+                : []
+              ).map(previousSubgroup =>
+                getCatalogSubgroupId(previousSubgroup) === scode
+                  ? nextSubgroup
+                  : previousSubgroup,
+              ),
+            };
+          }),
+        );
+        setSelectedGroup(previousGroup =>
+          previousGroup
+            ? {
+                ...previousGroup,
+                subgroups: (Array.isArray(previousGroup?.subgroups)
+                  ? previousGroup.subgroups
+                  : []
+                ).map(previousSubgroup =>
+                  getCatalogSubgroupId(previousSubgroup) === scode
+                    ? nextSubgroup
+                    : previousSubgroup,
+                ),
+              }
+            : previousGroup,
+        );
+        setSelectedSubgroup(nextSubgroup);
+        setExpandedTests({});
+        setSearchText('');
+        setCatalogSearchResults([]);
+      } finally {
+        setIsLoadingCatalog(false);
+        onLocalDatabaseLoadingChange?.('');
+      }
+    },
+    [
+      activePanelCompany,
+      dedupeTests,
+      onLocalDatabaseLoadingChange,
+      onPanelCompanySelect,
+      selectedGroup,
+      selectedPatient,
+    ],
+  );
+
   return (
     <>
-      <View style={styles.sectionCard}>
-        <View style={styles.sectionTitleRow}>
-          <View style={styles.sectionIconWrap}>
-            <Ionicons name="flask" size={16} style={styles.sectionIcon} />
-          </View>
-          <Text style={styles.sectionTitle}>Add Test</Text>
-        </View>
-      </View>
-
       <View style={styles.bookingDetailCard}>
         <View style={styles.sampleCollectionCompactHeader}>
-          <Text style={styles.sampleCollectionCompactTitle}>
-            {selectedPatient?.name || 'Patient Not Selected'}
-          </Text>
+          <View style={styles.addTestPatientTitleRow}>
+            <Text style={styles.sampleCollectionCompactTitle}>
+              {selectedPatient?.name || 'Patient Not Selected'}
+            </Text>
+            {activePanelCompany?.name ? (
+              <View style={styles.addTestPanelCompanyBadge}>
+                <Text style={styles.addTestPanelCompanyBadgeText}>
+                  {activePanelCompany.name}
+                </Text>
+              </View>
+            ) : null}
+          </View>
           <Text style={styles.sampleCollectionCompactMeta}>
             {selectedPatient
               ? `${selectedPatient.gender} | ${selectedPatient.age} yrs | ${
@@ -798,7 +1127,6 @@ function AddTestScreen({
         </View>
 
         <View style={styles.sampleCollectionSection}>
-          <Text style={styles.sampleCollectionSectionTitle}>Panel Companies</Text>
           {isLoadingCompanies ? (
             <View style={styles.sampleCollectionLoadingCard}>
               <ActivityIndicator color="#1557B7" />
@@ -806,7 +1134,7 @@ function AddTestScreen({
                 Loading panel companies...
               </Text>
             </View>
-          ) : panelCompanies.length ? (
+          ) : panelCompanies.length > 1 ? (
             <View style={styles.sampleCollectionChipRow}>
               {panelCompanies.map(company => {
                 const isActive =
@@ -834,9 +1162,10 @@ function AddTestScreen({
                 );
               })}
             </View>
-          ) : (
+          ) : !panelCompanies.length ? (
             <Text style={styles.sectionText}>No panel companies available.</Text>
-          )}
+          ) : null
+          }
         </View>
 
         {activePanelCompany ? (
@@ -851,7 +1180,7 @@ function AddTestScreen({
                 <TextInput
                   value={searchText}
                   onChangeText={setSearchText}
-                  placeholder="Search test, profile, code, or specimen"
+                  placeholder="Search test or code"
                   placeholderTextColor="#6D7C80"
                   style={styles.panelCompanySearchInput}
                 />
@@ -862,10 +1191,10 @@ function AddTestScreen({
                 {selectedSubgroup
                   ? `Tests in ${getCatalogSubgroupTitle(selectedSubgroup)}`
                   : !selectedGroup && searchText.trim().length > 0
-                  ? `Search Results in ${activePanelCompany.name}`
+                  ? 'Search Results'
                   : selectedGroup
                   ? `Subgroups in ${getCatalogGroupTitle(selectedGroup)}`
-                  : `Groups in ${activePanelCompany.name}`}
+                  : 'Groups'}
               </Text>
               {(selectedGroup || selectedSubgroup) ? (
                 <TouchableOpacity
@@ -897,6 +1226,13 @@ function AddTestScreen({
                     Loading test catalog...
                   </Text>
                 </View>
+              ) : isSearchingCatalog ? (
+                <View style={styles.sampleCollectionLoadingCard}>
+                  <ActivityIndicator color="#1557B7" />
+                  <Text style={styles.sampleCollectionLoadingText}>
+                    Searching tests...
+                  </Text>
+                </View>
               ) : activeItems.length ? (
                 visibleActiveItems.map((item, index) => {
                   const isSearchResultsList =
@@ -910,9 +1246,6 @@ function AddTestScreen({
                     Boolean(selectedGroup) &&
                     !selectedSubgroup;
                   const isTestsList = Boolean(selectedSubgroup) || isSearchResultsList;
-                  const childTests = Array.isArray(item?.child_tests)
-                    ? item.child_tests
-                    : [];
                   const testDisplayTitle =
                     item?.description?.trim() ||
                     (item?.booked_code ? `Test ${item.booked_code}` : '');
@@ -924,8 +1257,6 @@ function AddTestScreen({
                     ? getCatalogSubgroupTitle(item)
                     : testDisplayTitle;
                   const itemKey = `${title || 'item'}-${index}`;
-                  const isExpanded = Boolean(expandedTests[itemKey]);
-
                   return (
                     <View key={itemKey} style={styles.sampleCollectionCatalogCard}>
                       <TouchableOpacity
@@ -933,33 +1264,19 @@ function AddTestScreen({
                         style={styles.sampleCollectionCatalogHeader}
                         onPress={() => {
                           if (isSearchResultsList) {
-                            if (childTests.length) {
-                              setExpandedTests(previousState => ({
-                                ...previousState,
-                                [itemKey]: !previousState[itemKey],
-                              }));
-                            }
                             return;
                           }
 
                           if (isGroupList) {
-                            setSelectedGroup(item);
-                            setSearchText('');
+                            handleSelectGroup(item);
                             return;
                           }
 
                           if (isSubgroupList) {
-                            setSelectedSubgroup(item);
-                            setSearchText('');
+                            handleSelectSubgroup(item);
                             return;
                           }
 
-                          if (childTests.length) {
-                            setExpandedTests(previousState => ({
-                              ...previousState,
-                              [itemKey]: !previousState[itemKey],
-                            }));
-                          }
                         }}>
                         <View style={styles.sampleCollectionCatalogTextWrap}>
                           <Text style={styles.sampleCollectionCatalogTitle}>
@@ -968,21 +1285,9 @@ function AddTestScreen({
                           </Text>
                           <Text style={styles.sampleCollectionCatalogMeta}>
                             {isGroupList
-                              ? `GCode: ${
-                                  getCatalogGroupId(item) || 'N/A'
-                                } | ${
-                                  Array.isArray(item?.subgroups)
-                                    ? item.subgroups.length
-                                    : 0
-                                } subgroups`
+                              ? `GCode: ${getCatalogGroupId(item) || 'N/A'}`
                               : isSubgroupList
-                              ? `SCode: ${
-                                  getCatalogSubgroupId(item) || 'N/A'
-                                } | ${
-                                  Array.isArray(item?.tests)
-                                    ? item.tests.length
-                                    : 0
-                                } tests`
+                              ? `SCode: ${getCatalogSubgroupId(item) || 'N/A'}`
                               : isSearchResultsList
                               ? `${item?.__groupName || 'N/A'} -> ${
                                   item?.__subgroupName || 'N/A'
@@ -991,8 +1296,7 @@ function AddTestScreen({
                           </Text>
                           {isSearchResultsList ? (
                             <Text style={styles.sampleCollectionCatalogMeta}>
-                              Code: {item?.booked_code || 'N/A'} | Specimen:{' '}
-                              {item?.specimen_name || 'N/A'} | MRP:{' '}
+                              Code: {item?.booked_code || 'N/A'} | MRP:{' '}
                               {item?.mrp ?? 0}
                             </Text>
                           ) : null}
@@ -1033,48 +1337,6 @@ function AddTestScreen({
                         )}
                       </TouchableOpacity>
 
-                      {isTestsList && childTests.length ? (
-                        <View style={styles.sampleCollectionChildSection}>
-                          <TouchableOpacity
-                            activeOpacity={0.85}
-                            style={styles.sampleCollectionChildToggle}
-                            onPress={() =>
-                              setExpandedTests(previousState => ({
-                                ...previousState,
-                                [itemKey]: !previousState[itemKey],
-                              }))
-                            }>
-                            <Text style={styles.sampleCollectionChildToggleText}>
-                              {isExpanded ? 'Hide Child Tests' : 'Show Child Tests'}
-                            </Text>
-                            <Ionicons
-                              name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                              size={15}
-                              style={styles.sampleCollectionChevron}
-                            />
-                          </TouchableOpacity>
-
-                          {isExpanded
-                            ? childTests.map((childTest, childIndex) => (
-                                <View
-                                  key={`${childTest?.booked_code || 'child'}-${childIndex}`}
-                                  style={styles.sampleCollectionChildCard}>
-                                  <View style={styles.sampleCollectionCatalogTextWrap}>
-                                    <Text style={styles.sampleCollectionCatalogTitle}>
-                                      {childTest?.description?.trim() ||
-                                        (childTest?.booked_code
-                                          ? `Child Test ${childTest.booked_code}`
-                                          : 'Unnamed Child Test')}
-                                    </Text>
-                                    <Text style={styles.sampleCollectionCatalogMeta}>
-                                      Code: {childTest?.booked_code || 'N/A'}
-                                    </Text>
-                                  </View>
-                                </View>
-                              ))
-                            : null}
-                        </View>
-                      ) : null}
                     </View>
                   );
                 })
@@ -1111,6 +1373,12 @@ function AddTestScreen({
         alert={appAlert}
         styles={styles}
         onClose={() => setAppAlert(null)}
+      />
+      <LoadingOverlay
+        styles={styles}
+        visible={addTestLoadingOverlayVisible}
+        title={addTestLoadingOverlayCopy.title}
+        message={addTestLoadingOverlayCopy.message}
       />
     </>
   );

@@ -44,6 +44,25 @@ const isStartedBooking = booking =>
   Number(booking?.bookingStatusCode) === 2 ||
   String(booking?.status || '').trim().toLowerCase().includes('start');
 
+const getPatientDisplayNames = booking => {
+  const directNames = String(booking?.patientNames || '').trim();
+  if (directNames) {
+    return directNames;
+  }
+
+  const patients = Array.isArray(booking?.patients) ? booking.patients : [];
+  const derivedNames = patients
+    .map(patient =>
+      String(
+        patient?.name || patient?.fullName || patient?.full_name || '',
+      ).trim(),
+    )
+    .filter(Boolean)
+    .join(', ');
+
+  return derivedNames;
+};
+
 const getQueueBadgeStyle = (styles, status) => {
   const tone = getStatusTone(status);
 
@@ -92,7 +111,14 @@ const getActiveStatusTextStyle = (styles, status) => {
   ];
 };
 
-function QueueMetaRow({styles, icon, label, value, active = false}) {
+function QueueMetaRow({
+  styles,
+  icon,
+  label,
+  value,
+  active = false,
+  highlight = false,
+}) {
   return (
     <View style={styles.assignedQueueMetaRow}>
       <Ionicons
@@ -101,18 +127,24 @@ function QueueMetaRow({styles, icon, label, value, active = false}) {
         style={[
           styles.assignedQueueMetaIcon,
           active && styles.assignedQueueMetaIconActive,
+          highlight && styles.assignedQueueMetaIconHighlight,
+          active && highlight && styles.assignedQueueMetaIconHighlightActive,
         ]}
       />
       <Text
         style={[
           styles.assignedQueueMetaText,
           active && styles.assignedQueueMetaTextActive,
+          highlight && styles.assignedQueueMetaTextHighlight,
+          active && highlight && styles.assignedQueueMetaTextHighlightActive,
         ]}>
         {label ? (
           <Text
             style={[
               styles.assignedQueueMetaLabel,
               active && styles.assignedQueueMetaLabelActive,
+              highlight && styles.assignedQueueMetaLabelHighlight,
+              active && highlight && styles.assignedQueueMetaLabelHighlightActive,
             ]}>
             {label}:{' '}
           </Text>
@@ -121,6 +153,8 @@ function QueueMetaRow({styles, icon, label, value, active = false}) {
           style={[
             styles.assignedQueueMetaValue,
             active && styles.assignedQueueMetaValueActive,
+            highlight && styles.assignedQueueMetaValueHighlight,
+            active && highlight && styles.assignedQueueMetaValueHighlightActive,
           ]}>
           {value}
         </Text>
@@ -166,16 +200,19 @@ function AssignedAppointmentsScreen({
     },
     [assignedAppointments, showActiveCard],
   );
+  const hasAssignedAppointments = assignedAppointments.length > 0;
 
   return (
     <>
-      {isLoadingAssignedAppointments ? (
+      {isLoadingAssignedAppointments && !hasAssignedAppointments ? (
         <View style={styles.sectionCard}>
           <Text style={styles.sectionText}>{loadingText}</Text>
         </View>
       ) : null}
 
-      {!isLoadingAssignedAppointments && assignedAppointmentsError ? (
+      {!isLoadingAssignedAppointments &&
+      !hasAssignedAppointments &&
+      assignedAppointmentsError ? (
         <View style={styles.sectionCard}>
           <Text style={styles.sectionText}>{assignedAppointmentsError}</Text>
           <TouchableOpacity
@@ -191,15 +228,13 @@ function AssignedAppointmentsScreen({
 
       {!isLoadingAssignedAppointments &&
       !assignedAppointmentsError &&
-      assignedAppointments.length === 0 ? (
+      !hasAssignedAppointments ? (
         <View style={styles.sectionCard}>
           <Text style={styles.sectionText}>{emptyText}</Text>
         </View>
       ) : null}
 
-      {!isLoadingAssignedAppointments &&
-      !assignedAppointmentsError &&
-      assignedAppointments.length ? (
+      {!assignedAppointmentsError && hasAssignedAppointments ? (
         <View style={styles.assignedQueueShell}>
           {activeBooking ? (
             <TouchableOpacity
@@ -219,6 +254,23 @@ function AssignedAppointmentsScreen({
                 {activeBooking.bookingCode}
               </Text>
               <View style={styles.assignedActiveMetaStack}>
+                {getPatientDisplayNames(activeBooking) ? (
+                  <QueueMetaRow
+                    styles={styles}
+                    icon="person-outline"
+                    label="Patient Name"
+                    value={getPatientDisplayNames(activeBooking)}
+                    active
+                    highlight
+                  />
+                ) : null}
+                <QueueMetaRow
+                  styles={styles}
+                  icon="people-outline"
+                  label="Patient Count"
+                  value={activeBooking.patientCount || activeBooking.patients?.length || 1}
+                  active
+                />
                 <QueueMetaRow
                   styles={styles}
                   icon="calendar-outline"
@@ -233,22 +285,6 @@ function AssignedAppointmentsScreen({
                   value={activeBooking.timeSlot}
                   active
                 />
-                <QueueMetaRow
-                  styles={styles}
-                  icon="people-outline"
-                  label="Patient Count"
-                  value={activeBooking.patientCount || activeBooking.patients?.length || 1}
-                  active
-                />
-                {activeBooking.patientNames ? (
-                  <QueueMetaRow
-                    styles={styles}
-                    icon="person-outline"
-                    label="Patient Names"
-                    value={activeBooking.patientNames}
-                    active
-                  />
-                ) : null}
               </View>
               <View style={getActiveStatusChipStyle(styles, activeBooking.status)}>
                 <Text style={getActiveStatusTextStyle(styles, activeBooking.status)}>
@@ -288,6 +324,21 @@ function AssignedAppointmentsScreen({
                         <Text style={styles.assignedQueueCode}>
                           {booking.bookingCode}
                         </Text>
+                        {getPatientDisplayNames(booking) ? (
+                          <QueueMetaRow
+                            styles={styles}
+                            icon="person-outline"
+                            label="Patient Name"
+                            value={getPatientDisplayNames(booking)}
+                            highlight
+                          />
+                        ) : null}
+                        <QueueMetaRow
+                          styles={styles}
+                          icon="people-outline"
+                          label="Patient Count"
+                          value={booking.patientCount || booking.patients?.length || 1}
+                        />
                         <QueueMetaRow
                           styles={styles}
                           icon="calendar-outline"
@@ -300,20 +351,6 @@ function AssignedAppointmentsScreen({
                           label="Time Slot"
                           value={booking.timeSlot}
                         />
-                        <QueueMetaRow
-                          styles={styles}
-                          icon="people-outline"
-                          label="Patient Count"
-                          value={booking.patientCount || booking.patients?.length || 1}
-                        />
-                        {booking.patientNames ? (
-                          <QueueMetaRow
-                            styles={styles}
-                            icon="person-outline"
-                            label="Patient Names"
-                            value={booking.patientNames}
-                          />
-                        ) : null}
                       </View>
                       <QueueBadge styles={styles} label={booking.status} />
                     </View>

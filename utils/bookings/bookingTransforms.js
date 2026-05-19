@@ -364,6 +364,43 @@ const normalizePatientTests = source => {
     .filter(Boolean);
 };
 
+const normalizePatientDocuments = source => {
+  if (!Array.isArray(source)) {
+    return [];
+  }
+
+  return source
+    .map((document, index) => {
+      if (!document || typeof document !== 'object') {
+        const file = toDisplayString(document);
+        return file
+          ? {
+              id: `patient-document-${index}`,
+              file,
+              type: '',
+              url: '',
+            }
+          : null;
+      }
+
+      const file = toDisplayString(document?.file || document?.name || document?.path);
+      const type = toDisplayString(document?.type || document?.document_type);
+      const url = toDisplayString(document?.url || document?.document_url);
+
+      if (!file && !type && !url) {
+        return null;
+      }
+
+      return {
+        id: `patient-document-${index}`,
+        file,
+        type,
+        url,
+      };
+    })
+    .filter(Boolean);
+};
+
 const normalizeLinkedPatients = source =>
   (Array.isArray(source) ? source : [])
     .map((patient, index) => ({
@@ -459,15 +496,35 @@ export const normalizeAssignedBooking = (booking, index) => {
   const sourceType = toDisplayString(
     booking?.source_type || booking?.sourceType,
   );
-  const patientNamesText = toDisplayString(
-    booking?.patient_names || booking?.patientNames,
-  );
-  const patientNames = patientNamesText
+  const patientNamesRaw = booking?.patient_names ?? booking?.patientNames;
+  const patientNamesText =
+    typeof patientNamesRaw === 'string' ? toDisplayString(patientNamesRaw) : '';
+  const patientNamesFromText = patientNamesText
     ? patientNamesText
         .split(',')
         .map(name => toDisplayString(name))
         .filter(Boolean)
     : [];
+  const patientNamesFromRawArray = Array.isArray(patientNamesRaw)
+    ? patientNamesRaw.map(name => toDisplayString(name)).filter(Boolean)
+    : [];
+  const patientNamesFromArray = (Array.isArray(booking?.patients) ? booking.patients : [])
+    .map(patient =>
+      toDisplayString(
+        patient?.full_name ||
+          patient?.fullName ||
+          patient?.patient_name ||
+          patient?.patientName ||
+          patient?.name,
+      ),
+    )
+    .filter(Boolean);
+  const patientNames = patientNamesFromText.length
+    ? patientNamesFromText
+    : patientNamesFromRawArray.length
+    ? patientNamesFromRawArray
+    : patientNamesFromArray;
+  const resolvedPatientNamesText = patientNamesText || patientNames.join(', ');
 
   return {
     id:
@@ -488,7 +545,7 @@ export const normalizeAssignedBooking = (booking, index) => {
       id: `assigned-patient-${index}-${patientIndex}`,
       name,
     })),
-    patientNames: patientNamesText,
+    patientNames: resolvedPatientNamesText,
     patientCount:
       Number.isNaN(patientCount) || patientCount < 1
         ? Math.max(1, patientNames.length || 1)
@@ -742,6 +799,12 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
         tubes: extractTestsList(patient?.tubes || patient?.tube_list),
         documents: extractTestsList(
           patient?.documents || patient?.document_list || patient?.docs,
+        ),
+        patientDocuments: normalizePatientDocuments(
+          patient?.patient_documents ||
+            patient?.patientDocuments ||
+            patient?.patient_document ||
+            patient?.patientDocument,
         ),
         patientDocumentUrls: normalizeUrlList(
           patient?.patient_document_urls ||

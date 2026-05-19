@@ -57,6 +57,24 @@ function BookingCard({
 
       {isAssignedAppointmentCard ? (
         <View style={styles.bookingMetaRow}>
+          <Ionicons name="person-outline" size={15} style={styles.bookingMetaIcon} />
+          <Text style={styles.bookingMetaText} numberOfLines={2}>
+            Patient Name: {patientNames}
+          </Text>
+        </View>
+      ) : null}
+
+      {isAssignedAppointmentCard ? (
+        <View style={styles.bookingMetaRow}>
+          <Ionicons name="people-outline" size={15} style={styles.bookingMetaIcon} />
+          <Text style={styles.bookingMetaText}>
+            Patient Count: {resolvedPatientCount}
+          </Text>
+        </View>
+      ) : null}
+
+      {isAssignedAppointmentCard ? (
+        <View style={styles.bookingMetaRow}>
           <Ionicons name="calendar-outline" size={15} style={styles.bookingMetaIcon} />
           <Text style={styles.bookingMetaText}>
             Visit Date: {booking.preferredVisitDate}
@@ -71,15 +89,6 @@ function BookingCard({
           {booking.timeSlot}
         </Text>
       </View>
-
-      {isAssignedAppointmentCard ? (
-        <View style={styles.bookingMetaRow}>
-          <Ionicons name="people-outline" size={15} style={styles.bookingMetaIcon} />
-          <Text style={styles.bookingMetaText}>
-            Patient Count: {resolvedPatientCount}
-          </Text>
-        </View>
-      ) : null}
 
       {!isAssignedAppointmentCard ? (
         <View style={styles.bookingMetaRow}>

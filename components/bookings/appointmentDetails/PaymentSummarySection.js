@@ -95,6 +95,34 @@ function PaymentSummarySection({
             </Text>
           </View>
         </View>
+        {localBillingSummary.patientBillingRows?.length ? (
+          <View style={styles.paymentSummaryDiscountAction}>
+            <View style={styles.sectionTitleRow}>
+              <Ionicons
+                name="people-outline"
+                size={15}
+                style={styles.completeSecondaryButtonIcon}
+              />
+              <Text style={styles.paymentSummarySubTitle}>
+                Patient-wise Total Amount
+              </Text>
+            </View>
+            <View style={styles.paymentSummaryRows}>
+              {localBillingSummary.patientBillingRows.map(patientRow => (
+                <View
+                  key={`patient-total-${patientRow.patientId}`}
+                  style={styles.paymentSummaryRow}>
+                  <Text style={styles.paymentSummaryRowLabel}>
+                    {patientRow.patientName}
+                  </Text>
+                  <Text style={styles.paymentSummaryRowValue}>
+                    Rs. {Number(patientRow.finalAmount || 0).toFixed(2)}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : null}
         <View style={styles.paymentSummaryDiscountAction}>
           {isAdditionalDiscountEnabled && patientAdditionalDiscountRows.length ? (
             <>

@@ -209,6 +209,14 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     val scode: String,
   )
 
+  private data class ProfileChildRow(
+    val bookedCode: String,
+    val masterTestCode: String,
+    val description: String,
+    val profile: Int,
+    val specimenName: String,
+  )
+
   private fun databaseFile(): File =
     File(reactApplicationContext.filesDir, assetName)
 
@@ -314,6 +322,26 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       )
       """.trimIndent(),
     )
+    db.execSQL(
+      """
+      CREATE TABLE IF NOT EXISTS handover_pending (
+        row_key TEXT PRIMARY KEY,
+        booking_id TEXT NOT NULL,
+        booking_code TEXT,
+        patient_id TEXT,
+        booking_patient_id TEXT NOT NULL,
+        patient_name TEXT,
+        tube_name TEXT NOT NULL,
+        completed_at TEXT
+      )
+      """.trimIndent(),
+    )
+    db.execSQL(
+      """
+      CREATE INDEX IF NOT EXISTS idx_handover_pending_booking
+      ON handover_pending(booking_id, booking_patient_id)
+      """.trimIndent(),
+    )
 
     syncTableSpecs.values.forEach { spec ->
       val columnSql = spec.columns.joinToString(", ") { column ->
@@ -358,10 +386,23 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     db.execSQL(
       "CREATE INDEX IF NOT EXISTS idx_panel_rates_company_test ON panel_rates(comp_cat_id, booked_code)",
     )
+    db.execSQL(
+      "CREATE INDEX IF NOT EXISTS idx_panelrates_company_group_subgroup ON panelrates(CompCatID, CenterID, GCode, SCode, BookedFlag)",
+    )
+    db.execSQL(
+      "CREATE INDEX IF NOT EXISTS idx_panelrates_company_test ON panelrates(CompCatID, CenterID, TestCode, CTestCode, BookedFlag)",
+    )
+    db.execSQL("CREATE INDEX IF NOT EXISTS idx_groups_gcode ON groups(gcode)")
+    db.execSQL("CREATE INDEX IF NOT EXISTS idx_subgroups_group_subgroup ON subgroups(gcode, scode)")
     db.execSQL("CREATE INDEX IF NOT EXISTS idx_tests_testcode1 ON tests(testcode1)")
+    db.execSQL("CREATE INDEX IF NOT EXISTS idx_tests_test_code ON tests(test_code)")
+    db.execSQL("CREATE INDEX IF NOT EXISTS idx_tests_group_subgroup_test ON tests(gcode, scode, test_code)")
     db.execSQL("CREATE INDEX IF NOT EXISTS idx_tests_specimen ON tests(specimen_id)")
     db.execSQL(
       "CREATE INDEX IF NOT EXISTS idx_test_profiles_parent ON test_profiles(gcode, scode, profile_code)",
+    )
+    db.execSQL(
+      "CREATE INDEX IF NOT EXISTS idx_test_profiles_parent_child ON test_profiles(gcode, scode, profile_code, child_testcode1)",
     )
   }
 
@@ -488,7 +529,15 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
 
       db.rawQuery(
         """
-        SELECT id, sync_key, center_id, atype, pname, comp_cat_id, cat_details, billing_charge_mode
+        SELECT
+          CAST(id AS TEXT) AS id,
+          sync_key,
+          CAST(center_id AS TEXT) AS center_id,
+          atype,
+          pname,
+          CAST(comp_cat_id AS TEXT) AS comp_cat_id,
+          cat_details,
+          billing_charge_mode
         FROM panel_companies
         ORDER BY pname COLLATE NOCASE, comp_cat_id
         """.trimIndent(),
@@ -497,12 +546,12 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         while (cursor.moveToNext()) {
           items.put(
             JSONObject()
-              .put("id", cursor.intValue("id"))
+              .put("id", cursor.stringValue("id"))
               .put("sync_key", cursor.stringValue("sync_key"))
-              .put("CenterID", cursor.intValue("center_id"))
+              .put("CenterID", cursor.stringValue("center_id"))
               .put("Atype", cursor.stringValue("atype"))
               .put("pname", cursor.stringValue("pname"))
-              .put("CompCatID", cursor.intValue("comp_cat_id"))
+              .put("CompCatID", cursor.stringValue("comp_cat_id"))
               .put("CatDetails", cursor.stringValue("cat_details"))
               .put("BillingChargeMode", cursor.stringValue("billing_charge_mode")),
           )
@@ -606,6 +655,170 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       promise.resolve(JSONObject().put("ok", true).put("items", items).toString())
     } catch (error: Exception) {
       promise.reject("ADDRESS_PINCODE_ERROR", error)
+    }
+  }
+
+  @ReactMethod
+  fun getPatientTags(promise: Promise) {
+    try {
+      val db = openDatabase()
+      val items = JSONArray()
+
+      db.rawQuery(
+        """
+        SELECT tag_name
+        FROM tag_master
+        WHERE is_active = 1
+          AND allow_in_patient_tag = 1
+          AND TRIM(tag_name) != ''
+        ORDER BY tag_name COLLATE NOCASE
+        """.trimIndent(),
+        emptyArray<String>(),
+      ).use { cursor ->
+        while (cursor.moveToNext()) {
+          items.put(cursor.stringValue("tag_name"))
+        }
+      }
+
+      promise.resolve(JSONObject().put("ok", true).put("items", items).toString())
+    } catch (error: Exception) {
+      promise.reject("PATIENT_TAGS_ERROR", error)
+    }
+  }
+
+  @ReactMethod
+  fun getPendingHandoverRows(promise: Promise) {
+    try {
+      val db = openDatabase()
+      val items = JSONArray()
+
+      db.rawQuery(
+        """
+        SELECT
+          row_key,
+          booking_id,
+          booking_code,
+          patient_id,
+          booking_patient_id,
+          patient_name,
+          tube_name,
+          completed_at
+        FROM handover_pending
+        ORDER BY
+          COALESCE(NULLIF(completed_at, ''), '0000-00-00 00:00:00') DESC,
+          CAST(booking_id AS INTEGER),
+          patient_name COLLATE NOCASE,
+          tube_name COLLATE NOCASE
+        """.trimIndent(),
+        emptyArray<String>(),
+      ).use { cursor ->
+        while (cursor.moveToNext()) {
+          items.put(
+            JSONObject()
+              .put("row_key", cursor.stringValue("row_key"))
+              .put("booking_id", cursor.stringValue("booking_id"))
+              .put("booking_code", cursor.stringValue("booking_code"))
+              .put("patient_id", cursor.stringValue("patient_id"))
+              .put("booking_patient_id", cursor.stringValue("booking_patient_id"))
+              .put("patient_name", cursor.stringValue("patient_name"))
+              .put("tube_name", cursor.stringValue("tube_name"))
+              .put("completed_at", cursor.stringValue("completed_at")),
+          )
+        }
+      }
+
+      promise.resolve(JSONObject().put("ok", true).put("items", items).toString())
+    } catch (error: Exception) {
+      promise.reject("HANDOVER_PENDING_ERROR", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun upsertPendingHandoverRows(rowsJson: String, promise: Promise) {
+    try {
+      val db = openDatabase()
+      val rows = JSONArray(rowsJson.ifBlank { "[]" })
+      var rowsChanged = 0
+
+      db.beginTransaction()
+      try {
+        for (index in 0 until rows.length()) {
+          val row = rows.optJSONObject(index) ?: continue
+          val rowKey = rowString(row, "row_key")
+          val bookingId = rowString(row, "booking_id")
+          val bookingPatientId = rowString(row, "booking_patient_id")
+          val tubeName = rowString(row, "tube_name")
+
+          if (
+            rowKey.isBlank() ||
+              bookingId.isBlank() ||
+              bookingPatientId.isBlank() ||
+              tubeName.isBlank()
+          ) {
+            continue
+          }
+
+          val values = ContentValues().apply {
+            put("row_key", rowKey)
+            put("booking_id", bookingId)
+            put("booking_code", rowString(row, "booking_code"))
+            put("patient_id", rowString(row, "patient_id"))
+            put("booking_patient_id", bookingPatientId)
+            put("patient_name", rowString(row, "patient_name"))
+            put("tube_name", tubeName)
+            put("completed_at", rowString(row, "completed_at"))
+          }
+
+          db.insertWithOnConflict(
+            "handover_pending",
+            null,
+            values,
+            SQLiteDatabase.CONFLICT_REPLACE,
+          )
+          rowsChanged += 1
+        }
+
+        db.setTransactionSuccessful()
+      } finally {
+        db.endTransaction()
+      }
+
+      promise.resolve(JSONObject().put("ok", true).put("rowsChanged", rowsChanged).toString())
+    } catch (error: Exception) {
+      promise.reject("HANDOVER_PENDING_UPSERT_ERROR", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun deletePendingHandoverRows(rowKeysJson: String, promise: Promise) {
+    try {
+      val db = openDatabase()
+      val rowKeys = JSONArray(rowKeysJson.ifBlank { "[]" })
+      var rowsDeleted = 0
+
+      db.beginTransaction()
+      try {
+        for (index in 0 until rowKeys.length()) {
+          val rowKey = rowKeys.optString(index, "").trim()
+          if (rowKey.isBlank()) {
+            continue
+          }
+
+          rowsDeleted += db.delete(
+            "handover_pending",
+            "row_key = ?",
+            arrayOf(rowKey),
+          )
+        }
+
+        db.setTransactionSuccessful()
+      } finally {
+        db.endTransaction()
+      }
+
+      promise.resolve(JSONObject().put("ok", true).put("rowsDeleted", rowsDeleted).toString())
+    } catch (error: Exception) {
+      promise.reject("HANDOVER_PENDING_DELETE_ERROR", error.message, error)
     }
   }
 
@@ -733,6 +946,131 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           .put("panel_company", panelCompany)
           .put("panel_identity", resolvedPanel)
           .put("groups", groups)
+          .toString(),
+      )
+    } catch (error: Exception) {
+      promise.reject("CATALOG_DB_ERROR", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun getPanelCatalogGroupsByCompanyIdentity(panelCompanyJson: String, promise: Promise) {
+    try {
+      val db = openDatabase()
+      val resolvedPanel = resolvePanelIdentityFromRequest(db, panelCompanyJson)
+      val normalizedCompCatId = resolvedPanel.optString("compCatId", "").trim()
+      val centerId = resolvedPanel.optString("centerId", "").trim()
+      val groups = if (centerId.isNotBlank()) {
+        buildLightRawGroups(db, normalizedCompCatId, centerId)
+      } else {
+        buildLightGroups(db, normalizedCompCatId)
+      }
+      val panelCompany = resolvedPanel.optString("name", "")
+        .ifBlank { resolvePanelCompanyName(db, normalizedCompCatId) }
+
+      promise.resolve(
+        JSONObject()
+          .put("ok", true)
+          .put("lazy", true)
+          .put("panel_company", panelCompany)
+          .put("panel_identity", resolvedPanel)
+          .put("groups", groups)
+          .toString(),
+      )
+    } catch (error: Exception) {
+      promise.reject("CATALOG_DB_ERROR", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun getPanelCatalogSubgroupsByCompanyIdentity(
+    panelCompanyJson: String,
+    gcode: String,
+    promise: Promise,
+  ) {
+    try {
+      val db = openDatabase()
+      val resolvedPanel = resolvePanelIdentityFromRequest(db, panelCompanyJson)
+      val normalizedCompCatId = resolvedPanel.optString("compCatId", "").trim()
+      val centerId = resolvedPanel.optString("centerId", "").trim()
+      val subgroups = if (centerId.isNotBlank()) {
+        buildLightRawSubgroups(db, normalizedCompCatId, centerId, gcode)
+      } else {
+        buildLightSubgroups(db, normalizedCompCatId, gcode)
+      }
+
+      promise.resolve(
+        JSONObject()
+          .put("ok", true)
+          .put("lazy", true)
+          .put("panel_identity", resolvedPanel)
+          .put("gcode", gcode)
+          .put("subgroups", subgroups)
+          .toString(),
+      )
+    } catch (error: Exception) {
+      promise.reject("CATALOG_DB_ERROR", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun getPanelCatalogTestsByCompanyIdentity(
+    panelCompanyJson: String,
+    gcode: String,
+    scode: String,
+    promise: Promise,
+  ) {
+    try {
+      val db = openDatabase()
+      val resolvedPanel = resolvePanelIdentityFromRequest(db, panelCompanyJson)
+      val normalizedCompCatId = resolvedPanel.optString("compCatId", "").trim()
+      val centerId = resolvedPanel.optString("centerId", "").trim()
+      val tests = if (centerId.isNotBlank()) {
+        buildRawTests(db, normalizedCompCatId, centerId, gcode, scode)
+      } else {
+        buildTests(db, normalizedCompCatId, gcode, scode)
+      }
+
+      promise.resolve(
+        JSONObject()
+          .put("ok", true)
+          .put("lazy", true)
+          .put("panel_identity", resolvedPanel)
+          .put("gcode", gcode)
+          .put("scode", scode)
+          .put("tests", tests)
+          .toString(),
+      )
+    } catch (error: Exception) {
+      promise.reject("CATALOG_DB_ERROR", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun searchPanelCatalogTestsByCompanyIdentity(
+    panelCompanyJson: String,
+    query: String,
+    limitText: String,
+    promise: Promise,
+  ) {
+    try {
+      val db = openDatabase()
+      val resolvedPanel = resolvePanelIdentityFromRequest(db, panelCompanyJson)
+      val normalizedCompCatId = resolvedPanel.optString("compCatId", "").trim()
+      val centerId = resolvedPanel.optString("centerId", "").trim()
+      val limit = limitText.toIntOrNull()?.coerceIn(1, 150) ?: 80
+      val tests = if (centerId.isNotBlank()) {
+        searchRawTests(db, normalizedCompCatId, centerId, query, limit)
+      } else {
+        searchProjectedTests(db, normalizedCompCatId, query, limit)
+      }
+
+      promise.resolve(
+        JSONObject()
+          .put("ok", true)
+          .put("lazy", true)
+          .put("panel_identity", resolvedPanel)
+          .put("tests", tests)
           .toString(),
       )
     } catch (error: Exception) {
@@ -975,6 +1313,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
   @ReactMethod
   fun getSampleTubeMappingForTestCodes(testCodesJson: String, promise: Promise) {
     try {
+      val startedAt = System.currentTimeMillis()
       val db = openDatabase()
       val roots = JSONArray(testCodesJson)
       val queue = ArrayDeque<TubeQueueItem>()
@@ -983,6 +1322,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       val childrenMap = JSONObject()
       val testInfoCache = mutableMapOf<String, JSONObject>()
       val childCodesCache = mutableMapOf<String, List<String>>()
+      val profileChildrenByGroupCache = mutableMapOf<String, Map<String, List<String>>>()
 
       for (index in 0 until roots.length()) {
         val root = parseTubeRootRequest(roots.get(index))
@@ -1051,18 +1391,26 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           mapCode,
           testInfo.optString("test_code", "").trim().uppercase(),
         ).filter { it.isNotBlank() }
-
         val childCodesCacheKey = listOf(
           currentItem.gcode,
           currentItem.scode,
           parentCandidates.joinToString(","),
         ).joinToString("|")
         val children = childCodesCache.getOrPut(childCodesCacheKey) {
+          val groupKey = listOf(currentItem.gcode.trim().uppercase(), currentItem.scode.trim().uppercase())
+            .joinToString("|")
+          val groupChildrenMap = profileChildrenByGroupCache.getOrPut(groupKey) {
+            preloadProfileChildrenMap(
+              db,
+              currentItem.gcode,
+              currentItem.scode,
+            )
+          }
           resolveTubeChildCodes(
-            db,
             parentCandidates,
             currentItem.gcode,
             currentItem.scode,
+            groupChildrenMap,
           )
         }
         val childArray = JSONArray()
@@ -1106,6 +1454,10 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           .put("ok", true)
           .put("testsMap", testsMap)
           .put("childrenMap", childrenMap)
+          .put("duration_ms", System.currentTimeMillis() - startedAt)
+          .put("visited_count", visited.size)
+          .put("tests_map_count", testsMap.length())
+          .put("children_map_count", childrenMap.length())
           .toString(),
       )
     } catch (error: Exception) {
@@ -1180,6 +1532,9 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     scode: String = "",
   ): JSONObject {
     val normalizedTestCode = testCode.trim().uppercase()
+    val normalizedCompCatId = compCatId.trim()
+    val normalizedGcode = gcode.trim().uppercase()
+    val normalizedScode = scode.trim().uppercase()
 
     if (
       compCatId.isNotBlank() &&
@@ -1220,30 +1575,30 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name
         FROM panel_rates pr
         LEFT JOIN tests t1
-          ON UPPER(TRIM(t1.gcode)) = UPPER(TRIM(pr.gcode))
-         AND UPPER(TRIM(t1.scode)) = UPPER(TRIM(pr.scode))
-         AND UPPER(TRIM(t1.test_code)) = UPPER(TRIM(pr.test_code))
+          ON t1.gcode = pr.gcode
+         AND t1.scode = pr.scode
+         AND t1.test_code = pr.test_code
         LEFT JOIN tests t2
-          ON UPPER(TRIM(t2.testcode1)) = UPPER(TRIM(pr.ctest_code))
-         AND TRIM(pr.ctest_code) != ''
+          ON t2.testcode1 = pr.ctest_code
+         AND pr.ctest_code != ''
         LEFT JOIN test_specimens ts1 ON ts1.specimen_id = t1.specimen_id
         LEFT JOIN test_specimens ts2 ON ts2.specimen_id = t2.specimen_id
         WHERE CAST(pr.comp_cat_id AS TEXT) = ?
-          AND UPPER(TRIM(pr.gcode)) = ?
-          AND UPPER(TRIM(pr.scode)) = ?
+          AND pr.gcode = ?
+          AND pr.scode = ?
           AND pr.booked_flag = 1
           AND (
-            UPPER(TRIM(pr.ctest_code)) = ?
-            OR UPPER(TRIM(pr.test_code)) = ?
-            OR UPPER(TRIM(t1.testcode1)) = ?
-            OR UPPER(TRIM(t1.test_code)) = ?
-            OR UPPER(TRIM(t2.testcode1)) = ?
-            OR UPPER(TRIM(t2.test_code)) = ?
+            pr.ctest_code = ?
+            OR pr.test_code = ?
+            OR t1.testcode1 = ?
+            OR t1.test_code = ?
+            OR t2.testcode1 = ?
+            OR t2.test_code = ?
           )
         ORDER BY
           CASE
-            WHEN UPPER(TRIM(pr.ctest_code)) = ? THEN 0
-            WHEN UPPER(TRIM(t1.testcode1)) = ? THEN 1
+            WHEN pr.ctest_code = ? THEN 0
+            WHEN t1.testcode1 = ? THEN 1
             ELSE 2
           END,
           pr.ctest_name COLLATE NOCASE
@@ -1252,9 +1607,9 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         arrayOf(
           normalizedTestCode,
           normalizedTestCode,
-          compCatId.trim(),
-          gcode.trim().uppercase(),
-          scode.trim().uppercase(),
+          normalizedCompCatId,
+          normalizedGcode,
+          normalizedScode,
           normalizedTestCode,
           normalizedTestCode,
           normalizedTestCode,
@@ -1272,7 +1627,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("description", cursor.stringValue("description"))
             .put("profile", cursor.intValue("profile"))
             .put("specimen_name", cursor.stringValue("specimen_name"))
-            .put("comp_cat_id", compCatId.trim())
+            .put("comp_cat_id", normalizedCompCatId)
         }
       }
     }
@@ -1288,19 +1643,19 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           ts.sp_name AS specimen_name
         FROM tests t
         LEFT JOIN test_specimens ts ON ts.specimen_id = t.specimen_id
-        WHERE UPPER(TRIM(t.gcode)) = ?
-          AND UPPER(TRIM(t.scode)) = ?
+        WHERE t.gcode = ?
+          AND t.scode = ?
           AND (
-            UPPER(TRIM(t.testcode1)) = ?
-            OR UPPER(TRIM(t.test_code)) = ?
+            t.testcode1 = ?
+            OR t.test_code = ?
           )
         ORDER BY t.testcode1 COLLATE NOCASE
         LIMIT 1
         """.trimIndent(),
         arrayOf(
           normalizedTestCode,
-          gcode.trim().uppercase(),
-          scode.trim().uppercase(),
+          normalizedGcode,
+          normalizedScode,
           normalizedTestCode,
           normalizedTestCode,
         ),
@@ -1326,8 +1681,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         ts.sp_name AS specimen_name
       FROM tests t
       LEFT JOIN test_specimens ts ON ts.specimen_id = t.specimen_id
-      WHERE UPPER(TRIM(t.testcode1)) = ?
-         OR UPPER(TRIM(t.test_code)) = ?
+      WHERE t.testcode1 = ?
+         OR t.test_code = ?
       ORDER BY t.description COLLATE NOCASE
       LIMIT 1
       """.trimIndent(),
@@ -1359,6 +1714,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     gcode: String,
     scode: String,
   ): JSONObject? {
+    val normalizedCompCatId = compCatId.trim()
+    val normalizedCenterId = centerId.trim()
+    val normalizedGcode = gcode.trim().uppercase()
+    val normalizedScode = scode.trim().uppercase()
+
     db.rawQuery(
       """
       SELECT
@@ -1377,31 +1737,31 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name
       FROM panelrates pr
       LEFT JOIN tests t1
-        ON UPPER(TRIM(t1.gcode)) = UPPER(TRIM(pr.GCode))
-       AND UPPER(TRIM(t1.scode)) = UPPER(TRIM(pr.SCode))
-       AND UPPER(TRIM(t1.test_code)) = UPPER(TRIM(pr.TestCode))
+        ON t1.gcode = pr.GCode
+       AND t1.scode = pr.SCode
+       AND t1.test_code = pr.TestCode
       LEFT JOIN tests t2
-        ON UPPER(TRIM(t2.testcode1)) = UPPER(TRIM(pr.CTestCode))
-       AND TRIM(pr.CTestCode) != ''
+        ON t2.testcode1 = pr.CTestCode
+       AND pr.CTestCode != ''
       LEFT JOIN test_specimens ts1 ON ts1.specimen_id = t1.specimen_id
       LEFT JOIN test_specimens ts2 ON ts2.specimen_id = t2.specimen_id
       WHERE CAST(pr.CompCatID AS TEXT) = ?
         AND CAST(pr.CenterID AS TEXT) = ?
-        AND UPPER(TRIM(pr.GCode)) = ?
-        AND UPPER(TRIM(pr.SCode)) = ?
+        AND pr.GCode = ?
+        AND pr.SCode = ?
         AND CAST(pr.BookedFlag AS TEXT) = '1'
         AND (
-          UPPER(TRIM(pr.CTestCode)) = ?
-          OR UPPER(TRIM(pr.TestCode)) = ?
-          OR UPPER(TRIM(t1.testcode1)) = ?
-          OR UPPER(TRIM(t1.test_code)) = ?
-          OR UPPER(TRIM(t2.testcode1)) = ?
-          OR UPPER(TRIM(t2.test_code)) = ?
+          pr.CTestCode = ?
+          OR pr.TestCode = ?
+          OR t1.testcode1 = ?
+          OR t1.test_code = ?
+          OR t2.testcode1 = ?
+          OR t2.test_code = ?
         )
       ORDER BY
         CASE
-          WHEN UPPER(TRIM(pr.CTestCode)) = ? THEN 0
-          WHEN UPPER(TRIM(t1.testcode1)) = ? THEN 1
+          WHEN pr.CTestCode = ? THEN 0
+          WHEN t1.testcode1 = ? THEN 1
           ELSE 2
         END,
         pr.CTestName COLLATE NOCASE
@@ -1410,10 +1770,10 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       arrayOf(
         normalizedTestCode,
         normalizedTestCode,
-        compCatId.trim(),
-        centerId.trim(),
-        gcode.trim().uppercase(),
-        scode.trim().uppercase(),
+        normalizedCompCatId,
+        normalizedCenterId,
+        normalizedGcode,
+        normalizedScode,
         normalizedTestCode,
         normalizedTestCode,
         normalizedTestCode,
@@ -1431,50 +1791,128 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           .put("description", cursor.stringValue("description"))
           .put("profile", cursor.intValue("profile"))
           .put("specimen_name", cursor.stringValue("specimen_name"))
-          .put("comp_cat_id", compCatId.trim())
-          .put("center_id", centerId.trim())
+          .put("comp_cat_id", normalizedCompCatId)
+          .put("center_id", normalizedCenterId)
       }
     }
 
     return null
   }
 
-  private fun resolveTubeChildCodes(
+  private fun preloadProfileChildrenMap(
     db: SQLiteDatabase,
+    gcode: String,
+    scode: String,
+  ): Map<String, List<String>> {
+    val normalizedGcode = gcode.trim().uppercase()
+    val normalizedScode = scode.trim().uppercase()
+    if (normalizedGcode.isBlank() || normalizedScode.isBlank()) {
+      return emptyMap()
+    }
+
+    val childrenByProfile = linkedMapOf<String, MutableList<String>>()
+    db.rawQuery(
+      """
+      SELECT profile_code, child_testcode1
+      FROM test_profiles
+      WHERE gcode = ?
+        AND scode = ?
+        AND profile_code != ''
+        AND child_testcode1 != ''
+      ORDER BY profile_code COLLATE NOCASE, child_testcode1 COLLATE NOCASE
+      """.trimIndent(),
+      arrayOf(normalizedGcode, normalizedScode),
+    ).use { cursor ->
+      while (cursor.moveToNext()) {
+        val profileCode = cursor.stringValue("profile_code").trim().uppercase()
+        val childCode = cursor.stringValue("child_testcode1").trim().uppercase()
+        if (profileCode.isBlank() || childCode.isBlank()) {
+          continue
+        }
+        val rows = childrenByProfile.getOrPut(profileCode) { mutableListOf() }
+        if (!rows.contains(childCode)) {
+          rows.add(childCode)
+        }
+      }
+    }
+
+    return childrenByProfile.mapValues { it.value.toList() }
+  }
+
+  private fun preloadProfileChildRowsMap(
+    db: SQLiteDatabase,
+    gcode: String,
+    scode: String,
+  ): Map<String, List<ProfileChildRow>> {
+    val normalizedGcode = gcode.trim().uppercase()
+    val normalizedScode = scode.trim().uppercase()
+    if (normalizedGcode.isBlank() || normalizedScode.isBlank()) {
+      return emptyMap()
+    }
+
+    val childRowsByProfile = linkedMapOf<String, MutableList<ProfileChildRow>>()
+    db.rawQuery(
+      """
+      SELECT DISTINCT
+        tp.profile_code,
+        COALESCE(NULLIF(child.testcode1, ''), NULLIF(tp.child_testcode1, '')) AS booked_code,
+        COALESCE(NULLIF(child.test_code, ''), NULLIF(tp.child_testcode1, '')) AS master_test_code,
+        COALESCE(NULLIF(child.description, ''), NULLIF(tp.child_testcode1, '')) AS description,
+        COALESCE(child.profile, 0) AS profile,
+        ts.sp_name AS specimen_name
+      FROM test_profiles tp
+      LEFT JOIN tests child ON child.testcode1 = tp.child_testcode1
+      LEFT JOIN test_specimens ts ON ts.specimen_id = child.specimen_id
+      WHERE tp.gcode = ?
+        AND tp.scode = ?
+        AND tp.profile_code != ''
+        AND tp.child_testcode1 != ''
+      ORDER BY tp.profile_code COLLATE NOCASE, description COLLATE NOCASE
+      """.trimIndent(),
+      arrayOf(normalizedGcode, normalizedScode),
+    ).use { cursor ->
+      while (cursor.moveToNext()) {
+        val profileCode = cursor.stringValue("profile_code").trim().uppercase()
+        if (profileCode.isBlank()) {
+          continue
+        }
+        val row = ProfileChildRow(
+          bookedCode = cursor.stringValue("booked_code"),
+          masterTestCode = cursor.stringValue("master_test_code"),
+          description = cursor.stringValue("description"),
+          profile = cursor.intValue("profile"),
+          specimenName = cursor.stringValue("specimen_name"),
+        )
+        childRowsByProfile.getOrPut(profileCode) { mutableListOf() }.add(row)
+      }
+    }
+
+    return childRowsByProfile.mapValues { entry ->
+      if (entry.value.size <= maxProfileChildrenPerNode) {
+        entry.value.toList()
+      } else {
+        entry.value.take(maxProfileChildrenPerNode)
+      }
+    }
+  }
+
+  private fun resolveTubeChildCodes(
     parentCandidates: List<String>,
     gcode: String,
     scode: String,
+    preloadedChildrenMap: Map<String, List<String>>? = null,
   ): List<String> {
     if (parentCandidates.isEmpty() || gcode.isBlank() || scode.isBlank()) {
       return emptyList()
     }
 
-    val placeholders = parentCandidates.joinToString(",") { "?" }
-    val children = mutableListOf<String>()
-    val args = mutableListOf(gcode.trim().uppercase(), scode.trim().uppercase())
-    args.addAll(parentCandidates)
-
-    db.rawQuery(
-      """
-      SELECT DISTINCT UPPER(TRIM(child_testcode1)) AS child_testcode1
-      FROM test_profiles
-      WHERE UPPER(TRIM(gcode)) = ?
-        AND UPPER(TRIM(scode)) = ?
-        AND UPPER(TRIM(profile_code)) IN ($placeholders)
-        AND TRIM(child_testcode1) != ''
-      ORDER BY child_testcode1 COLLATE NOCASE
-      """.trimIndent(),
-      args.toTypedArray(),
-    ).use { cursor ->
-      while (cursor.moveToNext()) {
-        val childCode = cursor.stringValue("child_testcode1").trim().uppercase()
-        if (childCode.isNotBlank()) {
-          children.add(childCode)
-        }
-      }
+    val normalizedParents = parentCandidates.map { it.trim().uppercase() }
+    val groupChildrenMap = preloadedChildrenMap ?: return emptyList()
+    val mergedChildren = linkedSetOf<String>()
+    normalizedParents.forEach { parentCode ->
+      groupChildrenMap[parentCode]?.forEach { mergedChildren.add(it) }
     }
-
-    return children
+    return mergedChildren.toList()
   }
 
   private fun resolvePanelCompanyName(db: SQLiteDatabase, compCatId: String): String {
@@ -1817,6 +2255,106 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     return groups
   }
 
+  private fun resolvePanelIdentityFromRequest(
+    db: SQLiteDatabase,
+    panelCompanyJson: String,
+  ): JSONObject {
+    val request = JSONObject(panelCompanyJson.ifBlank { "{}" })
+    val compCatId = request.optString("compCatId", "")
+      .ifBlank { request.optString("CompCatID", "") }
+      .trim()
+    val panelCode = request.optString("panelCode", "")
+      .ifBlank { request.optString("panel_code", "") }
+      .trim()
+    val panelAbarid = request.optString("panelAbarid", "")
+      .ifBlank { request.optString("panel_abarid", "") }
+      .trim()
+
+    return resolvePanelCompanyIdentity(
+      db,
+      compCatId,
+      request.optString("centerId", "").ifBlank { request.optString("CenterID", "") },
+      request.optString("atype", "").ifBlank { request.optString("Atype", "") },
+      panelCode,
+      panelAbarid,
+    )
+  }
+
+  private fun buildLightGroups(db: SQLiteDatabase, compCatId: String): JSONArray {
+    val groups = JSONArray()
+
+    db.rawQuery(
+      """
+      SELECT pr.gcode, g.description, COUNT(DISTINCT pr.scode) AS subgroup_count
+      FROM panel_rates pr
+      JOIN groups g ON g.gcode = pr.gcode
+      WHERE pr.comp_cat_id = ?
+        AND pr.booked_flag = 1
+        AND TRIM(pr.gcode) != ''
+        AND TRIM(pr.scode) != ''
+        AND TRIM(pr.test_code) != ''
+      GROUP BY pr.gcode, g.description
+      ORDER BY pr.gcode COLLATE NOCASE
+      """.trimIndent(),
+      arrayOf(compCatId),
+    ).use { cursor ->
+      while (cursor.moveToNext()) {
+        val gcode = cursor.stringValue("gcode")
+        groups.put(
+          JSONObject()
+            .put("group_id", gcode)
+            .put("gcode", gcode)
+            .put("group_name", cursor.stringValue("description"))
+            .put("subgroup_count", cursor.intValue("subgroup_count"))
+            .put("subgroups", JSONArray())
+            .put("lazy_subgroups", true),
+        )
+      }
+    }
+
+    return groups
+  }
+
+  private fun buildLightRawGroups(
+    db: SQLiteDatabase,
+    compCatId: String,
+    centerId: String,
+  ): JSONArray {
+    val groups = JSONArray()
+
+    db.rawQuery(
+      """
+      SELECT pr.GCode AS gcode, g.description, COUNT(DISTINCT pr.SCode) AS subgroup_count
+      FROM panelrates pr
+      JOIN groups g ON UPPER(TRIM(g.gcode)) = UPPER(TRIM(pr.GCode))
+      WHERE pr.CompCatID = ?
+        AND pr.CenterID = ?
+        AND pr.BookedFlag = 1
+        AND TRIM(pr.GCode) != ''
+        AND TRIM(pr.SCode) != ''
+        AND TRIM(pr.TestCode) != ''
+      GROUP BY pr.GCode, g.description
+      ORDER BY pr.GCode COLLATE NOCASE
+      """.trimIndent(),
+      arrayOf(compCatId, centerId),
+    ).use { cursor ->
+      while (cursor.moveToNext()) {
+        val gcode = cursor.stringValue("gcode")
+        groups.put(
+          JSONObject()
+            .put("group_id", gcode)
+            .put("gcode", gcode)
+            .put("group_name", cursor.stringValue("description"))
+            .put("subgroup_count", cursor.intValue("subgroup_count"))
+            .put("subgroups", JSONArray())
+            .put("lazy_subgroups", true),
+        )
+      }
+    }
+
+    return groups
+  }
+
   private fun buildGroupsForRawPanelRates(
     db: SQLiteDatabase,
     compCatId: String,
@@ -1898,6 +2436,45 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     return subgroups
   }
 
+  private fun buildLightSubgroups(
+    db: SQLiteDatabase,
+    compCatId: String,
+    gcode: String,
+  ): JSONArray {
+    val subgroups = JSONArray()
+
+    db.rawQuery(
+      """
+      SELECT sg.scode, sg.description, COUNT(DISTINCT pr.test_code) AS test_count
+      FROM panel_rates pr
+      JOIN subgroups sg ON sg.gcode = pr.gcode AND sg.scode = pr.scode
+      WHERE pr.comp_cat_id = ?
+        AND pr.gcode = ?
+        AND pr.booked_flag = 1
+        AND TRIM(pr.scode) != ''
+        AND TRIM(pr.test_code) != ''
+      GROUP BY sg.scode, sg.description
+      ORDER BY sg.scode COLLATE NOCASE
+      """.trimIndent(),
+      arrayOf(compCatId, gcode),
+    ).use { cursor ->
+      while (cursor.moveToNext()) {
+        val scode = cursor.stringValue("scode")
+        subgroups.put(
+          JSONObject()
+            .put("subgroup_id", scode)
+            .put("scode", scode)
+            .put("subgroup_name", cursor.stringValue("description"))
+            .put("test_count", cursor.intValue("test_count"))
+            .put("tests", JSONArray())
+            .put("lazy_tests", true),
+        )
+      }
+    }
+
+    return subgroups
+  }
+
   private fun buildRawSubgroups(
     db: SQLiteDatabase,
     compCatId: String,
@@ -1913,10 +2490,10 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       JOIN subgroups sg
         ON UPPER(TRIM(sg.gcode)) = UPPER(TRIM(pr.GCode))
        AND UPPER(TRIM(sg.scode)) = UPPER(TRIM(pr.SCode))
-      WHERE CAST(pr.CompCatID AS TEXT) = ?
-        AND CAST(pr.CenterID AS TEXT) = ?
-        AND UPPER(TRIM(pr.GCode)) = ?
-        AND CAST(pr.BookedFlag AS TEXT) = '1'
+      WHERE pr.CompCatID = ?
+        AND pr.CenterID = ?
+        AND pr.GCode = ?
+        AND pr.BookedFlag = 1
         AND TRIM(pr.SCode) != ''
         AND TRIM(pr.TestCode) != ''
       ORDER BY sg.scode COLLATE NOCASE
@@ -1942,6 +2519,49 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     return subgroups
   }
 
+  private fun buildLightRawSubgroups(
+    db: SQLiteDatabase,
+    compCatId: String,
+    centerId: String,
+    gcode: String,
+  ): JSONArray {
+    val subgroups = JSONArray()
+
+    db.rawQuery(
+      """
+      SELECT sg.scode, sg.description, COUNT(DISTINCT pr.TestCode) AS test_count
+      FROM panelrates pr
+      JOIN subgroups sg
+        ON UPPER(TRIM(sg.gcode)) = UPPER(TRIM(pr.GCode))
+       AND UPPER(TRIM(sg.scode)) = UPPER(TRIM(pr.SCode))
+      WHERE pr.CompCatID = ?
+        AND pr.CenterID = ?
+        AND pr.GCode = ?
+        AND pr.BookedFlag = 1
+        AND TRIM(pr.SCode) != ''
+        AND TRIM(pr.TestCode) != ''
+      GROUP BY sg.scode, sg.description
+      ORDER BY sg.scode COLLATE NOCASE
+      """.trimIndent(),
+      arrayOf(compCatId, centerId, gcode.trim().uppercase()),
+    ).use { cursor ->
+      while (cursor.moveToNext()) {
+        val scode = cursor.stringValue("scode")
+        subgroups.put(
+          JSONObject()
+            .put("subgroup_id", scode)
+            .put("scode", scode)
+            .put("subgroup_name", cursor.stringValue("description"))
+            .put("test_count", cursor.intValue("test_count"))
+            .put("tests", JSONArray())
+            .put("lazy_tests", true),
+        )
+      }
+    }
+
+    return subgroups
+  }
+
   private fun buildTests(
     db: SQLiteDatabase,
     compCatId: String,
@@ -1955,7 +2575,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       SELECT
         dedupe_key,
         MIN(booked_code) AS booked_code,
-        MIN(master_test_code) AS master_test_code,
         MIN(description) AS description,
         MAX(profile) AS profile,
         MAX(charge) AS charge,
@@ -1968,11 +2587,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       FROM (
         SELECT
           pr.rowid AS source_row_id,
-          COALESCE(
-            NULLIF(t1.test_code, ''),
-            NULLIF(t2.test_code, ''),
-            NULLIF(pr.test_code, '')
-          ) AS master_test_code,
           COALESCE(
             NULLIF(t1.testcode1, ''),
             NULLIF(t1.test_code, ''),
@@ -2025,9 +2639,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       arrayOf(compCatId, gcode, scode),
     ).use { testCursor ->
       while (testCursor.moveToNext()) {
-        val masterTestCode = testCursor.stringValue("master_test_code")
-        val hasChildren = hasProfileChildren(db, gcode, scode, masterTestCode)
-
         val bookedCode = testCursor.stringValue("booked_code")
 
         tests.put(
@@ -2036,16 +2647,15 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("dedupe_key", testCursor.stringValue("dedupe_key"))
             .put("booked_code", bookedCode)
             .put("description", testCursor.stringValue("description"))
-            .put("is_profile", testCursor.intValue("profile") == 1 || hasChildren)
-            .put("has_children", hasChildren)
+            .put("is_profile", testCursor.intValue("profile") == 1)
+            .put("has_children", false)
             .put("charge", testCursor.doubleValue("charge"))
             .put("mrp", testCursor.doubleValue("mrp"))
             .put("max_discount", testCursor.doubleValue("max_discount"))
             .put("max_allowed_discount", testCursor.doubleValue("max_allowed_discount"))
             .put("specimen_name", testCursor.stringValue("specimen_name"))
             .put("duplicate_count", testCursor.intValue("duplicate_count"))
-            .put("source_row_ids", testCursor.stringValue("source_row_ids"))
-            .put("child_tests", JSONArray()),
+            .put("source_row_ids", testCursor.stringValue("source_row_ids")),
         )
       }
     }
@@ -2067,7 +2677,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       SELECT
         dedupe_key,
         MIN(booked_code) AS booked_code,
-        MIN(master_test_code) AS master_test_code,
         MIN(description) AS description,
         MAX(profile) AS profile,
         MAX(charge) AS charge,
@@ -2080,7 +2689,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       FROM (
         SELECT
           pr.rowid AS source_row_id,
-          COALESCE(NULLIF(t1.test_code, ''), NULLIF(t2.test_code, ''), NULLIF(pr.TestCode, '')) AS master_test_code,
           COALESCE(
             NULLIF(t1.testcode1, ''),
             NULLIF(t1.test_code, ''),
@@ -2124,11 +2732,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
          AND TRIM(pr.CTestCode) != ''
         LEFT JOIN test_specimens ts1 ON ts1.specimen_id = t1.specimen_id
         LEFT JOIN test_specimens ts2 ON ts2.specimen_id = t2.specimen_id
-        WHERE CAST(pr.CompCatID AS TEXT) = ?
-          AND CAST(pr.CenterID AS TEXT) = ?
-          AND UPPER(TRIM(pr.GCode)) = ?
-          AND UPPER(TRIM(pr.SCode)) = ?
-          AND CAST(pr.BookedFlag AS TEXT) = '1'
+        WHERE pr.CompCatID = ?
+          AND pr.CenterID = ?
+          AND pr.GCode = ?
+          AND pr.SCode = ?
+          AND pr.BookedFlag = 1
           AND TRIM(pr.TestCode) != ''
       )
       WHERE booked_code IS NOT NULL
@@ -2139,8 +2747,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       arrayOf(compCatId, centerId, gcode.trim().uppercase(), scode.trim().uppercase()),
     ).use { testCursor ->
       while (testCursor.moveToNext()) {
-        val masterTestCode = testCursor.stringValue("master_test_code")
-        val hasChildren = hasProfileChildren(db, gcode, scode, masterTestCode)
         val bookedCode = testCursor.stringValue("booked_code")
 
         tests.put(
@@ -2149,8 +2755,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("dedupe_key", testCursor.stringValue("dedupe_key"))
             .put("booked_code", bookedCode)
             .put("description", testCursor.stringValue("description"))
-            .put("is_profile", testCursor.intValue("profile") == 1 || hasChildren)
-            .put("has_children", hasChildren)
+            .put("is_profile", testCursor.intValue("profile") == 1)
+            .put("has_children", false)
             .put("charge", testCursor.doubleValue("charge"))
             .put("mrp", testCursor.doubleValue("mrp"))
             .put("percentageonstandard", testCursor.doubleValue("percentageonstandard"))
@@ -2158,8 +2764,255 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("max_allowed_discount", testCursor.doubleValue("max_allowed_discount"))
             .put("specimen_name", testCursor.stringValue("specimen_name"))
             .put("duplicate_count", testCursor.intValue("duplicate_count"))
-            .put("source_row_ids", testCursor.stringValue("source_row_ids"))
-            .put("child_tests", JSONArray()),
+            .put("source_row_ids", testCursor.stringValue("source_row_ids")),
+        )
+      }
+    }
+
+    return tests
+  }
+
+  private fun searchProjectedTests(
+    db: SQLiteDatabase,
+    compCatId: String,
+    query: String,
+    limit: Int,
+  ): JSONArray {
+    val tests = JSONArray()
+    val searchLike = "%${query.trim()}%"
+
+    db.rawQuery(
+      """
+      SELECT
+        dedupe_key,
+        MIN(booked_code) AS booked_code,
+        MIN(description) AS description,
+        MAX(profile) AS profile,
+        MAX(charge) AS charge,
+        MAX(mrp) AS mrp,
+        MAX(max_discount) AS max_discount,
+        MAX(max_allowed_discount) AS max_allowed_discount,
+        MIN(specimen_name) AS specimen_name,
+        MIN(gcode) AS gcode,
+        MIN(scode) AS scode,
+        MIN(group_name) AS group_name,
+        MIN(subgroup_name) AS subgroup_name,
+        COUNT(*) AS duplicate_count,
+        GROUP_CONCAT(source_row_id) AS source_row_ids
+      FROM (
+        SELECT
+          pr.rowid AS source_row_id,
+          pr.gcode,
+          pr.scode,
+          g.description AS group_name,
+          sg.description AS subgroup_name,
+          COALESCE(
+            NULLIF(t1.testcode1, ''),
+            NULLIF(t1.test_code, ''),
+            NULLIF(t2.testcode1, ''),
+            NULLIF(t2.test_code, ''),
+            NULLIF(pr.ctest_code, ''),
+            NULLIF(pr.test_code, '')
+          ) AS booked_code,
+          UPPER(TRIM(COALESCE(
+            NULLIF(t1.testcode1, ''),
+            NULLIF(t1.test_code, ''),
+            NULLIF(t2.testcode1, ''),
+            NULLIF(t2.test_code, ''),
+            NULLIF(pr.ctest_code, ''),
+            NULLIF(pr.test_code, '')
+          ))) AS dedupe_key,
+          COALESCE(
+            NULLIF(t1.description, ''),
+            NULLIF(t2.description, ''),
+            NULLIF(pr.ctest_name, ''),
+            NULLIF(pr.test_code, '')
+          ) AS description,
+          COALESCE(t1.profile, t2.profile, 0) AS profile,
+          pr.charge,
+          pr.mrp,
+          (pr.mrp * IFNULL(pr.base_discount_percent, 0) / 100.0) AS max_discount,
+          (pr.mrp * IFNULL(pr.max_allowed_discount_percent, 0) / 100.0) AS max_allowed_discount,
+          COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name
+        FROM panel_rates pr
+        JOIN groups g ON g.gcode = pr.gcode
+        JOIN subgroups sg ON sg.gcode = pr.gcode AND sg.scode = pr.scode
+        LEFT JOIN tests t1
+          ON t1.gcode = pr.gcode
+         AND t1.scode = pr.scode
+         AND t1.test_code = pr.test_code
+        LEFT JOIN tests t2
+          ON t2.testcode1 = pr.ctest_code
+         AND TRIM(pr.ctest_code) != ''
+        LEFT JOIN test_specimens ts1 ON ts1.specimen_id = t1.specimen_id
+        LEFT JOIN test_specimens ts2 ON ts2.specimen_id = t2.specimen_id
+        WHERE pr.comp_cat_id = ?
+          AND pr.booked_flag = 1
+          AND TRIM(pr.test_code) != ''
+          AND (
+            pr.test_code LIKE ? COLLATE NOCASE
+            OR pr.ctest_code LIKE ? COLLATE NOCASE
+            OR t1.description LIKE ? COLLATE NOCASE
+            OR t2.description LIKE ? COLLATE NOCASE
+            OR pr.ctest_name LIKE ? COLLATE NOCASE
+          )
+      )
+      WHERE booked_code IS NOT NULL
+        AND TRIM(booked_code) != ''
+      GROUP BY dedupe_key
+      ORDER BY description COLLATE NOCASE
+      LIMIT ?
+      """.trimIndent(),
+      arrayOf(compCatId, searchLike, searchLike, searchLike, searchLike, searchLike, limit.toString()),
+    ).use { cursor ->
+      while (cursor.moveToNext()) {
+        val bookedCode = cursor.stringValue("booked_code")
+        val gcode = cursor.stringValue("gcode")
+        val scode = cursor.stringValue("scode")
+        tests.put(
+          JSONObject()
+            .put("catalog_key", "$compCatId|$gcode|$scode|$bookedCode")
+            .put("dedupe_key", cursor.stringValue("dedupe_key"))
+            .put("booked_code", bookedCode)
+            .put("description", cursor.stringValue("description"))
+            .put("is_profile", cursor.intValue("profile") == 1)
+            .put("has_children", false)
+            .put("charge", cursor.doubleValue("charge"))
+            .put("mrp", cursor.doubleValue("mrp"))
+            .put("max_discount", cursor.doubleValue("max_discount"))
+            .put("max_allowed_discount", cursor.doubleValue("max_allowed_discount"))
+            .put("specimen_name", cursor.stringValue("specimen_name"))
+            .put("duplicate_count", cursor.intValue("duplicate_count"))
+            .put("source_row_ids", cursor.stringValue("source_row_ids"))
+            .put("__groupName", cursor.stringValue("group_name"))
+            .put("__subgroupName", cursor.stringValue("subgroup_name")),
+        )
+      }
+    }
+
+    return tests
+  }
+
+  private fun searchRawTests(
+    db: SQLiteDatabase,
+    compCatId: String,
+    centerId: String,
+    query: String,
+    limit: Int,
+  ): JSONArray {
+    val tests = JSONArray()
+    val searchLike = "%${query.trim()}%"
+
+    db.rawQuery(
+      """
+      SELECT
+        dedupe_key,
+        MIN(booked_code) AS booked_code,
+        MIN(description) AS description,
+        MAX(profile) AS profile,
+        MAX(charge) AS charge,
+        MAX(mrp) AS mrp,
+        MAX(max_discount) AS max_discount,
+        MAX(max_allowed_discount) AS max_allowed_discount,
+        MIN(specimen_name) AS specimen_name,
+        MIN(gcode) AS gcode,
+        MIN(scode) AS scode,
+        MIN(group_name) AS group_name,
+        MIN(subgroup_name) AS subgroup_name,
+        COUNT(*) AS duplicate_count,
+        GROUP_CONCAT(source_row_id) AS source_row_ids
+      FROM (
+        SELECT
+          pr.rowid AS source_row_id,
+          pr.GCode AS gcode,
+          pr.SCode AS scode,
+          g.description AS group_name,
+          sg.description AS subgroup_name,
+          COALESCE(
+            NULLIF(t1.testcode1, ''),
+            NULLIF(t1.test_code, ''),
+            NULLIF(t2.testcode1, ''),
+            NULLIF(t2.test_code, ''),
+            NULLIF(pr.CTestCode, ''),
+            NULLIF(pr.TestCode, '')
+          ) AS booked_code,
+          UPPER(TRIM(COALESCE(
+            NULLIF(t1.testcode1, ''),
+            NULLIF(t1.test_code, ''),
+            NULLIF(t2.testcode1, ''),
+            NULLIF(t2.test_code, ''),
+            NULLIF(pr.CTestCode, ''),
+            NULLIF(pr.TestCode, '')
+          ))) AS dedupe_key,
+          COALESCE(
+            NULLIF(t1.description, ''),
+            NULLIF(t2.description, ''),
+            NULLIF(pr.CTestName, ''),
+            NULLIF(pr.TestCode, '')
+          ) AS description,
+          COALESCE(t1.profile, t2.profile, 0) AS profile,
+          CAST(pr.Charge AS REAL) AS charge,
+          CAST(pr.MRP AS REAL) AS mrp,
+          CASE
+            WHEN NULLIF(pr.percentageonstandard, '') IS NOT NULL
+              THEN CAST(pr.MRP AS REAL) * CAST(pr.percentageonstandard AS REAL) / 100.0
+            ELSE CAST(IFNULL(NULLIF(pr.MaxDiscount, ''), '0') AS REAL)
+          END AS max_discount,
+          CAST(pr.MRP AS REAL) * CAST(IFNULL(NULLIF(pr.MaximumpercentageAllowed, ''), '0') AS REAL) / 100.0 AS max_allowed_discount,
+          COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name
+        FROM panelrates pr
+        JOIN groups g ON g.gcode = pr.GCode
+        JOIN subgroups sg ON sg.gcode = pr.GCode AND sg.scode = pr.SCode
+        LEFT JOIN tests t1
+          ON t1.gcode = pr.GCode
+         AND t1.scode = pr.SCode
+         AND t1.test_code = pr.TestCode
+        LEFT JOIN tests t2
+          ON t2.testcode1 = pr.CTestCode
+         AND TRIM(pr.CTestCode) != ''
+        LEFT JOIN test_specimens ts1 ON ts1.specimen_id = t1.specimen_id
+        LEFT JOIN test_specimens ts2 ON ts2.specimen_id = t2.specimen_id
+        WHERE pr.CompCatID = ?
+          AND pr.CenterID = ?
+          AND pr.BookedFlag = 1
+          AND TRIM(pr.TestCode) != ''
+          AND (
+            pr.TestCode LIKE ? COLLATE NOCASE
+            OR pr.CTestCode LIKE ? COLLATE NOCASE
+            OR t1.description LIKE ? COLLATE NOCASE
+            OR t2.description LIKE ? COLLATE NOCASE
+            OR pr.CTestName LIKE ? COLLATE NOCASE
+          )
+      )
+      WHERE booked_code IS NOT NULL
+        AND TRIM(booked_code) != ''
+      GROUP BY dedupe_key
+      ORDER BY description COLLATE NOCASE
+      LIMIT ?
+      """.trimIndent(),
+      arrayOf(compCatId, centerId, searchLike, searchLike, searchLike, searchLike, searchLike, limit.toString()),
+    ).use { cursor ->
+      while (cursor.moveToNext()) {
+        val bookedCode = cursor.stringValue("booked_code")
+        val gcode = cursor.stringValue("gcode")
+        val scode = cursor.stringValue("scode")
+        tests.put(
+          JSONObject()
+            .put("catalog_key", "$compCatId|$gcode|$scode|$bookedCode")
+            .put("dedupe_key", cursor.stringValue("dedupe_key"))
+            .put("booked_code", bookedCode)
+            .put("description", cursor.stringValue("description"))
+            .put("is_profile", cursor.intValue("profile") == 1)
+            .put("has_children", false)
+            .put("charge", cursor.doubleValue("charge"))
+            .put("mrp", cursor.doubleValue("mrp"))
+            .put("max_discount", cursor.doubleValue("max_discount"))
+            .put("max_allowed_discount", cursor.doubleValue("max_allowed_discount"))
+            .put("specimen_name", cursor.stringValue("specimen_name"))
+            .put("duplicate_count", cursor.intValue("duplicate_count"))
+            .put("source_row_ids", cursor.stringValue("source_row_ids"))
+            .put("__groupName", cursor.stringValue("group_name"))
+            .put("__subgroupName", cursor.stringValue("subgroup_name")),
         )
       }
     }
@@ -2173,30 +3026,21 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     scode: String,
     profileCode: String,
   ): Boolean {
-    val normalizedProfileCode = profileCode.trim()
+    val normalizedProfileCode = profileCode.trim().uppercase()
 
     if (normalizedProfileCode.isBlank()) {
       return false
     }
 
-    db.rawQuery(
-      """
-      SELECT 1
-      FROM test_profiles
-      WHERE UPPER(TRIM(gcode)) = ?
-        AND UPPER(TRIM(scode)) = ?
-        AND UPPER(TRIM(profile_code)) = ?
-        AND TRIM(child_testcode1) != ''
-      LIMIT 1
-      """.trimIndent(),
-      arrayOf(
-        gcode.trim().uppercase(),
-        scode.trim().uppercase(),
-        normalizedProfileCode.uppercase(),
-      ),
-    ).use { cursor ->
-      return cursor.moveToFirst()
-    }
+    return preloadProfileChildrenMap(db, gcode, scode)[normalizedProfileCode]?.isNotEmpty() == true
+  }
+
+  private fun getProfileCodesWithChildren(
+    db: SQLiteDatabase,
+    gcode: String,
+    scode: String,
+  ): Set<String> {
+    return preloadProfileChildrenMap(db, gcode, scode).keys
   }
 
   private fun buildChildTests(
@@ -2205,9 +3049,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     scode: String,
     profileCode: String,
     visitedProfileCodes: Set<String> = emptySet(),
+    preloadedChildRowsMap: Map<String, List<ProfileChildRow>>? = null,
   ): JSONArray {
     val childTests = JSONArray()
-    val normalizedProfileCode = profileCode.trim()
+    val normalizedProfileCode = profileCode.trim().uppercase()
+    val childRowsMap = preloadedChildRowsMap ?: preloadProfileChildRowsMap(db, gcode, scode)
 
     if (
       normalizedProfileCode.isBlank() ||
@@ -2218,51 +3064,32 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     }
 
     val nextVisitedProfileCodes = visitedProfileCodes + normalizedProfileCode
+    val profileRows = childRowsMap[normalizedProfileCode].orEmpty()
+    profileRows.forEach { row ->
+      val bookedCode = row.bookedCode
+      val masterTestCode = row.masterTestCode
+      val description = row.description
+      val nestedChildTests = buildChildTests(
+        db,
+        gcode,
+        scode,
+        masterTestCode,
+        nextVisitedProfileCodes,
+        childRowsMap,
+      )
+      val hasNestedChildren = nestedChildTests.length() > 0
 
-    db.rawQuery(
-      """
-      SELECT DISTINCT
-        COALESCE(NULLIF(child.testcode1, ''), NULLIF(tp.child_testcode1, '')) AS booked_code,
-        COALESCE(NULLIF(child.test_code, ''), NULLIF(tp.child_testcode1, '')) AS master_test_code,
-        COALESCE(NULLIF(child.description, ''), NULLIF(tp.child_testcode1, '')) AS description,
-        COALESCE(child.profile, 0) AS profile,
-        ts.sp_name AS specimen_name
-      FROM test_profiles tp
-      LEFT JOIN tests child ON child.testcode1 = tp.child_testcode1
-      LEFT JOIN test_specimens ts ON ts.specimen_id = child.specimen_id
-      WHERE tp.gcode = ?
-        AND tp.scode = ?
-        AND tp.profile_code = ?
-      ORDER BY description COLLATE NOCASE
-      LIMIT ?
-      """.trimIndent(),
-      arrayOf(gcode, scode, normalizedProfileCode, maxProfileChildrenPerNode.toString()),
-    ).use { childCursor ->
-      while (childCursor.moveToNext()) {
-        val bookedCode = childCursor.stringValue("booked_code")
-        val masterTestCode = childCursor.stringValue("master_test_code")
-        val description = childCursor.stringValue("description")
-        val nestedChildTests = buildChildTests(
-          db,
-          gcode,
-          scode,
-          masterTestCode,
-          nextVisitedProfileCodes,
+      if (bookedCode.isNotBlank() || description.isNotBlank()) {
+        childTests.put(
+          JSONObject()
+            .put("booked_code", bookedCode)
+            .put("dedupe_key", bookedCode.trim().uppercase())
+            .put("description", description)
+            .put("specimen_name", row.specimenName)
+            .put("is_profile", row.profile == 1 || hasNestedChildren)
+            .put("has_children", hasNestedChildren)
+            .put("child_tests", nestedChildTests),
         )
-        val hasNestedChildren = nestedChildTests.length() > 0
-
-        if (bookedCode.isNotBlank() || description.isNotBlank()) {
-          childTests.put(
-            JSONObject()
-              .put("booked_code", bookedCode)
-              .put("dedupe_key", bookedCode.trim().uppercase())
-              .put("description", description)
-              .put("specimen_name", childCursor.stringValue("specimen_name"))
-              .put("is_profile", childCursor.intValue("profile") == 1 || hasNestedChildren)
-              .put("has_children", hasNestedChildren)
-              .put("child_tests", nestedChildTests),
-          )
-        }
       }
     }
 

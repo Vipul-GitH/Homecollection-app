@@ -25,6 +25,11 @@ const buildSecureResponse = nativeResult => ({
   },
 });
 
+const resolveSecureTimeout = customTimeoutMs =>
+  Number.isFinite(customTimeoutMs) && customTimeoutMs > 0
+    ? Math.trunc(customTimeoutMs)
+    : 7000;
+
 export const secureFetch = async (url, options = {}) => {
   const {timeoutMs: customTimeoutMs, ...fetchOptions} = options;
 
@@ -32,10 +37,7 @@ export const secureFetch = async (url, options = {}) => {
     return fetch(url, fetchOptions);
   }
 
-  const timeoutMs =
-    Number.isFinite(customTimeoutMs) && customTimeoutMs > 0
-      ? Math.trunc(customTimeoutMs)
-      : 20000;
+  const timeoutMs = resolveSecureTimeout(customTimeoutMs);
 
   let nativeResult;
 
@@ -65,6 +67,52 @@ export const secureFetch = async (url, options = {}) => {
       fetchOptions.body || null,
     );
   }
+
+  return buildSecureResponse(nativeResult);
+};
+
+export const secureMultipartFetch = async ({
+  url,
+  method = 'POST',
+  headers = {},
+  fields = {},
+  files = [],
+  timeoutMs: customTimeoutMs,
+}) => {
+  if (
+    !shouldUseSecureAndroidClient(url) ||
+    !NativeModules.SecureApiModule?.multipartRequest
+  ) {
+    const formData = new FormData();
+    Object.entries(fields || {}).forEach(([key, value]) => {
+      formData.append(key, value);
+    });
+    (Array.isArray(files) ? files : []).forEach(file => {
+      if (!file?.fieldName || !file?.uri) {
+        return;
+      }
+      formData.append(file.fieldName, {
+        uri: file.uri,
+        name: file.name || `${file.fieldName}-${Date.now()}`,
+        type: file.type || 'application/octet-stream',
+      });
+    });
+
+    return fetch(url, {
+      method,
+      headers,
+      body: formData,
+    });
+  }
+
+  const nativeResult = await NativeModules.SecureApiModule.multipartRequest(
+    url,
+    method,
+    JSON.stringify(headers || {}),
+    JSON.stringify(fields || {}),
+    JSON.stringify(Array.isArray(files) ? files : []),
+    resolveSecureTimeout(customTimeoutMs),
+  );
 
   return buildSecureResponse(nativeResult);
 };

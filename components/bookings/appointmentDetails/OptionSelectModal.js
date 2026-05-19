@@ -1,5 +1,12 @@
 import React from 'react';
-import {Modal, ScrollView, Text, TouchableOpacity, View} from 'react-native';
+import {
+  Modal,
+  ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 function OptionSelectModal({
@@ -13,6 +20,9 @@ function OptionSelectModal({
   scrollable = true,
   isLoading = false,
   emptyText = 'No options found',
+  searchValue = '',
+  onSearchChange,
+  searchPlaceholder = 'Search',
 }) {
   const Content = scrollable ? ScrollView : View;
   const contentProps = scrollable
@@ -48,6 +58,33 @@ function OptionSelectModal({
               />
             </TouchableOpacity>
           </View>
+          {typeof onSearchChange === 'function' ? (
+            <View style={styles.panelCompanySearchWrap}>
+              <Ionicons
+                name="search-outline"
+                size={16}
+                style={styles.panelCompanySearchIcon}
+              />
+              <TextInput
+                value={searchValue}
+                onChangeText={onSearchChange}
+                placeholder={searchPlaceholder}
+                placeholderTextColor="#7B8AA3"
+                style={styles.panelCompanySearchInput}
+              />
+              {searchValue ? (
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => onSearchChange('')}>
+                  <Ionicons
+                    name="close-circle"
+                    size={18}
+                    style={styles.panelCompanySearchIcon}
+                  />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
           <Content {...contentProps}>
             {isLoading || !options.length ? (
               <View style={styles.cancelOptionEmptyState}>

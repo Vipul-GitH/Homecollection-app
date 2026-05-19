@@ -1,4 +1,4 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {ScrollView, Text, TouchableOpacity, View} from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
@@ -64,6 +64,142 @@ const getReportDeliverySummary = (selectedValues, scheduleValue) => {
   return `${scheduleLabel} | ${deliveryLabels.join(', ')}`;
 };
 
+const ReportDeliveryPatientChip = React.memo(function ReportDeliveryPatientChip({
+  styles,
+  patient,
+  index,
+  isSelected,
+  onSelect,
+}) {
+  return (
+    <TouchableOpacity
+      activeOpacity={0.88}
+      style={[
+        styles.reportDeliveryPatientChip,
+        patient.isComplete && styles.reportDeliveryPatientChipDone,
+        isSelected && styles.reportDeliveryPatientChipActive,
+      ]}
+      onPress={() => onSelect(patient.id)}>
+      <View style={styles.reportDeliveryPatientChipHeader}>
+        <Text
+          numberOfLines={1}
+          style={[
+            styles.reportDeliveryPatientChipName,
+            isSelected && styles.reportDeliveryPatientChipNameActive,
+          ]}>
+          {index + 1}. {patient.name}
+        </Text>
+        <Ionicons
+          name={patient.isComplete ? 'checkmark-circle' : 'ellipse-outline'}
+          size={15}
+          style={[
+            styles.reportDeliveryPatientChipIcon,
+            patient.isComplete && styles.reportDeliveryPatientChipIconDone,
+            isSelected && styles.reportDeliveryPatientChipIconActive,
+          ]}
+        />
+      </View>
+      <Text
+        numberOfLines={1}
+        style={[
+          styles.reportDeliveryPatientSummary,
+          isSelected && styles.reportDeliveryPatientSummaryActive,
+        ]}>
+        {patient.summary}
+      </Text>
+    </TouchableOpacity>
+  );
+});
+
+const ReportDeliverySelectedForm = React.memo(function ReportDeliverySelectedForm({
+  styles,
+  patient,
+  onToggleReportDelivery,
+  onReportScheduleChange,
+}) {
+  if (!patient) {
+    return null;
+  }
+
+  return (
+    <View style={styles.reportDeliveryFormCard}>
+      <View style={styles.reportDeliverySelectedHeader}>
+        <Text style={styles.reportDeliverySelectedName}>{patient.name}</Text>
+        <Text style={styles.reportDeliverySelectedMeta}>{patient.summary}</Text>
+      </View>
+
+      <Text style={styles.patientSampleUndefinedTubeText}>Report Schedule</Text>
+      <View style={styles.completePaymentModeRow}>
+        {REPORT_SCHEDULE_OPTIONS.map(option => {
+          const isSelected = patient.schedule === option.value;
+
+          return (
+            <TouchableOpacity
+              key={`${patient.id}-schedule-${option.value}`}
+              activeOpacity={0.85}
+              style={[
+                styles.completePaymentModeChip,
+                styles.reportDeliveryOptionChip,
+                isSelected && styles.completePaymentModeChipActive,
+              ]}
+              onPress={() => onReportScheduleChange?.(patient.source, option.value)}>
+              <Ionicons
+                name={isSelected ? 'checkmark-circle' : option.icon}
+                size={15}
+                style={[
+                  styles.completePaymentModeChipText,
+                  isSelected && styles.completePaymentModeChipTextActive,
+                ]}
+              />
+              <Text
+                style={[
+                  styles.completePaymentModeChipText,
+                  isSelected && styles.completePaymentModeChipTextActive,
+                ]}>
+                {option.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <Text style={styles.patientSampleUndefinedTubeText}>Delivery Options</Text>
+      <View style={styles.completePaymentModeRow}>
+        {REPORT_DELIVERY_OPTIONS.map(option => {
+          const isSelected = patient.deliveryValues.includes(option.value);
+
+          return (
+            <TouchableOpacity
+              key={`${patient.id}-${option.value}`}
+              activeOpacity={0.85}
+              style={[
+                styles.completePaymentModeChip,
+                styles.reportDeliveryOptionChip,
+                isSelected && styles.completePaymentModeChipActive,
+              ]}
+              onPress={() => onToggleReportDelivery?.(patient.source, option.value)}>
+              <Ionicons
+                name={isSelected ? 'checkmark-circle' : option.icon}
+                size={15}
+                style={[
+                  styles.completePaymentModeChipText,
+                  isSelected && styles.completePaymentModeChipTextActive,
+                ]}
+              />
+              <Text
+                style={[
+                  styles.completePaymentModeChipText,
+                  isSelected && styles.completePaymentModeChipTextActive,
+                ]}>
+                {option.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+});
+
 function ReportDeliverySection({
   styles,
   patients = [],
@@ -73,39 +209,56 @@ function ReportDeliverySection({
   onReportScheduleChange,
 }) {
   const [selectedPatientId, setSelectedPatientId] = useState('');
+  const patientSummaries = useMemo(
+    () =>
+      patients.map(patient => {
+        const patientId = String(patient.id);
+        const deliveryValues = normalizeReportDeliveryValues(
+          patientReportCourierMap[patient.id],
+        );
+        const schedule = patientReportScheduleMap[patient.id] || 'routine';
+
+        return {
+          ...patient,
+          id: patientId,
+          source: patient,
+          deliveryValues,
+          schedule,
+          isComplete: deliveryValues.length > 0,
+          summary: getReportDeliverySummary(deliveryValues, schedule),
+        };
+      }),
+    [patientReportCourierMap, patientReportScheduleMap, patients],
+  );
 
   useEffect(() => {
-    if (!patients.length) {
+    if (!patientSummaries.length) {
       setSelectedPatientId('');
       return;
     }
 
-    const selectedPatientExists = patients.some(
+    const selectedPatientExists = patientSummaries.some(
       patient => String(patient.id) === String(selectedPatientId),
     );
 
     if (!selectedPatientExists) {
-      setSelectedPatientId(String(patients[0].id));
+      setSelectedPatientId(String(patientSummaries[0].id));
     }
-  }, [patients, selectedPatientId]);
+  }, [patientSummaries, selectedPatientId]);
 
   const selectedPatient = useMemo(() => {
-    if (!patients.length) {
+    if (!patientSummaries.length) {
       return null;
     }
 
     return (
-      patients.find(patient => String(patient.id) === selectedPatientId) ||
-      patients[0]
+      patientSummaries.find(patient => String(patient.id) === selectedPatientId) ||
+      patientSummaries[0]
     );
-  }, [patients, selectedPatientId]);
-
-  const selectedPatientDeliveryValues = selectedPatient
-    ? normalizeReportDeliveryValues(patientReportCourierMap[selectedPatient.id])
-    : [];
-  const selectedPatientSchedule = selectedPatient
-    ? patientReportScheduleMap[selectedPatient.id] || 'routine'
-    : 'routine';
+  }, [patientSummaries, selectedPatientId]);
+  const handleSelectPatient = useCallback(patientId => {
+    setSelectedPatientId(String(patientId));
+  }, []);
 
   return (
     <View style={styles.paymentSummaryCard}>
@@ -119,165 +272,30 @@ function ReportDeliverySection({
       </View>
 
       <View style={styles.completePaymentsCollectedCard}>
-        {patients.length ? (
+            {patientSummaries.length ? (
           <>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.reportDeliveryPatientList}>
-              {patients.map((patient, index) => {
-                const patientId = String(patient.id);
-                const selectedValues = normalizeReportDeliveryValues(
-                  patientReportCourierMap[patient.id],
-                );
-                const selectedSchedule =
-                  patientReportScheduleMap[patient.id] || 'routine';
-                const isSelected = String(selectedPatient?.id) === patientId;
-                const isComplete = selectedValues.length > 0;
-
-                return (
-                  <TouchableOpacity
-                    key={`report-delivery-patient-${patient.id}`}
-                    activeOpacity={0.88}
-                    style={[
-                      styles.reportDeliveryPatientChip,
-                      isComplete && styles.reportDeliveryPatientChipDone,
-                      isSelected && styles.reportDeliveryPatientChipActive,
-                    ]}
-                    onPress={() => setSelectedPatientId(patientId)}>
-                    <View style={styles.reportDeliveryPatientChipHeader}>
-                      <Text
-                        numberOfLines={1}
-                        style={[
-                          styles.reportDeliveryPatientChipName,
-                          isSelected &&
-                            styles.reportDeliveryPatientChipNameActive,
-                        ]}>
-                        {index + 1}. {patient.name}
-                      </Text>
-                      <Ionicons
-                        name={isComplete ? 'checkmark-circle' : 'ellipse-outline'}
-                        size={15}
-                        style={[
-                          styles.reportDeliveryPatientChipIcon,
-                          isComplete &&
-                            styles.reportDeliveryPatientChipIconDone,
-                          isSelected &&
-                            styles.reportDeliveryPatientChipIconActive,
-                        ]}
-                      />
-                    </View>
-                    <Text
-                      numberOfLines={1}
-                      style={[
-                        styles.reportDeliveryPatientSummary,
-                        isSelected && styles.reportDeliveryPatientSummaryActive,
-                      ]}>
-                      {getReportDeliverySummary(selectedValues, selectedSchedule)}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+              {patientSummaries.map((patient, index) => (
+                <ReportDeliveryPatientChip
+                  key={`report-delivery-patient-${patient.id}`}
+                  styles={styles}
+                  patient={patient}
+                  index={index}
+                  isSelected={String(selectedPatient?.id) === String(patient.id)}
+                  onSelect={handleSelectPatient}
+                />
+              ))}
             </ScrollView>
 
-            {selectedPatient ? (
-              <View style={styles.reportDeliveryFormCard}>
-                <View style={styles.reportDeliverySelectedHeader}>
-                  <Text style={styles.reportDeliverySelectedName}>
-                    {selectedPatient.name}
-                  </Text>
-                  <Text style={styles.reportDeliverySelectedMeta}>
-                    {getReportDeliverySummary(
-                      selectedPatientDeliveryValues,
-                      selectedPatientSchedule,
-                    )}
-                  </Text>
-                </View>
-
-                <Text style={styles.patientSampleUndefinedTubeText}>
-                  Report Schedule
-                </Text>
-                <View style={styles.completePaymentModeRow}>
-                  {REPORT_SCHEDULE_OPTIONS.map(option => {
-                    const isSelected = selectedPatientSchedule === option.value;
-
-                    return (
-                      <TouchableOpacity
-                        key={`${selectedPatient.id}-schedule-${option.value}`}
-                        activeOpacity={0.85}
-                        style={[
-                          styles.completePaymentModeChip,
-                          styles.reportDeliveryOptionChip,
-                          isSelected && styles.completePaymentModeChipActive,
-                        ]}
-                        onPress={() =>
-                          onReportScheduleChange?.(selectedPatient, option.value)
-                        }>
-                        <Ionicons
-                          name={isSelected ? 'checkmark-circle' : option.icon}
-                          size={15}
-                          style={[
-                            styles.completePaymentModeChipText,
-                            isSelected &&
-                              styles.completePaymentModeChipTextActive,
-                          ]}
-                        />
-                        <Text
-                          style={[
-                            styles.completePaymentModeChipText,
-                            isSelected &&
-                              styles.completePaymentModeChipTextActive,
-                          ]}>
-                          {option.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                <Text style={styles.patientSampleUndefinedTubeText}>
-                  Delivery Options
-                </Text>
-                <View style={styles.completePaymentModeRow}>
-                  {REPORT_DELIVERY_OPTIONS.map(option => {
-                    const isSelected = selectedPatientDeliveryValues.includes(
-                      option.value,
-                    );
-
-                    return (
-                      <TouchableOpacity
-                        key={`${selectedPatient.id}-${option.value}`}
-                        activeOpacity={0.85}
-                        style={[
-                          styles.completePaymentModeChip,
-                          styles.reportDeliveryOptionChip,
-                          isSelected && styles.completePaymentModeChipActive,
-                        ]}
-                        onPress={() =>
-                          onToggleReportDelivery?.(selectedPatient, option.value)
-                        }>
-                        <Ionicons
-                          name={isSelected ? 'checkmark-circle' : option.icon}
-                          size={15}
-                          style={[
-                            styles.completePaymentModeChipText,
-                            isSelected &&
-                              styles.completePaymentModeChipTextActive,
-                          ]}
-                        />
-                        <Text
-                          style={[
-                            styles.completePaymentModeChipText,
-                            isSelected &&
-                              styles.completePaymentModeChipTextActive,
-                          ]}>
-                          {option.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </View>
-            ) : null}
+            <ReportDeliverySelectedForm
+              styles={styles}
+              patient={selectedPatient}
+              onToggleReportDelivery={onToggleReportDelivery}
+              onReportScheduleChange={onReportScheduleChange}
+            />
           </>
         ) : (
           <Text style={styles.patientSelectorEmptyText}>

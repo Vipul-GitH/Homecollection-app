@@ -43,6 +43,7 @@ function LocationStatusIcon({styles, variant, onPress, disabled}) {
 function BookingLocationCard({
   styles,
   address,
+  landmark,
   accessNotes,
   hasLocationUrl,
   disabled,
@@ -50,11 +51,7 @@ function BookingLocationCard({
   onEditAddress,
 }) {
   return (
-    <TouchableOpacity
-      activeOpacity={0.85}
-      style={styles.bookingDetailLocationCard}
-      onPress={onOpenLocation}
-      disabled={disabled}>
+    <View style={styles.bookingDetailLocationCard}>
       <View style={styles.bookingDetailLocationIconWrap}>
         <Ionicons
           name="location-outline"
@@ -67,6 +64,11 @@ function BookingLocationCard({
         <Text style={styles.bookingDetailAddressText}>
           {address || 'Address not available'}
         </Text>
+        {landmark && landmark !== 'N/A' ? (
+          <Text style={styles.bookingDetailAddressNote}>
+            Landmark: {landmark}
+          </Text>
+        ) : null}
         {accessNotes && accessNotes !== 'N/A' ? (
           <Text style={styles.bookingDetailAddressNote}>
             Access Notes: {accessNotes}
@@ -93,7 +95,7 @@ function BookingLocationCard({
           disabled={disabled}
         />
       </View>
-    </TouchableOpacity>
+    </View>
   );
 }
 

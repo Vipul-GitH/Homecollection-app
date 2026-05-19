@@ -7,41 +7,37 @@ import React, {
   useState,
 } from 'react';
 import {
+  InteractionManager,
   Linking,
   NativeModules,
-  ScrollView,
   Text,
-  TextInput,
   TouchableOpacity,
   useWindowDimensions,
   View,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import AppAlertModal from '../../components/common/AppAlertModal';
+import AddressEditScreen from '../../components/bookings/appointmentDetails/AddressEditScreen';
 import AddPatientModal from '../../components/bookings/appointmentDetails/AddPatientModal';
 import BookingDetailOverview from '../../components/bookings/appointmentDetails/BookingDetailOverview';
 import CancelBookingModal from '../../components/bookings/appointmentDetails/CancelBookingModal';
 import CompleteBookingScreen from '../../components/bookings/appointmentDetails/CompleteBookingScreen';
 import OptionSelectModal from '../../components/bookings/appointmentDetails/OptionSelectModal';
+import PanelCompanyFlowScreen from '../../components/bookings/appointmentDetails/PanelCompanyFlowScreen';
 import PatientSelectorSection from '../../components/bookings/appointmentDetails/PatientSelectorSection';
 import ReportDeliverySection, {
   normalizeReportDeliveryValues,
 } from '../../components/bookings/appointmentDetails/ReportDeliverySection';
 import {
   CATALOG_ITEM_PAGE_SIZE,
-  CATALOG_TEST_VISIBLE_LIMIT,
   EDITABLE_GENDER_TITLES,
   INITIAL_PATIENT_FORM,
   PANEL_COMPANY_DEFAULT_VISIBLE,
   PANEL_COMPANY_SEARCH_VISIBLE_LIMIT,
-  TAG_OPTIONS,
   TITLE_OPTIONS,
 } from './appointmentDetails/constants';
 import CalendarPickerModal from './appointmentDetails/CalendarPickerModal';
 import {
-  getCatalogDisplayTitle,
-  getCatalogGroupId,
-  getCatalogSubgroupId,
   sortCatalogGroupsById,
   sortCatalogTestsByCode,
 } from './appointmentDetails/catalogHelpers';
@@ -50,7 +46,6 @@ import {
   buildApiPanelCompaniesFromPatient,
   getCalendarDays,
   getGenderFromTitle,
-  isSamePanelCompany,
   getPatientMutationId,
   getUpdatePatientId,
   normalizeFormText,
@@ -75,6 +70,7 @@ import {getAppointmentDetailsBillingValidationError} from './appointmentDetails/
 import {
   DEFAULT_TEST_BOOKING_STATUS,
   EMPTY_UPLOAD_DOCUMENTS,
+  getApiTestBookingStatusValue,
   isManualHcSlipSelected,
   isPatientTerminalForCompletion,
   normalizeStoredUploadDocuments,
@@ -88,10 +84,10 @@ import {
   mergeSampleTubeMaps,
   normalizeTestsForSampleTubeMapping,
 } from './appointmentDetails/sampleTubeHelpers';
-import {BRAND} from '../../styles/appStyles';
 import {warnDebug} from '../../utils/app/logger';
 import {
   getLocalPanelCompaniesResponse,
+  getLocalPatientTagsResponse,
 } from '../../services/local/panelCatalogLocal';
 import {
   getLocalAddressCitiesResponse,
@@ -108,6 +104,47 @@ import {
 } from '../../utils/bookings/sampleTubeMappingCache';
 const {CatalogDatabaseModule, LocalDocumentPickerModule, LocalGeoCameraModule} =
   NativeModules;
+const SAMPLE_TUBE_PRECOMPUTE_TIMEOUT_MS = 7000;
+
+const withSampleTubePrecomputeTimeout = (promise, timeoutMs) =>
+  new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      const timeoutError = new Error('SAMPLE_TUBE_PRECOMPUTE_TIMEOUT');
+      timeoutError.code = 'SAMPLE_TUBE_PRECOMPUTE_TIMEOUT';
+      reject(timeoutError);
+    }, timeoutMs);
+
+    promise
+      .then(result => {
+        clearTimeout(timeoutId);
+        resolve(result);
+      })
+      .catch(error => {
+        clearTimeout(timeoutId);
+        reject(error);
+      });
+  });
+
+const normalizePatientTagValues = value => {
+  if (Array.isArray(value)) {
+    return Array.from(
+      new Set(value.map(item => normalizeFormText(item)).filter(Boolean)),
+    );
+  }
+
+  return Array.from(
+    new Set(
+      normalizeFormText(value)
+        .split(',')
+        .map(item => normalizeFormText(item))
+        .filter(Boolean),
+    ),
+  );
+};
+
+const serializePatientTags = tags =>
+  normalizePatientTagValues(tags).join(', ');
+
 const normalizeAppAlertArgs = (
   titleOrMessage,
   messageOrButtons,
@@ -170,8 +207,6 @@ const CANCEL_TIME_SLOT_OPTIONS = [
   '03:00 PM to 03:30 PM',
   '03:30 PM to 04:00 PM',
 ];
-const ADDRESS_TYPE_OPTIONS = ['Home', 'Office', 'Temporary', 'Other'];
-const ADDRESS_FLOOR_SPECIAL_OPTIONS = ['None', 'Ground_F', 'Basement', 'Full_hous'];
 const toCurrencyNumber = value => {
   const normalizedValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
   return Number.isFinite(normalizedValue) ? normalizedValue : 0;
@@ -266,6 +301,26 @@ const getPanelCompanySearchRank = (item, searchText, searchTokens) => {
   }
 
   return 6;
+};
+
+const getPanelCompanyListIdentity = company =>
+  [
+    normalizeFormText(company?.syncKey || company?.sync_key),
+    normalizeFormText(company?.id),
+    normalizeFormText(company?.centerId),
+    normalizeFormText(company?.name).toLowerCase(),
+    normalizeFormText(company?.details).toLowerCase(),
+  ].join('|');
+
+const isSamePanelCompanyListItem = (leftCompany, rightCompany) => {
+  const leftIdentity = getPanelCompanyListIdentity(leftCompany);
+  const rightIdentity = getPanelCompanyListIdentity(rightCompany);
+
+  return (
+    leftIdentity.replace(/\|/g, '') &&
+    rightIdentity.replace(/\|/g, '') &&
+    leftIdentity === rightIdentity
+  );
 };
 
 const dedupePanelCompanyChips = companies => {
@@ -844,6 +899,7 @@ function AppointmentDetailsScreen({
     useState(() => appointmentDetailState?.patientManualSlipDocumentsMap || {});
   const [patientFormPanelCompanyItems, setPatientFormPanelCompanyItems] =
     useState([]);
+  const [patientTagOptions, setPatientTagOptions] = useState([]);
   const [isPatientFormPanelCompanyFocused, setIsPatientFormPanelCompanyFocused] =
     useState(false);
   const [editingPatient, setEditingPatient] = useState(null);
@@ -860,6 +916,7 @@ function AppointmentDetailsScreen({
     () => appointmentDetailState?.selectedPatientKey || '',
   );
   const [patientSearchText, setPatientSearchText] = useState('');
+  const deferredPatientSearchText = useDeferredValue(patientSearchText);
   const [appAlert, setAppAlert] = useState(null);
   const appointmentDetailStateRef = useRef(appointmentDetailState);
   const [patientPrecomputedSampleTubesMap, setPatientPrecomputedSampleTubesMap] =
@@ -1405,6 +1462,11 @@ function AppointmentDetailsScreen({
         if (!patientId) {
           return options;
         }
+        const testBookingStatus =
+          patientTestBookingStatusMap?.[patientId] || DEFAULT_TEST_BOOKING_STATUS;
+        if (isManualHcSlipSelected(testBookingStatus)) {
+          return options;
+        }
 
         options.push({
           id: patientId,
@@ -1413,7 +1475,7 @@ function AppointmentDetailsScreen({
 
         return options;
       }, []),
-    [patients],
+    [patientTestBookingStatusMap, patients],
   );
   const patientSelectorItems = useMemo(
     () =>
@@ -1455,7 +1517,7 @@ function AppointmentDetailsScreen({
     [patientSampleCollectionMap, patients],
   );
   const filteredPatientSelectorItems = useMemo(() => {
-    const searchText = patientSearchText.trim().toLowerCase();
+    const searchText = deferredPatientSearchText.trim().toLowerCase();
 
     if (!searchText) {
       return patientSelectorItems;
@@ -1464,19 +1526,33 @@ function AppointmentDetailsScreen({
     return patientSelectorItems.filter(item =>
       `${item.name} ${item.meta}`.toLowerCase().includes(searchText),
     );
-  }, [patientSearchText, patientSelectorItems]);
-  const selectedPatientItem =
-    patientSelectorItems.find(item => item.key === selectedPatientKey) ||
-    patientSelectorItems[0] ||
-    null;
+  }, [deferredPatientSearchText, patientSelectorItems]);
+  const selectedPatientItem = useMemo(
+    () =>
+      patientSelectorItems.find(item => item.key === selectedPatientKey) ||
+      patientSelectorItems[0] ||
+      null,
+    [patientSelectorItems, selectedPatientKey],
+  );
   useEffect(() => {
     let isMounted = true;
+    let backgroundTimer = null;
+    let interactionHandle = null;
     const bookingPatients = Array.isArray(patients) ? patients : [];
+    const selectedPatientKeyForPrecompute = normalizeFormText(
+      selectedPatientItem?.key || selectedPatientKey,
+    );
 
     if (!bookingPatients.length) {
       setPatientPrecomputedSampleTubesMap({});
       return () => {
         isMounted = false;
+        if (backgroundTimer) {
+          clearTimeout(backgroundTimer);
+        }
+        if (interactionHandle?.cancel) {
+          interactionHandle.cancel();
+        }
       };
     }
 
@@ -1498,10 +1574,52 @@ function AppointmentDetailsScreen({
       });
     };
 
-    bookingPatients.forEach(patient => {
+    const applyPatientPrecomputedMapping = (
+      patientId,
+      cacheKey,
+      maps,
+      derivedData,
+      source = 'fallback',
+    ) => {
+      if (!isMounted || !patientId || !maps || typeof maps !== 'object') {
+        return;
+      }
+
+      onAppointmentDetailStateChange?.(previousState => {
+        const previousPatientState =
+          previousState?.patientSampleCollectionMap?.[patientId] || {};
+        const previousPrecomputedMapping =
+          previousPatientState?.precomputedSampleTubeData || null;
+
+        if (
+          previousPrecomputedMapping?.cacheKey === cacheKey &&
+          previousPrecomputedMapping?.source === source
+        ) {
+          return previousState;
+        }
+
+        return {
+          ...previousState,
+          patientSampleCollectionMap: {
+            ...(previousState?.patientSampleCollectionMap || {}),
+            [patientId]: {
+              ...previousPatientState,
+              precomputedSampleTubeData: {
+                cacheKey,
+                source,
+                maps,
+                derivedData: derivedData || null,
+              },
+            },
+          },
+        };
+      });
+    };
+
+    const precomputePatientSampleTubes = patient => {
       const patientId = getPatientMutationId(patient);
       if (!patientId) {
-        return;
+        return Promise.resolve();
       }
 
       const hasSelectedTestsOverride = Object.prototype.hasOwnProperty.call(
@@ -1515,7 +1633,26 @@ function AppointmentDetailsScreen({
 
       if (!normalizedTests.length) {
         applyPatientTubes(patientId, []);
-        return;
+        onAppointmentDetailStateChange?.(previousState => {
+          const previousPatientState =
+            previousState?.patientSampleCollectionMap?.[patientId];
+
+          if (!previousPatientState?.precomputedSampleTubeData) {
+            return previousState;
+          }
+
+          return {
+            ...previousState,
+            patientSampleCollectionMap: {
+              ...(previousState?.patientSampleCollectionMap || {}),
+              [patientId]: {
+                ...previousPatientState,
+                precomputedSampleTubeData: null,
+              },
+            },
+          };
+        });
+        return Promise.resolve();
       }
 
       const fallbackMaps = buildSampleTubeMapsFromTests(normalizedTests);
@@ -1525,16 +1662,23 @@ function AppointmentDetailsScreen({
         fallbackMaps.childrenMap,
       );
       applyPatientTubes(patientId, fallbackTubes);
-
       const rootTests = buildSampleTubeRootTests(normalizedTests);
+      const cacheKey = getSampleTubeMappingCacheKey(rootTests);
+      applyPatientPrecomputedMapping(
+        patientId,
+        cacheKey,
+        fallbackMaps,
+        null,
+        'fallback',
+      );
+
       if (
         !rootTests.length ||
         !CatalogDatabaseModule?.getSampleTubeMappingForTestCodes
       ) {
-        return;
+        return Promise.resolve();
       }
 
-      const cacheKey = getSampleTubeMappingCacheKey(rootTests);
       const cachedMaps = sampleTubeMappingCache.get(cacheKey);
       const applyNativeMaps = nativeMaps => {
         const mergedMaps = mergeSampleTubeMaps(fallbackMaps, nativeMaps);
@@ -1544,17 +1688,27 @@ function AppointmentDetailsScreen({
           mergedMaps.childrenMap,
         );
         applyPatientTubes(patientId, nativeTubes);
+        applyPatientPrecomputedMapping(
+          patientId,
+          cacheKey,
+          mergedMaps,
+          null,
+          'native',
+        );
       };
 
       if (cachedMaps) {
         applyNativeMaps(cachedMaps);
-        return;
+        return Promise.resolve();
       }
 
       const mappingRequest =
         sampleTubeMappingRequests.get(cacheKey) ||
-        CatalogDatabaseModule.getSampleTubeMappingForTestCodes(
-          JSON.stringify(rootTests),
+        withSampleTubePrecomputeTimeout(
+          CatalogDatabaseModule.getSampleTubeMappingForTestCodes(
+            JSON.stringify(rootTests),
+          ),
+          SAMPLE_TUBE_PRECOMPUTE_TIMEOUT_MS,
         )
           .then(response => {
             const parsedResponse =
@@ -1569,16 +1723,84 @@ function AppointmentDetailsScreen({
           });
 
       sampleTubeMappingRequests.set(cacheKey, mappingRequest);
-      mappingRequest.then(applyNativeMaps).catch(error => {
-        warnDebug('Unable to precompute patient sample tubes:', error);
-        applyPatientTubes(patientId, fallbackTubes);
-      });
+      return mappingRequest
+        .then(applyNativeMaps)
+        .catch(error => {
+          warnDebug('Unable to precompute patient sample tubes:', error);
+          applyPatientTubes(patientId, fallbackTubes);
+        });
+    };
+
+    const selectedPatient = selectedPatientKeyForPrecompute
+      ? bookingPatients.find(
+          (patient, index) =>
+            normalizeFormText(
+              getPatientMutationId(patient) ||
+                patient?.id ||
+                patient?.patientId ||
+                `patient-${index}`,
+            ) === selectedPatientKeyForPrecompute,
+        )
+      : bookingPatients[0];
+
+    const backgroundPatients = bookingPatients.filter(
+      patient =>
+        !selectedPatient ||
+        getPatientMutationId(patient) !== getPatientMutationId(selectedPatient),
+    );
+
+    const processNextBackgroundPatient = index => {
+      if (!isMounted || index >= backgroundPatients.length) {
+        return;
+      }
+
+      backgroundTimer = setTimeout(() => {
+        Promise.resolve(precomputePatientSampleTubes(backgroundPatients[index]))
+          .catch(error => {
+            warnDebug('Unable to lazily precompute patient sample tubes:', error);
+          })
+          .finally(() => processNextBackgroundPatient(index + 1));
+      }, 600);
+    };
+
+    interactionHandle = InteractionManager.runAfterInteractions(() => {
+      if (!isMounted) {
+        return;
+      }
+
+      Promise.resolve(
+        selectedPatient ? precomputePatientSampleTubes(selectedPatient) : null,
+      )
+        .catch(error => {
+          warnDebug('Unable to precompute selected patient sample tubes:', error);
+        })
+        .finally(() => {
+          if (!isMounted) {
+            return;
+          }
+
+          backgroundTimer = setTimeout(() => {
+            processNextBackgroundPatient(0);
+          }, 1200);
+        });
     });
 
     return () => {
       isMounted = false;
+      if (backgroundTimer) {
+        clearTimeout(backgroundTimer);
+      }
+      if (interactionHandle?.cancel) {
+        interactionHandle.cancel();
+      }
     };
-  }, [patientSelectedTestsMap, patients]);
+  }, [
+    onAppointmentDetailStateChange,
+    patientSelectedTestsMap,
+    patients,
+    selectedPatientItem?.key,
+    selectedPatientKey,
+  ]);
   const linkedPatients = useMemo(
     () =>
       Array.isArray(selectedBooking?.linkedPatients)
@@ -1607,6 +1829,40 @@ function AppointmentDetailsScreen({
     setLinkedAppointmentDate('');
     setLinkedAppointmentTimeSlot('');
   }, [selectedBooking?.id]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadPatientTags = async () => {
+      try {
+        const responseData = await getLocalPatientTagsResponse();
+        const items = Array.isArray(responseData?.items)
+          ? Array.from(
+              new Set(
+                responseData.items
+                  .map(item => normalizeFormText(item))
+                  .filter(Boolean),
+              ),
+            )
+          : [];
+
+        if (isMounted) {
+          setPatientTagOptions(items);
+        }
+      } catch (error) {
+        if (isMounted) {
+          setPatientTagOptions([]);
+        }
+        warnDebug('Unable to load patient tags:', error);
+      }
+    };
+
+    loadPatientTags();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -1804,6 +2060,14 @@ function AppointmentDetailsScreen({
               patient?.billingChargeMode ||
               patient?.chargeMode,
           );
+          const testMrp = toCurrencyNumber(
+            test?.mrp || test?.charge || test?.amount,
+          );
+          const discountedTestPrice = getDiscountedTestPrice(test);
+          const standardDiscountAmount = Math.max(
+            0,
+            testMrp - discountedTestPrice,
+          );
 
           return {
             key:
@@ -1816,21 +2080,13 @@ function AppointmentDetailsScreen({
               normalizeFormText(test?.description || test?.name) || 'Unnamed Test',
             selectedChargeMode,
             billingBucket: getBillingBucketFromChargeMode(selectedChargeMode),
-            mrp: toCurrencyNumber(test?.mrp || test?.charge || test?.amount),
-            charge: getDiscountedTestPrice(test),
+            mrp: testMrp,
+            charge: discountedTestPrice,
             percentageonstandard: getTestStandardDiscountPercent(test),
-            standard_discount_amount: Math.max(
-              0,
-              toCurrencyNumber(test?.mrp || test?.charge || test?.amount) -
-                getDiscountedTestPrice(test),
-            ),
+            standard_discount_amount: standardDiscountAmount,
             max_discount:
               toCurrencyNumber(test?.max_discount || test?.maxDiscount) ||
-              Math.max(
-                0,
-                toCurrencyNumber(test?.mrp || test?.charge || test?.amount) -
-                  getDiscountedTestPrice(test),
-              ),
+              standardDiscountAmount,
             max_allowed_discount: toCurrencyNumber(
               test?.max_allowed_discount || test?.maxAllowedDiscount,
             ),
@@ -1874,10 +2130,13 @@ function AppointmentDetailsScreen({
       selectedBooking,
     ],
   );
-  const hasPatientAdditionalDiscountEntry =
-    localBillingSummary.patientAdditionalDiscountRows.some(
+  const hasPatientAdditionalDiscountEntry = useMemo(
+    () =>
+      localBillingSummary.patientAdditionalDiscountRows.some(
       patient => patient.requestedAdditional > 0,
-    );
+      ),
+    [localBillingSummary.patientAdditionalDiscountRows],
+  );
   const patientAdditionalDiscountUiRows = useMemo(
     () =>
       localBillingSummary.patientAdditionalDiscountRows.map(patient => ({
@@ -1921,24 +2180,41 @@ function AppointmentDetailsScreen({
       ),
     [completePayments],
   );
-  const completePaymentMode =
-    completePayments.find(payment => normalizeFormText(payment?.mode))?.mode ||
-    COMPLETE_PAYMENT_MODE_OPTIONS[0];
-  const hasEnteredCompletePaymentAmount = completePayments.some(payment =>
-    normalizeFormText(payment?.amount),
+  const completePaymentMode = useMemo(
+    () =>
+      completePayments.find(payment => normalizeFormText(payment?.mode))?.mode ||
+      COMPLETE_PAYMENT_MODE_OPTIONS[0],
+    [completePayments],
   );
-  const pendingPaymentAmount = Math.max(
-    0,
-    completeNetAmount - completeAmountReceived,
+  const hasEnteredCompletePaymentAmount = useMemo(
+    () => completePayments.some(payment => normalizeFormText(payment?.amount)),
+    [completePayments],
   );
-  const extraPaymentAmount = Math.max(
-    0,
-    completeAmountReceived - completeNetAmount,
+  const {pendingPaymentAmount, extraPaymentAmount} = useMemo(
+    () => ({
+      pendingPaymentAmount: Math.max(
+        0,
+        completeNetAmount - completeAmountReceived,
+      ),
+      extraPaymentAmount: Math.max(
+        0,
+        completeAmountReceived - completeNetAmount,
+      ),
+    }),
+    [completeAmountReceived, completeNetAmount],
   );
-  const shouldCollectPendingPaymentPatient =
-    hasEnteredCompletePaymentAmount &&
-    (pendingPaymentAmount > 0.009 || extraPaymentAmount > 0.009) &&
-    completePaymentPatientOptions.length > 0;
+  const shouldCollectPendingPaymentPatient = useMemo(
+    () =>
+      hasEnteredCompletePaymentAmount &&
+      (pendingPaymentAmount > 0.009 || extraPaymentAmount > 0.009) &&
+      completePaymentPatientOptions.length > 0,
+    [
+      completePaymentPatientOptions.length,
+      extraPaymentAmount,
+      hasEnteredCompletePaymentAmount,
+      pendingPaymentAmount,
+    ],
+  );
   useEffect(() => {
     if (!shouldCollectPendingPaymentPatient) {
       if (pendingPaymentPatientId) {
@@ -1971,10 +2247,10 @@ function AppointmentDetailsScreen({
   const completeBookingPayload = useMemo(() => {
     const patientAdditionalDiscountMapForPayload =
       localBillingSummary.patientAdditionalDiscountRows.reduce(
-        (accumulator, patientDiscount) => ({
-          ...accumulator,
-          [patientDiscount.patientId]: patientDiscount,
-        }),
+        (accumulator, patientDiscount) => {
+          accumulator[patientDiscount.patientId] = patientDiscount;
+          return accumulator;
+        },
         {},
       );
     const testsPayload = patients
@@ -2079,7 +2355,7 @@ function AppointmentDetailsScreen({
 
         return {
           patient_id: payloadPatientId,
-          test_booking_status: testBookingStatus,
+          test_booking_status: getApiTestBookingStatusValue(testBookingStatus),
           additional_discount_mode:
             patientAdditionalDiscount?.effectiveAdditional > 0 ? 'amount' : '',
           additional_discount_value:
@@ -2204,6 +2480,17 @@ function AppointmentDetailsScreen({
         const isPatientMarkedTough =
           sampleCollectionEasyTough === 'tough' &&
           sampleCollectionEasyToughPatientIds.includes(optionId);
+        const patientSampleCollection =
+          patientSampleCollectionMap[patientId] || {};
+        const additionalSample = (Array.isArray(
+          patientSampleCollection?.selectedAdditionalTubes,
+        )
+          ? patientSampleCollection.selectedAdditionalTubes
+          : []
+        )
+          .map(tubeName => normalizeFormText(tubeName))
+          .filter(Boolean)
+          .join(',');
         const patientDocumentFileField = `patient_documents_${payloadPatientId}`;
         const patientDocumentMeta = [];
         const appendPatientDocumentMeta = (documents, type) => {
@@ -2214,22 +2501,28 @@ function AppointmentDetailsScreen({
             });
           });
         };
+        (Array.isArray(patientManualSlipDocumentsMap[patientId])
+          ? patientManualSlipDocumentsMap[patientId]
+          : []
+        ).forEach(() => {
+          patientDocumentMeta.push({
+            type: 'manual_slip',
+            file_field: patientDocumentFileField,
+          });
+        });
+        const cghsDocuments = patientCghsDocumentsMap[patientId] || {};
+        appendPatientDocumentMeta(cghsDocuments.cghsCard, 'cghs_card');
+        appendPatientDocumentMeta(cghsDocuments.patientPhotos, 'patient_photo');
         appendPatientDocumentMeta(
           patientCompletionDocumentsMap[patientId],
           'prescription',
         );
-        appendPatientDocumentMeta(
-          patientManualSlipDocumentsMap[patientId],
-          'manual_slip',
-        );
-        const cghsDocuments = patientCghsDocumentsMap[patientId] || {};
-        appendPatientDocumentMeta(cghsDocuments.patientPhotos, 'patient_photo');
-        appendPatientDocumentMeta(cghsDocuments.cghsCard, 'cghs_card');
         const patientUpdate = {
           patient_id: payloadPatientId,
-          apk_tbs:
+          apk_tbs: getApiTestBookingStatusValue(
             patientTestBookingStatusMap[patientId] ||
-            DEFAULT_TEST_BOOKING_STATUS,
+              DEFAULT_TEST_BOOKING_STATUS,
+          ),
           report_schedule:
             normalizeFormText(patientReportScheduleMap[patientId]) || 'routine',
           report_delivery: normalizeReportDeliveryValues(
@@ -2250,6 +2543,7 @@ function AppointmentDetailsScreen({
               ? normalizeFormText(samplePickCount)
               : '1',
           sample_collection_is: isPatientMarkedTough ? 'tough' : 'easy',
+          additional_sample: additionalSample,
           additional_discount_amount: toCurrencyNumber(
             billingRow?.effectiveAdditional,
           ),
@@ -2621,22 +2915,6 @@ function AppointmentDetailsScreen({
           ),
     );
   }, [activeCatalogItems.length]);
-  const handlePanelCatalogScroll = useCallback(
-    event => {
-      if (!hasMoreCatalogItems) {
-        return;
-      }
-
-      const {contentOffset, contentSize, layoutMeasurement} = event.nativeEvent;
-      const distanceFromBottom =
-        contentSize.height - (contentOffset.y + layoutMeasurement.height);
-
-      if (distanceFromBottom <= 120) {
-        loadMoreCatalogItems();
-      }
-    },
-    [hasMoreCatalogItems, loadMoreCatalogItems],
-  );
 
   const loadAddressCities = useCallback(async () => {
     setIsAddressCityLoading(true);
@@ -2822,11 +3100,23 @@ function AppointmentDetailsScreen({
     loadAddressColonies,
     onBookingScreenChange,
   ]);
+  const resolvedFloorAddressPart = useMemo(() => {
+    const floorSpecial = normalizeFormText(addressForm.floor_special);
+    const floorValue = normalizeFormText(addressForm.floor);
+
+    if (floorSpecial && floorSpecial !== 'None') {
+      return floorSpecial.replace(/_/g, ' ');
+    }
+
+    if (!floorValue || floorValue === 'N/A') {
+      return '';
+    }
+
+    return /^\d+$/.test(floorValue) ? `Floor - ${floorValue}` : floorValue;
+  }, [addressForm.floor, addressForm.floor_special]);
   const mergedSelectedBookingAddress = [
-    addressForm.address_type,
     addressForm.house_flat_no,
-    addressForm.floor,
-    addressForm.floor_special,
+    resolvedFloorAddressPart,
     addressForm.block_tower_no,
     addressForm.street_sector,
     addressForm.landmark,
@@ -2841,6 +3131,9 @@ function AppointmentDetailsScreen({
         selectedBooking.address.fullAddress !== 'Address not available'
       ? selectedBooking.address.fullAddress
       : mergedSelectedBookingAddress;
+  const resolvedLandmark = normalizeFormText(
+    addressForm.landmark || selectedBooking.address.landmark,
+  );
   const latitude =
     selectedBooking.address.latitude && selectedBooking.address.latitude !== 'N/A'
       ? selectedBooking.address.latitude
@@ -3035,7 +3328,8 @@ function AppointmentDetailsScreen({
           patient.cghsCardNo ||
           patient.cghs_card_no,
       ),
-      tag: normalizeOptionValue(patient.tag, TAG_OPTIONS, INITIAL_PATIENT_FORM.tag),
+      tag: serializePatientTags(normalizePatientTagValues(patient.tag)),
+      tags: normalizePatientTagValues(patient.tag),
     });
     setPatientDocuments([]);
 
@@ -3109,7 +3403,7 @@ function AppointmentDetailsScreen({
     setIsCancelBookingModalVisible(true);
   };
 
-  const handleReportCourierChange = (patient, nextValue) => {
+  const handleReportCourierChange = useCallback((patient, nextValue) => {
     if (!canUsePatientActions) {
       showBookingStartRequiredAlert();
       return;
@@ -3135,9 +3429,13 @@ function AppointmentDetailsScreen({
         [patientId]: nextValues,
       };
     });
-  };
+  }, [
+    canUsePatientActions,
+    setPatientReportCourierMap,
+    showBookingStartRequiredAlert,
+  ]);
 
-  const handleReportScheduleChange = (patient, nextValue) => {
+  const handleReportScheduleChange = useCallback((patient, nextValue) => {
     if (!canUsePatientActions) {
       showBookingStartRequiredAlert();
       return;
@@ -3155,7 +3453,11 @@ function AppointmentDetailsScreen({
       ...previousMap,
       [patientId]: normalizedNextValue,
     }));
-  };
+  }, [
+    canUsePatientActions,
+    setPatientReportScheduleMap,
+    showBookingStartRequiredAlert,
+  ]);
 
   const handleTestBookingStatusChange = (patient, nextValue) => {
     if (!canUsePatientActions) {
@@ -4285,7 +4587,7 @@ function AppointmentDetailsScreen({
       ...allPanelCompanies.filter(
         company =>
           !apiMatchedCompanies.some(matchedCompany =>
-            isSamePanelCompany(matchedCompany, company),
+            isSamePanelCompanyListItem(matchedCompany, company),
           ),
       ),
     ];
@@ -4578,737 +4880,69 @@ function AppointmentDetailsScreen({
 
   if (isPanelCompanyModalVisible || isPanelCatalogVisible) {
     return (
-      <>
-        <View style={styles.sectionCard}>
-          <View
-            style={[
-              styles.patientsSectionHeaderRow,
-              isNarrowScreen && styles.patientsSectionHeaderRowStacked,
-            ]}>
-            <View style={styles.sectionTitleRow}>
-              <View style={styles.sectionIconWrap}>
-                <Ionicons name="flask" size={16} style={styles.sectionIcon} />
-              </View>
-              <Text
-                style={[styles.sectionTitle, styles.panelFlowHeadingText]}
-                numberOfLines={2}>
-                Select Panel Company
-              </Text>
-            </View>
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={[
-                styles.addPatientButton,
-                isSmallPhone && styles.addPatientButtonCompact,
-              ]}
-              onPress={handleAddTestFlowBack}>
-              <Ionicons
-                name="arrow-back"
-                size={16}
-                style={styles.addPatientButtonIcon}
-              />
-              <Text style={styles.addPatientButtonText}>Back</Text>
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.sectionText}>
-            Patient: {selectedPanelPatient?.name || 'N/A'}
-          </Text>
-          {isPanelCatalogVisible ? (
-            <Text style={styles.sectionText}>
-              Company: {selectedPanelCompanyName || 'Selected'}
-            </Text>
-          ) : null}
-        </View>
-
-        <View style={[styles.bookingDetailCard, styles.panelCatalogBodyFull]}>
-          {isPanelCompanyModalVisible ? (
-            <>
-              <View style={styles.panelCompanySearchWrap}>
-                <Ionicons
-                  name="search-outline"
-                  size={18}
-                  style={styles.panelCompanySearchIcon}
-                />
-                <TextInput
-                  value={panelCompanySearch}
-                  onChangeText={setPanelCompanySearch}
-                  placeholder="Search panel company"
-                  placeholderTextColor={BRAND.textMuted}
-                  style={styles.panelCompanySearchInput}
-                />
-              </View>
-              <Text style={styles.sectionText}>
-                Showing first {PANEL_COMPANY_DEFAULT_VISIBLE} companies only.
-                Search to find the rest.
-              </Text>
-              {hasPanelCompanySearch ? (
-                <Text style={styles.sectionText}>
-                  Showing {visiblePanelCompanyItems.length} of{' '}
-                  {filteredPanelCompanyItems.length} matching panel companies.
-                  Type more to narrow results.
-                </Text>
-              ) : null}
-
-              <View style={styles.panelCompanyList}>
-                <ScrollView
-                  showsVerticalScrollIndicator
-                  nestedScrollEnabled
-                  contentContainerStyle={styles.panelCompanyListContent}>
-                  {filteredPanelCompanyItems.length ? (
-                    visiblePanelCompanyItems.map((item, index) => {
-                      const isSelected = selectedPanelCompanyId === item.id;
-
-                      return (
-                        <TouchableOpacity
-                          key={`${item.id}-${index}`}
-                          activeOpacity={0.85}
-                          style={[
-                            styles.panelCompanyItem,
-                            isSelected && styles.panelCompanyItemActive,
-                          ]}
-                          onPress={() => handleSelectPanelCompany(item)}>
-                          <View style={styles.panelCompanyItemTextWrap}>
-                            <Text
-                              style={[
-                                styles.panelCompanyName,
-                                isSelected && styles.panelCompanyNameActive,
-                              ]}>
-                              {item.name}
-                            </Text>
-                            {item.details ? (
-                              <Text style={styles.panelCompanyDetails}>
-                                {item.details}
-                              </Text>
-                            ) : null}
-                            {item.centerId ? (
-                              <Text style={styles.panelCompanyMeta}>
-                                Center: {item.centerId}
-                              </Text>
-                            ) : null}
-                          </View>
-                          {item.billingChargeMode ? (
-                            <View style={styles.panelCompanyModeChip}>
-                              <Text style={styles.panelCompanyModeChipText}>
-                                {item.billingChargeMode}
-                              </Text>
-                            </View>
-                          ) : null}
-                        </TouchableOpacity>
-                      );
-                    })
-                  ) : (
-                    <View style={styles.panelCompanyEmptyState}>
-                      <Text style={styles.panelCompanyEmptyStateText}>
-                        No companies match your search.
-                      </Text>
-                    </View>
-                  )}
-                </ScrollView>
-              </View>
-            </>
-          ) : (
-            <View style={styles.panelCompanyList}>
-              <View style={styles.panelCatalogHeaderFixed}>
-                {selectedPanelCompany ? (
-                  <View style={styles.selectedPanelCompanyCard}>
-                    <Text style={styles.selectedPanelCompanyTitle}>
-                      Selected Panel Company
-                    </Text>
-                    <View
-                      style={[
-                        styles.selectedPanelCompanyFieldRow,
-                        isNarrowScreen && styles.selectedPanelCompanyFieldRowStacked,
-                      ]}>
-                      <View style={styles.selectedPanelCompanyField}>
-                        <Text style={styles.selectedPanelCompanyFieldLabel}>
-                          Panel Company
-                        </Text>
-                        <Text style={styles.selectedPanelCompanyFieldValue}>
-                          {selectedPanelCompany.name || 'N/A'}
-                        </Text>
-                      </View>
-                      <View style={styles.selectedPanelCompanyField}>
-                        <Text style={styles.selectedPanelCompanyFieldLabel}>
-                          Billing Type
-                        </Text>
-                        <Text style={styles.selectedPanelCompanyFieldValue}>
-                          {getPaymentLabelFromBillingMode(
-                            selectedPanelCompany.billingChargeMode,
-                          )}
-                        </Text>
-                      </View>
-                    </View>
-                  </View>
-                ) : null}
-                <Text style={styles.sectionText}>
-                  {selectedCatalogSubgroup
-                    ? `Tests inside: ${getCatalogDisplayTitle({
-                        item: selectedCatalogSubgroup,
-                        isSubgroupList: true,
-                      })}`
-                    : selectedCatalogGroup
-                    ? `Subgroups inside: ${getCatalogDisplayTitle({
-                        item: selectedCatalogGroup,
-                        isGroupList: true,
-                      })}`
-                    : 'Select a group to view its subgroups.'}
-                </Text>
-                {selectedCatalogSubgroup ? (
-                  <>
-                    <View style={styles.panelCompanySearchWrap}>
-                      <Ionicons
-                        name="search-outline"
-                        size={18}
-                        style={styles.panelCompanySearchIcon}
-                      />
-                      <TextInput
-                        value={testSearch}
-                        onChangeText={setTestSearch}
-                        placeholder="Search tests or child tests"
-                        placeholderTextColor={BRAND.textMuted}
-                        style={styles.panelCompanySearchInput}
-                      />
-                    </View>
-                    <Text style={styles.sectionText}>
-                      {hasTestSearch
-                        ? `Showing ${activeCatalogItems.length} matching tests across the selected subgroup.`
-                        : `Showing first ${CATALOG_TEST_VISIBLE_LIMIT} tests. Scroll for more.`}
-                    </Text>
-                  </>
-                ) : null}
-              </View>
-              <ScrollView
-                style={styles.panelCompanyListScroll}
-                showsVerticalScrollIndicator
-                nestedScrollEnabled
-                persistentScrollbar
-                scrollEventThrottle={16}
-                onScroll={handlePanelCatalogScroll}
-                contentContainerStyle={styles.panelCompanyListContent}>
-                {activeCatalogItems.length ? (
-                  visibleCatalogItems.map(
-                    (item, index) => {
-                      const isGroupList =
-                        !selectedCatalogGroup && !selectedCatalogSubgroup;
-                      const isSubgroupList =
-                        Boolean(selectedCatalogGroup) && !selectedCatalogSubgroup;
-                      const isTestsList = Boolean(selectedCatalogSubgroup);
-                      const title = getCatalogDisplayTitle({
-                        item,
-                        isGroupList,
-                        isSubgroupList,
-                      });
-                      const subgroupCount = Array.isArray(item?.subgroups)
-                        ? item.subgroups.length
-                        : 0;
-                      const testCount = Array.isArray(item?.tests)
-                        ? item.tests.length
-                        : 0;
-                      const childTests = Array.isArray(item?.child_tests)
-                        ? item.child_tests
-                        : [];
-                      const testKey = `${item?.booked_code || title || 'test'}-${index}`;
-                      const isTestExpanded = Boolean(expandedCatalogTests[testKey]);
-
-                      return (
-                        <TouchableOpacity
-                          key={`${title || 'item'}-${index}`}
-                          activeOpacity={0.85}
-                          style={styles.panelCompanyItem}
-                          onPress={() => {
-                            if (isGroupList) {
-                              setSelectedCatalogGroup(item);
-                              setSelectedCatalogSubgroup(null);
-                              setTestSearch('');
-                              setExpandedCatalogTests({});
-                              setCatalogVisibleCount(CATALOG_ITEM_PAGE_SIZE);
-                              return;
-                            }
-
-                            if (isSubgroupList) {
-                              setSelectedCatalogSubgroup(item);
-                              setTestSearch('');
-                              setExpandedCatalogTests({});
-                              setCatalogVisibleCount(CATALOG_ITEM_PAGE_SIZE);
-                              return;
-                            }
-
-                            if (isTestsList && childTests.length) {
-                              setExpandedCatalogTests(previousState => ({
-                                ...previousState,
-                                [testKey]: !previousState[testKey],
-                              }));
-                              setCatalogVisibleCount(CATALOG_ITEM_PAGE_SIZE);
-                            }
-                          }}
-                          disabled={isTestsList && !childTests.length}>
-                          <View style={styles.panelCompanyItemTextWrap}>
-                            <Text style={styles.panelCompanyName}>
-                              {title ||
-                                `Unnamed ${
-                                  isGroupList
-                                    ? 'Group'
-                                    : isSubgroupList
-                                    ? 'Subgroup'
-                                    : 'Test'
-                                } ${index + 1}`}
-                            </Text>
-                            <Text style={styles.panelCompanyMeta}>
-                              {isGroupList
-                                ? `GCode: ${
-                                    getCatalogGroupId(item) || 'N/A'
-                                  } | Subgroups: ${subgroupCount}`
-                                : isSubgroupList
-                                ? `SCode: ${
-                                    getCatalogSubgroupId(item) || 'N/A'
-                                  } | Tests: ${testCount}`
-                                : `Code: ${item?.booked_code || 'N/A'} | MRP: ${
-                                    item?.mrp ?? 0
-                                  }`}
-                            </Text>
-                            {isTestsList ? (
-                              <Text style={styles.panelCompanyMeta}>
-                                Panel Company:{' '}
-                                {item?.panel_company_name || selectedPanelCompanyName || 'N/A'}
-                              </Text>
-                            ) : null}
-                            {isTestsList ? (
-                              <Text style={styles.panelCompanyMeta}>
-                                {childTests.length
-                                  ? `Child tests: ${childTests.length} (tap to ${
-                                      isTestExpanded ? 'hide' : 'view'
-                                    })`
-                                  : 'No child tests'}
-                              </Text>
-                            ) : null}
-                            {isTestsList && isTestExpanded && childTests.length ? (
-                              <View style={styles.panelCompanyListContent}>
-                                {childTests.map((childTest, childIndex) => (
-                                  <View
-                                    key={`${childTest?.booked_code || 'child'}-${childIndex}`}
-                                    style={styles.panelCompanyItem}>
-                                    <View style={styles.panelCompanyItemTextWrap}>
-                                      <Text style={styles.panelCompanyName}>
-                                        {childTest?.description || 'Unnamed Child Test'}
-                                      </Text>
-                                      <Text style={styles.panelCompanyMeta}>
-                                        Code: {childTest?.booked_code || 'N/A'}
-                                      </Text>
-                                    </View>
-                                  </View>
-                                ))}
-                              </View>
-                            ) : null}
-                          </View>
-                          {isGroupList || isSubgroupList ? (
-                            <Ionicons
-                              name="chevron-forward"
-                              size={16}
-                              style={styles.panelCompanySearchIcon}
-                            />
-                          ) : isTestsList && childTests.length ? (
-                            <Ionicons
-                              name={isTestExpanded ? 'chevron-up' : 'chevron-down'}
-                              size={16}
-                              style={styles.panelCompanySearchIcon}
-                            />
-                          ) : null}
-                        </TouchableOpacity>
-                      );
-                    },
-                  )
-                ) : (
-                  <View style={styles.panelCompanyEmptyState}>
-                    <Text style={styles.panelCompanyEmptyStateText}>
-                      {selectedCatalogSubgroup
-                        ? 'No tests available for this subgroup.'
-                        : selectedCatalogGroup
-                        ? 'No subgroups available for this group.'
-                        : 'No groups available for this panel company.'}
-                    </Text>
-                  </View>
-                )}
-                {hasMoreCatalogItems ? (
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    style={styles.addPatientButton}
-                    onPress={loadMoreCatalogItems}>
-                    <Text style={styles.addPatientButtonText}>
-                      Load More ({visibleCatalogItems.length}/
-                      {activeCatalogItems.length})
-                    </Text>
-                  </TouchableOpacity>
-                ) : null}
-              </ScrollView>
-            </View>
-          )}
-        </View>
-        <AppAlertModal
-          alert={appAlert}
-          styles={styles}
-          onClose={closeAppAlert}
-        />
-      </>
+      <PanelCompanyFlowScreen
+        styles={styles}
+        isNarrowScreen={isNarrowScreen}
+        isSmallPhone={isSmallPhone}
+        isPanelCatalogVisible={isPanelCatalogVisible}
+        isPanelCompanyModalVisible={isPanelCompanyModalVisible}
+        selectedPanelPatient={selectedPanelPatient}
+        selectedPanelCompanyName={selectedPanelCompanyName}
+        selectedPanelCompany={selectedPanelCompany}
+        selectedPanelCompanyId={selectedPanelCompanyId}
+        panelCompanySearch={panelCompanySearch}
+        setPanelCompanySearch={setPanelCompanySearch}
+        hasPanelCompanySearch={hasPanelCompanySearch}
+        filteredPanelCompanyItems={filteredPanelCompanyItems}
+        visiblePanelCompanyItems={visiblePanelCompanyItems}
+        handleSelectPanelCompany={handleSelectPanelCompany}
+        selectedCatalogGroup={selectedCatalogGroup}
+        selectedCatalogSubgroup={selectedCatalogSubgroup}
+        activeCatalogItems={activeCatalogItems}
+        visibleCatalogItems={visibleCatalogItems}
+        expandedCatalogTests={expandedCatalogTests}
+        testSearch={testSearch}
+        setTestSearch={setTestSearch}
+        hasTestSearch={hasTestSearch}
+        hasMoreCatalogItems={hasMoreCatalogItems}
+        loadMoreCatalogItems={loadMoreCatalogItems}
+        handleAddTestFlowBack={handleAddTestFlowBack}
+        setSelectedCatalogGroup={setSelectedCatalogGroup}
+        setSelectedCatalogSubgroup={setSelectedCatalogSubgroup}
+        setExpandedCatalogTests={setExpandedCatalogTests}
+        setCatalogVisibleCount={setCatalogVisibleCount}
+        getPaymentLabelFromBillingMode={getPaymentLabelFromBillingMode}
+        appAlert={appAlert}
+        closeAppAlert={closeAppAlert}
+      />
     );
   }
-
   if (selectedBookingScreen === 'edit-address') {
-    const renderAddressInput = ({
-      field,
-      label,
-      required = false,
-      placeholder = '',
-      multiline = false,
-      keyboardType = 'default',
-      disabled = false,
-      headerRight = null,
-    }) => (
-      <View style={styles.addPatientFieldHalf}>
-        <View style={styles.appointmentAddressFieldHeader}>
-          <Text style={styles.addPatientFieldLabel}>
-            {label}
-            {required ? <Text style={styles.requiredFieldAsterisk}> *</Text> : null}
-          </Text>
-          {headerRight}
-        </View>
-        <TextInput
-          value={addressForm[field] || ''}
-          onChangeText={value => handleAddressFormChange(field, value)}
-          placeholder={placeholder}
-          placeholderTextColor="#7B8AA3"
-          keyboardType={keyboardType}
-          multiline={multiline}
-          editable={!disabled}
-          style={[
-            styles.addPatientInput,
-            disabled && styles.addPatientInputDisabled,
-            multiline && styles.appointmentAddressNotesInput,
-          ]}
-        />
-      </View>
-    );
-    const renderManualPincodeToggle = () => (
-      <TouchableOpacity
-        activeOpacity={0.85}
-        style={styles.appointmentAddressPincodeToggle}
-        onPress={() =>
-          handleAddressFormChange(
-            'is_manual_pincode',
-            !addressForm.is_manual_pincode,
-          )
-        }>
-        <View
-          style={[
-            styles.cancelCheckbox,
-            addressForm.is_manual_pincode && styles.cancelCheckboxActive,
-          ]}>
-          {addressForm.is_manual_pincode ? (
-            <Ionicons
-              name="checkmark"
-              size={13}
-              style={styles.cancelCheckboxIcon}
-            />
-          ) : null}
-        </View>
-        <Text style={styles.appointmentAddressPincodeToggleText}>
-          Edit pincode
-        </Text>
-      </TouchableOpacity>
-    );
-    const renderAddressChips = ({field, label, options = []}) => (
-      <View style={styles.addPatientInputGroup}>
-        <Text style={styles.addPatientFieldLabel}>{label}</Text>
-        <View style={styles.addPatientGenderChipRow}>
-          {options.map(option => {
-            const isSelected = addressForm[field] === option;
-
-            return (
-              <TouchableOpacity
-                key={`${field}-${option}`}
-                activeOpacity={0.85}
-                style={[
-                  styles.addPatientGenderChip,
-                  isSelected && styles.addPatientGenderChipActive,
-                ]}
-                onPress={() => handleAddressFormChange(field, option)}>
-                <Text
-                  style={[
-                    styles.addPatientGenderChipText,
-                    isSelected && styles.addPatientGenderChipTextActive,
-                  ]}>
-                  {option}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </View>
-    );
-    const renderAddressSelect = ({field, label, required = false, onPress}) => (
-      <View style={styles.addPatientFieldHalf}>
-        <Text style={styles.addPatientFieldLabel}>
-          {label}
-          {required ? <Text style={styles.requiredFieldAsterisk}> *</Text> : null}
-        </Text>
-        <TouchableOpacity
-          activeOpacity={0.85}
-          style={styles.addPatientDatePickerButton}
-          onPress={onPress}>
-          <Text
-            style={[
-              styles.addPatientDatePickerText,
-              !addressForm[field] && styles.addPatientDatePickerPlaceholder,
-            ]}
-            numberOfLines={1}>
-            {addressForm[field] || 'Select'}
-          </Text>
-          <Ionicons
-            name="chevron-down"
-            size={16}
-            style={styles.addPatientDatePickerIcon}
-          />
-        </TouchableOpacity>
-      </View>
-    );
-    const hasSelectedAddressCity = Boolean(normalizeFormText(addressForm.city));
-    const hasAddressPincode = Boolean(normalizeFormText(addressForm.pincode));
-    const shouldShowAddressDetails = hasSelectedAddressCity && hasAddressPincode;
-
     return (
-      <>
-        <View style={styles.completeBookingScreenShell}>
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.completeBookingScreenContent}>
-            <View style={styles.appointmentAddressFormCard}>
-              <View style={styles.appointmentAddressFormHero}>
-                <View style={styles.appointmentAddressFormIconWrap}>
-                  <Ionicons
-                    name="navigate-outline"
-                    size={18}
-                    style={styles.appointmentAddressFormIcon}
-                  />
-                </View>
-                <View style={styles.appointmentAddressFormHeroText}>
-                  <Text style={styles.appointmentAddressFormTitle}>
-                    Visit Address
-                  </Text>
-                  <Text style={styles.appointmentAddressFormSubtitle}>
-                    Update the location details for this booking.
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.appointmentAddressSection}>
-                {renderAddressChips({
-                  field: 'address_type',
-                  label: 'Address Type',
-                  options: ADDRESS_TYPE_OPTIONS,
-                })}
-                {renderAddressSelect({
-                  field: 'city',
-                  label: 'City',
-                  required: true,
-                  onPress: () => {
-                    loadAddressCities();
-                    setIsAddressCitySelectVisible(true);
-                  },
-                })}
-              </View>
-              {hasSelectedAddressCity ? (
-                <View style={styles.appointmentAddressSection}>
-                  <Text style={styles.appointmentAddressSectionTitle}>
-                    Colony & Route
-                  </Text>
-                  <View style={[
-                    styles.addPatientFieldRow,
-                    isNarrowScreen && styles.addPatientFieldRowStacked,
-                  ]}>
-                    {addressForm.is_manual_pincode
-                      ? renderAddressInput({
-                          field: 'colony',
-                          label: 'Colony',
-                          required: true,
-                          placeholder: 'Enter colony',
-                        })
-                      : renderAddressSelect({
-                          field: 'colony',
-                          label: 'Colony',
-                          required: true,
-                          onPress: () => {
-                            loadAddressColonies(addressForm.city);
-                            setIsAddressColonySelectVisible(true);
-                          },
-                        })}
-                    {renderAddressInput({
-                      field: 'pincode',
-                      label: 'Pincode',
-                      required: true,
-                      keyboardType: 'numeric',
-                      disabled: !addressForm.is_manual_pincode,
-                      headerRight: renderManualPincodeToggle(),
-                    })}
-                  </View>
-                  {hasAddressPincode ? (
-                    renderAddressInput({
-                      field: 'route',
-                      label: 'Route',
-                      required: true,
-                    })
-                  ) : null}
-                </View>
-              ) : null}
-              {shouldShowAddressDetails ? (
-                <>
-                  <View style={styles.appointmentAddressSection}>
-                    <Text style={styles.appointmentAddressSectionTitle}>
-                      Building Details
-                    </Text>
-                    <View style={[
-                      styles.addPatientFieldRow,
-                      isNarrowScreen && styles.addPatientFieldRowStacked,
-                    ]}>
-                      {renderAddressInput({
-                        field: 'house_flat_no',
-                        label: 'House/Flat No',
-                        required: true,
-                      })}
-                      {renderAddressInput({
-                        field: 'block_tower_no',
-                        label: 'Block / Tower No',
-                      })}
-                    </View>
-                    <View style={[
-                      styles.addPatientFieldRow,
-                      isNarrowScreen && styles.addPatientFieldRowStacked,
-                    ]}>
-                      {renderAddressInput({
-                        field: 'floor',
-                        label: 'Floor',
-                        required: addressForm.floor_special !== 'None',
-                        keyboardType: 'numeric',
-                        disabled: addressForm.floor_special === 'None',
-                      })}
-                      <View style={styles.addPatientFieldHalf}>
-                        {renderAddressSelect({
-                          field: 'floor_special',
-                          label: 'Floor Special',
-                          onPress: () => setIsAddressFloorSpecialSelectVisible(true),
-                        })}
-                      </View>
-                    </View>
-                  </View>
-                  <View style={styles.appointmentAddressSection}>
-                    <Text style={styles.appointmentAddressSectionTitle}>
-                      Area Details
-                    </Text>
-                    <View style={[
-                      styles.addPatientFieldRow,
-                      isNarrowScreen && styles.addPatientFieldRowStacked,
-                    ]}>
-                      {renderAddressInput({
-                        field: 'street_sector',
-                        label: 'Street / Sector',
-                      })}
-                      {renderAddressInput({field: 'landmark', label: 'Landmark'})}
-                    </View>
-                  </View>
-                  <View style={styles.appointmentAddressSection}>
-                    <Text style={styles.appointmentAddressSectionTitle}>
-                      Notes
-                    </Text>
-                    {renderAddressInput({
-                      field: 'google_location',
-                      label: 'Google Location',
-                      placeholder: 'Optional Google Maps URL',
-                    })}
-                    {renderAddressInput({
-                      field: 'access_notes',
-                      label: 'Access Notes',
-                      placeholder: 'Optional',
-                      multiline: true,
-                    })}
-                  </View>
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    style={[
-                      styles.appointmentAddressUpdateButton,
-                      isAddressUpdating && styles.completeBookingActionButtonDisabled,
-                    ]}
-                    onPress={handleUpdateAddress}
-                    disabled={isAddressUpdating}>
-                    <Ionicons
-                      name={
-                        isAddressUpdating
-                          ? 'hourglass-outline'
-                          : 'checkmark-circle-outline'
-                      }
-                      size={16}
-                      style={styles.completeBookingActionButtonIcon}
-                    />
-                    <Text style={styles.completeBookingActionButtonText}>
-                      {isAddressUpdating ? 'Updating...' : 'Update Address'}
-                    </Text>
-                  </TouchableOpacity>
-                </>
-              ) : null}
-            </View>
-          </ScrollView>
-        </View>
-        <OptionSelectModal
-          styles={styles}
-          visible={isAddressCitySelectVisible}
-          title="Select City"
-          options={addressCityOptions}
-          isLoading={isAddressCityLoading}
-          emptyText="Cities could not be loaded from the local database. Please rebuild or reinstall the APK and try again."
-          selectedValue={addressForm.city}
-          onClose={() => setIsAddressCitySelectVisible(false)}
-          onSelect={city => {
-            handleAddressFormChange('city', city);
-            setIsAddressCitySelectVisible(false);
-          }}
-        />
-        <OptionSelectModal
-          styles={styles}
-          visible={isAddressColonySelectVisible}
-          title="Select Colony"
-          options={addressColonyOptions.map(colony => ({
-            key: `${colony.id || colony.colony_name}-${colony.pincode || ''}-${
-              colony.route_no || ''
-            }`,
-            value: colony.colony_name,
-            label: colony.colony_name,
-          }))}
-          isLoading={isAddressColonyLoading}
-          emptyText="No colony was found for the selected city. You can enter the pincode and route manually."
-          selectedValue={addressForm.colony}
-          onClose={() => setIsAddressColonySelectVisible(false)}
-          onSelect={colonyName => {
-            handleAddressFormChange('colony', colonyName);
-            setIsAddressColonySelectVisible(false);
-          }}
-        />
-        <OptionSelectModal
-          styles={styles}
-          visible={isAddressFloorSpecialSelectVisible}
-          title="Floor Special"
-          options={ADDRESS_FLOOR_SPECIAL_OPTIONS}
-          selectedValue={addressForm.floor_special}
-          onClose={() => setIsAddressFloorSpecialSelectVisible(false)}
-          onSelect={value => {
-            handleAddressFormChange('floor_special', value);
-            setIsAddressFloorSpecialSelectVisible(false);
-          }}
-        />
-        <AppAlertModal
-          alert={appAlert}
-          styles={styles}
-          onClose={closeAppAlert}
-        />
-      </>
+      <AddressEditScreen
+        styles={styles}
+        isNarrowScreen={isNarrowScreen}
+        addressForm={addressForm}
+        addressCityOptions={addressCityOptions}
+        addressColonyOptions={addressColonyOptions}
+        isAddressCityLoading={isAddressCityLoading}
+        isAddressColonyLoading={isAddressColonyLoading}
+        isAddressUpdating={isAddressUpdating}
+        isAddressCitySelectVisible={isAddressCitySelectVisible}
+        isAddressColonySelectVisible={isAddressColonySelectVisible}
+        isAddressFloorSpecialSelectVisible={isAddressFloorSpecialSelectVisible}
+        appAlert={appAlert}
+        loadAddressCities={loadAddressCities}
+        loadAddressColonies={loadAddressColonies}
+        handleAddressFormChange={handleAddressFormChange}
+        handleUpdateAddress={handleUpdateAddress}
+        setIsAddressCitySelectVisible={setIsAddressCitySelectVisible}
+        setIsAddressColonySelectVisible={setIsAddressColonySelectVisible}
+        setIsAddressFloorSpecialSelectVisible={setIsAddressFloorSpecialSelectVisible}
+        closeAppAlert={closeAppAlert}
+      />
     );
   }
-
   const handleSubmitAddPatient = async () => {
     if (!canUsePatientActions) {
       showBookingStartRequiredAlert();
@@ -5323,6 +4957,10 @@ function AppointmentDetailsScreen({
     const panelCompany = patientForm.panelCompany.trim();
     const cghsCardNo = patientForm.cghsCardNo.trim();
     const ageYears = Number(patientForm.ageYears);
+    const selectedPatientTags = normalizePatientTagValues(
+      patientForm.tags?.length ? patientForm.tags : patientForm.tag,
+    );
+    const patientTag = serializePatientTags(selectedPatientTags);
 
     if (!fullName) {
       showAppAlert('Missing Name', 'Please enter the patient full name.');
@@ -5370,7 +5008,7 @@ function AppointmentDetailsScreen({
       ...(labmatePid ? {labmate_pid: labmatePid} : {}),
       ...(panelCompany ? {panel_company: panelCompany} : {}),
       ...(cghsCardNo ? {card_no: cghsCardNo} : {}),
-      ...(patientForm.tag ? {tag: patientForm.tag} : {}),
+      ...(patientTag ? {tag: patientTag} : {}),
       patient_documents: patientDocuments,
     };
     const editingPatientId = editingPatient
@@ -5502,6 +5140,7 @@ function AppointmentDetailsScreen({
             shouldShowStartOnly={shouldShowStartOnly}
             bookingActionLoading={bookingActionLoading}
             resolvedAddress={resolvedAddress}
+            resolvedLandmark={resolvedLandmark}
             latitude={latitude}
             longitude={longitude}
             locationUrl={locationUrl}
@@ -5685,6 +5324,7 @@ function AppointmentDetailsScreen({
         handleSelectPatientFormPanelCompany={
           handleSelectPatientFormPanelCompany
         }
+        patientTagOptions={patientTagOptions}
         handleSubmitAddPatient={handleSubmitAddPatient}
       />
 

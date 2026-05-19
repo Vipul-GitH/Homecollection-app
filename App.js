@@ -76,6 +76,7 @@ function App() {
           onBack={actions.handleGoBack}
           canGoBack={tabHistory.length > 0 || activeTab !== 'home'}
           bottomTabs={bottomTabs}
+          accessToken={session.accessToken}
           loggedInUser={session.loggedInUser}
           selectedBooking={selectedBooking}
           selectedBookingScreen={selectedBookingScreen}

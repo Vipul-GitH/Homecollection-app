@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useMemo} from 'react';
 
 import PatientDetailCard from '../../../components/bookings/PatientDetailCard';
 import PatientSampleCollectionSection from '../../../components/bookings/appointmentDetails/PatientSampleCollectionSection';
@@ -9,6 +9,9 @@ import {
   getPatientDisplayTubes,
 } from './patientDisplay';
 import {getPatientMutationId} from './helpers';
+
+const EMPTY_ARRAY = [];
+const EMPTY_OBJECT = {};
 
 function SelectedPatientAppointmentSection({
   selectedPatientItem,
@@ -52,12 +55,8 @@ function SelectedPatientAppointmentSection({
   handleRemoveSelectedTestWithSampleReset,
   handlePatientAddPanelCompany,
 }) {
-  if (!selectedPatientItem) {
-    return null;
-  }
-
-  const {patient, index} = selectedPatientItem;
-  const patientStatusCode = Number(patient.bookingPatientStatusCode || 0);
+  const {patient = null, index = 0} = selectedPatientItem || EMPTY_OBJECT;
+  const patientStatusCode = Number(patient?.bookingPatientStatusCode || 0);
   const isThisPatientCancelled = patientStatusCode === 4;
   const isThisPatientCompleteOrCancelled =
     patientStatusCode === 3 || patientStatusCode === 4;
@@ -72,45 +71,77 @@ function SelectedPatientAppointmentSection({
   const activePanelCompanyId = patientId
     ? activePatientPanelCompanyMap[patientId] || ''
     : '';
-  const selectedTests = patientId ? patientSelectedTestsMap[patientId] || [] : [];
+  const selectedTests = useMemo(
+    () =>
+      patientId
+        ? patientSelectedTestsMap[patientId] || EMPTY_ARRAY
+        : EMPTY_ARRAY,
+    [patientId, patientSelectedTestsMap],
+  );
   const hasSelectedTestsOverride =
     patientId &&
     Object.prototype.hasOwnProperty.call(patientSelectedTestsMap, patientId);
-  const companyChips = getPatientPanelCompanies(patient);
+  const companyChips = useMemo(
+    () => (patient ? getPatientPanelCompanies(patient) : EMPTY_ARRAY),
+    [getPatientPanelCompanies, patient],
+  );
   const sampleCollected =
     Boolean(patientId && patientSampleCollectionMap[patientId]?.collected) ||
     patientStatusCode === 3;
   const testBookingStatus = patientId
     ? patientTestBookingStatusMap[patientId] || defaultTestBookingStatus
     : defaultTestBookingStatus;
-  const displayTests = buildPatientDisplayTests({
-    patient,
-    selectedTests,
-    selectedTestsSourceReady: Boolean(hasSelectedTestsOverride),
-    panelCompanies: companyChips,
-  });
-  const testsSubtotal = displayTests.reduce(
-    (total, test) => total + Number(test?.charge || 0),
-    0,
+  const isManualHcSlipPatient = isManualHcSlipSelected(testBookingStatus);
+  const shouldShowSampleCollectionForPatient =
+    shouldShowSampleCollectionSection && !isManualHcSlipPatient;
+  const displayTests = useMemo(
+    () =>
+      buildPatientDisplayTests({
+        patient,
+        selectedTests,
+        selectedTestsSourceReady: Boolean(hasSelectedTestsOverride),
+        panelCompanies: companyChips,
+      }),
+    [companyChips, hasSelectedTestsOverride, patient, selectedTests],
   );
-  const displayTubes = getPatientDisplayTubes({
-    patient,
-    selectedTests,
-    selectedTestsSourceReady: Boolean(hasSelectedTestsOverride),
-    precomputedTubes: patientId
-      ? patientPrecomputedSampleTubesMap[patientId] || []
-      : [],
-  });
-  const activePanelCompany =
-    companyChips.find(
-      company =>
-        String(activePanelCompanyId) === String(company.chipId || company.id),
-    ) ||
-    companyChips[0] ||
-    null;
+  const testsSubtotal = useMemo(
+    () => displayTests.reduce((total, test) => total + Number(test?.charge || 0), 0),
+    [displayTests],
+  );
+  const precomputedTubes = useMemo(
+    () =>
+      patientId
+        ? patientPrecomputedSampleTubesMap[patientId] || EMPTY_ARRAY
+        : EMPTY_ARRAY,
+    [patientId, patientPrecomputedSampleTubesMap],
+  );
+  const displayTubes = useMemo(
+    () =>
+      getPatientDisplayTubes({
+        patient,
+        selectedTests,
+        selectedTestsSourceReady: Boolean(hasSelectedTestsOverride),
+        precomputedTubes,
+      }),
+    [hasSelectedTestsOverride, patient, precomputedTubes, selectedTests],
+  );
+  const activePanelCompany = useMemo(
+    () =>
+      companyChips.find(
+        company =>
+          String(activePanelCompanyId) === String(company.chipId || company.id),
+      ) ||
+      companyChips[0] ||
+      null,
+    [activePanelCompanyId, companyChips],
+  );
   const sampleCollection = patientId
     ? patientSampleCollectionMap[patientId] || null
     : null;
+
+  if (!patient) {
+    return null;
+  }
 
   return (
     <>
@@ -178,8 +209,7 @@ function SelectedPatientAppointmentSection({
         }
         showAlert={showAppAlert}
         requiresPaymentProof={
-          !isManualHcSlipSelected(testBookingStatus) &&
-          doesPatientNeedPaymentProof(patient)
+          !isManualHcSlipPatient && doesPatientNeedPaymentProof(patient)
         }
         requiresIdentityDocuments={doesPatientRequireIdentityDocuments(patient)}
         sampleCollected={sampleCollected}
@@ -229,7 +259,7 @@ function SelectedPatientAppointmentSection({
         }
         isAddPanelCompanyDisabled={Boolean(addingTestPatientId)}
       />
-      {onOpenSampleCollection && shouldShowSampleCollectionSection ? (
+      {onOpenSampleCollection && shouldShowSampleCollectionForPatient ? (
         <PatientSampleCollectionSection
           styles={styles}
           patient={patient}

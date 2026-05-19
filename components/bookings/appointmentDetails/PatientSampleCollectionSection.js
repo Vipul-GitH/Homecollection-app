@@ -47,37 +47,11 @@ function PatientSampleCollectionSection({
   const tubeSummaryRows = allTubeSummaryRows.filter(
     item => !isUndefinedTubeName(item.tubeName),
   );
-  const collectedTubeCount = tubeSummaryRows.filter(
-    item => item.selectedCount > 0,
-  ).length;
-  const pendingTubeCount = tubeSummaryRows.filter(
-    item => item.pendingCount > 0,
-  ).length;
 
   return (
     <View style={styles.patientSampleSection}>
       <View style={styles.patientSampleSectionHeader}>
         <Text style={styles.patientSampleSectionTitle}>Sample Collection</Text>
-        <View
-          style={[
-            styles.patientSamplePendingBadge,
-            isCollected && styles.patientSamplePendingBadgeDone,
-          ]}>
-          <Text
-            style={[
-              styles.patientSamplePendingBadgeText,
-              isCollected && styles.patientSamplePendingBadgeTextDone,
-            ]}>
-            {isCollected && pendingTubeCount === 0
-              ? 'Samples collected'
-              : tubeSummaryRows.length
-              ? `${collectedTubeCount} collected, ${Math.max(
-                  pendingTubeCount,
-                  1,
-                )} pending`
-              : 'No tubes available'}
-          </Text>
-        </View>
       </View>
       {onOpenSampleCollection ? (
         <TouchableOpacity

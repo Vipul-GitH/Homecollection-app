@@ -157,7 +157,7 @@ function CancelBookingModal({
                 <Text style={styles.cancelCheckboxText}>
                   {isPatientCancellation
                     ? 'Reschedule this patient'
-                    : 'Reschedule this booking'}
+                    : 'Reschedule Request'}
                 </Text>
               </TouchableOpacity>
             </View>

@@ -13,44 +13,43 @@ export const buildLocalBillingSummary = (
     ? completeBillingTests
     : [];
   const safePatientAdditionalDiscountMap = patientAdditionalDiscountMap || {};
-  const payingTests = safeBillingTests.filter(test => test.billingBucket === 'paying');
-  const creditTests = safeBillingTests.filter(test => test.billingBucket === 'credit');
-  const freeTests = safeBillingTests.filter(test => test.billingBucket === 'free');
-  const subtotal = safeBillingTests.reduce(
-    (total, test) => total + toCurrencyNumber(test?.mrp),
-    0,
-  );
-  const payingSubtotal = payingTests.reduce(
-    (total, test) => total + toCurrencyNumber(test?.mrp),
-    0,
-  );
-  const creditSubtotal = creditTests.reduce(
-    (total, test) => total + toCurrencyNumber(test?.mrp),
-    0,
-  );
-  const freeSubtotal = freeTests.reduce(
-    (total, test) => total + toCurrencyNumber(test?.mrp),
-    0,
-  );
-  const creditTotal = creditSubtotal;
-  const freeTotal = freeSubtotal;
-  const payingBaseDiscount = payingTests.reduce(
-    (total, test) => total + toCurrencyNumber(test?.standard_discount_amount),
-    0,
-  );
-  const baseDiscount = payingBaseDiscount;
-  const maxTotalDiscount = payingTests.reduce(
-    (total, test) =>
-      total +
-      Math.max(
-        toCurrencyNumber(test?.max_allowed_discount),
-        toCurrencyNumber(test?.max_discount),
-      ),
-    0,
-  );
+  let subtotal = 0;
+  let payingSubtotal = 0;
+  let creditSubtotal = 0;
+  let freeSubtotal = 0;
+  let payingBaseDiscount = 0;
+  let maxTotalDiscount = 0;
+  let payingTestCount = 0;
+  let creditTestCount = 0;
+  let freeTestCount = 0;
   const patientSummaryMap = new Map();
 
   safeBillingTests.forEach(test => {
+    const testMrp = toCurrencyNumber(test?.mrp);
+    const standardDiscountAmount = toCurrencyNumber(
+      test?.standard_discount_amount,
+    );
+    const maxDiscountAmount = Math.max(
+      toCurrencyNumber(test?.max_allowed_discount),
+      toCurrencyNumber(test?.max_discount),
+    );
+    const isPayingTest = test.billingBucket === 'paying';
+
+    subtotal += testMrp;
+
+    if (isPayingTest) {
+      payingSubtotal += testMrp;
+      payingBaseDiscount += standardDiscountAmount;
+      maxTotalDiscount += maxDiscountAmount;
+      payingTestCount += 1;
+    } else if (test.billingBucket === 'credit') {
+      creditSubtotal += testMrp;
+      creditTestCount += 1;
+    } else if (test.billingBucket === 'free') {
+      freeSubtotal += testMrp;
+      freeTestCount += 1;
+    }
+
     const patientId = normalizeFormText(test?.patientId);
     if (!patientId) {
       return;
@@ -62,6 +61,8 @@ export const buildLocalBillingSummary = (
         patientName: normalizeFormText(test?.patientName) || 'Patient',
         subtotal: 0,
         payingSubtotal: 0,
+        creditTotal: 0,
+        freeTotal: 0,
         baseDiscount: 0,
         maxTotalDiscount: 0,
         requestedAdditional: 0,
@@ -72,18 +73,23 @@ export const buildLocalBillingSummary = (
     }
 
     const entry = patientSummaryMap.get(patientId);
-    entry.subtotal += toCurrencyNumber(test?.mrp);
+    entry.subtotal += testMrp;
 
-    if (test.billingBucket === 'paying') {
-      entry.payingSubtotal += toCurrencyNumber(test?.mrp);
-      entry.baseDiscount += toCurrencyNumber(test?.standard_discount_amount);
-      entry.maxTotalDiscount += Math.max(
-        toCurrencyNumber(test?.max_allowed_discount),
-        toCurrencyNumber(test?.max_discount),
-      );
+    if (isPayingTest) {
+      entry.payingSubtotal += testMrp;
+      entry.baseDiscount += standardDiscountAmount;
+      entry.maxTotalDiscount += maxDiscountAmount;
       entry.payingTestCount += 1;
+    } else if (test.billingBucket === 'credit') {
+      entry.creditTotal += testMrp;
+    } else if (test.billingBucket === 'free') {
+      entry.freeTotal += testMrp;
     }
   });
+
+  const creditTotal = creditSubtotal;
+  const freeTotal = freeSubtotal;
+  const baseDiscount = payingBaseDiscount;
 
   const patientBillingRows = Array.from(patientSummaryMap.values())
     .map(entry => {
@@ -108,6 +114,14 @@ export const buildLocalBillingSummary = (
         finalPayingAmount: Math.max(
           0,
           entry.payingSubtotal - entry.baseDiscount - effectiveAdditional,
+        ),
+        nonPayingTotal: entry.creditTotal + entry.freeTotal,
+        finalAmount: Math.max(
+          0,
+          entry.subtotal -
+            entry.baseDiscount -
+            effectiveAdditional -
+            (entry.creditTotal + entry.freeTotal),
         ),
       };
     });
@@ -154,9 +168,9 @@ export const buildLocalBillingSummary = (
     finalAmount,
     patientBillingRows,
     patientAdditionalDiscountRows,
-    payingTestCount: payingTests.length,
-    creditTestCount: creditTests.length,
-    freeTestCount: freeTests.length,
+    payingTestCount,
+    creditTestCount,
+    freeTestCount,
   };
 };
 
