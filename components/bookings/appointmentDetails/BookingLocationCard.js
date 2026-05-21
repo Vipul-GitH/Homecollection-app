@@ -52,13 +52,6 @@ function BookingLocationCard({
 }) {
   return (
     <View style={styles.bookingDetailLocationCard}>
-      <View style={styles.bookingDetailLocationIconWrap}>
-        <Ionicons
-          name="location-outline"
-          size={18}
-          style={styles.bookingDetailLocationIcon}
-        />
-      </View>
       <View style={styles.bookingDetailLocationContent}>
         <Text style={styles.bookingDetailLocationTitle}>Visit location</Text>
         <Text style={styles.bookingDetailAddressText}>

@@ -393,7 +393,11 @@ function SampleCollectionScreen({
       normalizedSelectedTests,
       sampleTubeMaps,
     );
-  }, [normalizedSelectedTests, precomputedDerivedData, sampleTubeMaps]);
+  }, [
+    normalizedSelectedTests,
+    precomputedDerivedData,
+    sampleTubeMaps,
+  ]);
   const displayedSampleTubes = useMemo(() => {
     const seenTubes = new Set();
     return [...patientLevelTubes, ...selectedAdditionalTubes].filter(tube => {
@@ -933,11 +937,13 @@ function SampleCollectionScreen({
         const pendingTest = {
           booked_code: test.booked_code,
           parent_booked_code: getParentBookedCode(test),
+          description: test.description || getTestDescription(test),
         };
         const existingGroup = pendingGroupMap.get(groupKey);
 
         if (existingGroup) {
           existingGroup.pending.push(pendingTest);
+          existingGroup.pending_child_tests.push(pendingTest);
           return;
         }
 
@@ -950,6 +956,7 @@ function SampleCollectionScreen({
           root_test_name: test.rootTestName || rootBookedCode,
           tube_name: item.specimenName || test.specimenName || 'N/A',
           pending: [pendingTest],
+          pending_child_tests: [pendingTest],
         });
       });
     });

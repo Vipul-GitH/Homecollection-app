@@ -114,10 +114,6 @@ export const getAppointmentDetailsBillingValidationError = ({
     };
   }
 
-  if (isAllActivePatientsManualSlip) {
-    return null;
-  }
-
   const pendingIdentityDocumentsPatients = safePatients
     .filter(patient => {
       if (isPatientTerminalForCompletion(patient)) {
@@ -187,12 +183,6 @@ export const getAppointmentDetailsBillingValidationError = ({
     }
 
     const patientId = getPatientMutationId(patient);
-    const testBookingStatus =
-      patientTestBookingStatusMap?.[patientId] || DEFAULT_TEST_BOOKING_STATUS;
-    if (isManualHcSlipSelected(testBookingStatus)) {
-      return false;
-    }
-
     return !patientSampleCollectionMap?.[patientId]?.collected;
   });
 
@@ -203,6 +193,10 @@ export const getAppointmentDetailsBillingValidationError = ({
         .map(patient => patient?.name || 'Patient')
         .join(', ')}.`,
     };
+  }
+
+  if (isAllActivePatientsManualSlip) {
+    return null;
   }
 
   const pendingProofPatients = safePatients.filter(patient => {

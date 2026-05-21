@@ -6,6 +6,68 @@ const toPriceNumber = value => {
   return Number.isFinite(numericValue) ? numericValue : 0;
 };
 
+const hasPriceValue = value =>
+  value !== null && value !== undefined && String(value).trim() !== '';
+const getRawPriceValue = (...values) => values.find(value => hasPriceValue(value));
+
+const getTestCode = test =>
+  normalizeFormText(
+    test?.booked_code || test?.code || test?.testcode1 || test?.test_code,
+  ).toUpperCase();
+
+const getBackendTestForCode = (patient, test) => {
+  const testCode = getTestCode(test);
+
+  if (!testCode) {
+    return null;
+  }
+
+  return (Array.isArray(patient?.tests) ? patient.tests : []).find(
+    patientTest => getTestCode(patientTest) === testCode,
+  );
+};
+
+const mergeAppointmentBackendPrice = (patient, test, useBackendPrice) => {
+  if (!useBackendPrice) {
+    return test;
+  }
+
+  const backendTest = getBackendTestForCode(patient, test);
+
+  if (!backendTest) {
+    return test;
+  }
+
+  return {
+    ...test,
+    mrp: hasPriceValue(backendTest?.mrp)
+      ? backendTest.mrp
+      : hasPriceValue(backendTest?.MRP)
+      ? backendTest.MRP
+      : test?.mrp,
+    charge: hasPriceValue(backendTest?.charge)
+      ? backendTest.charge
+      : hasPriceValue(backendTest?.Charge)
+      ? backendTest.Charge
+      : test?.charge,
+    amount: hasPriceValue(backendTest?.amount) ? backendTest.amount : test?.amount,
+    max_discount: hasPriceValue(backendTest?.max_discount)
+      ? backendTest.max_discount
+      : test?.max_discount,
+    maxDiscount: hasPriceValue(backendTest?.maxDiscount)
+      ? backendTest.maxDiscount
+      : test?.maxDiscount,
+    panelCompanyName:
+      backendTest?.panelCompanyName ||
+      backendTest?.panel_company ||
+      test?.panelCompanyName,
+    panelCompanyId:
+      backendTest?.compCatId ||
+      backendTest?.comp_cat_id ||
+      test?.panelCompanyId,
+  };
+};
+
 export const getStandardDiscountPercent = test =>
   toPriceNumber(
     test?.percentageonstandard ||
@@ -59,8 +121,13 @@ const getDisplayTestBillingMode = ({test, patient, panelCompanies = []}) => {
 };
 
 export const getDisplayTestPrice = (test, options = {}) => {
-  const mrp = toPriceNumber(test?.mrp || test?.MRP || test?.amount);
-  const charge = toPriceNumber(test?.charge || test?.Charge);
+  const mrp = toPriceNumber(getRawPriceValue(test?.mrp, test?.MRP, test?.amount));
+  const rawCharge = getRawPriceValue(test?.charge, test?.Charge);
+  const charge = toPriceNumber(rawCharge);
+  if (options.useBackendPrice && hasPriceValue(rawCharge)) {
+    return charge;
+  }
+
   const baseMrp = mrp || charge;
   const billingMode = getDisplayTestBillingMode({
     test,
@@ -90,25 +157,55 @@ export const buildPatientDisplayTests = ({
   selectedTests,
   selectedTestsSourceReady,
   panelCompanies = [],
+  useBackendPrice = false,
 }) => {
   if (selectedTestsSourceReady) {
-    return (Array.isArray(selectedTests) ? selectedTests : []).map(test => ({
-      id: test.key,
-      code: test.booked_code || 'N/A',
-      name: test.description || 'Unnamed Test',
-      tat: test.tat || test.TAT || test.turnaroundTime || test.turnaround_time || '',
-      isAppAdded: true,
-      removeKey: test.key,
-      panelCompanyName: test.panelCompanyName || '',
-      panelCompanySource: test.panelCompanySource || '',
-      panelCompanyChipId: test.panelCompanyChipId || '',
-      panelCompanyId: test.panelCompanyId || '',
-      parentDescription: test.parentDescription || '',
-      mrp: Number(test?.mrp || test?.charge || 0) || 0,
-      charge: getDisplayTestPrice(test, {patient, panelCompanies}),
-      percentageonstandard: getStandardDiscountPercent(test),
-      chargeMode: getDisplayTestBillingMode({test, patient, panelCompanies}),
-    }));
+    return (Array.isArray(selectedTests) ? selectedTests : []).map(test => {
+      const displayTest = mergeAppointmentBackendPrice(
+        patient,
+        test,
+        useBackendPrice,
+      );
+
+      return {
+        id: test.key,
+        code: displayTest.booked_code || displayTest.code || 'N/A',
+        name: displayTest.description || displayTest.name || 'Unnamed Test',
+        tat:
+          displayTest.tat ||
+          displayTest.TAT ||
+          displayTest.turnaroundTime ||
+          displayTest.turnaround_time ||
+          '',
+        isAppAdded: true,
+        removeKey: test.key,
+        panelCompanyName: displayTest.panelCompanyName || '',
+        panelCompanySource: displayTest.panelCompanySource || '',
+        panelCompanyChipId: displayTest.panelCompanyChipId || '',
+        panelCompanyId: displayTest.panelCompanyId || '',
+        parentDescription: displayTest.parentDescription || '',
+        mrp:
+          Number(
+            getRawPriceValue(
+              displayTest?.mrp,
+              displayTest?.MRP,
+              displayTest?.amount,
+              displayTest?.charge,
+            ),
+          ) || 0,
+        charge: getDisplayTestPrice(displayTest, {
+          patient,
+          panelCompanies,
+          useBackendPrice,
+        }),
+        percentageonstandard: getStandardDiscountPercent(displayTest),
+        chargeMode: getDisplayTestBillingMode({
+          test: displayTest,
+          patient,
+          panelCompanies,
+        }),
+      };
+    });
   }
 
   return (Array.isArray(patient?.tests) ? patient.tests : []).map((test, index) => ({
@@ -124,7 +221,7 @@ export const buildPatientDisplayTests = ({
     panelCompanyId: '',
     parentDescription: '',
     mrp: Number(test?.mrp || test?.charge || test?.amount || 0) || 0,
-    charge: getDisplayTestPrice(test, {patient, panelCompanies}),
+    charge: getDisplayTestPrice(test, {patient, panelCompanies, useBackendPrice}),
     percentageonstandard: getStandardDiscountPercent(test),
     chargeMode: getDisplayTestBillingMode({test, patient, panelCompanies}),
   }));

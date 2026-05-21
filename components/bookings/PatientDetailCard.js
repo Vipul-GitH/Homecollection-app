@@ -27,31 +27,7 @@ import RequiredLabel from './appointmentDetails/RequiredLabel';
 const {LocalDocumentPickerModule, LocalGeoCameraModule} = NativeModules;
 const DOCUMENT_ZOOM_MIN = 1;
 const DOCUMENT_ZOOM_MAX = 3;
-const EMPTY_MANUAL_SLIP_DOCUMENTS = [];
-const MANUAL_HC_SLIP_STATUS = 'manual_hc_slip';
 const PATIENT_DOCUMENT_BASE_URL = 'https://labmate.bhasinpathlabs.com:2010/';
-const TEST_BOOKING_STATUS_OPTIONS = [
-  {
-    value: 'none',
-    label: 'None',
-    icon: 'remove-circle-outline',
-  },
-  {
-    value: 'confirmed_booked',
-    label: 'Test confirmed & booked',
-    icon: 'checkmark-circle-outline',
-  },
-  {
-    value: 'manual_hc_slip',
-    label: 'Manual HC Slip',
-    icon: 'document-text-outline',
-  },
-  {
-    value: 'incomplete_reg_exec',
-    label: 'Incomplete Test Booking, registration Executive to complete',
-    icon: 'alert-circle-outline',
-  },
-];
 const CGHS_DOCUMENT_SECTIONS = [
   {key: 'patientPhotos', label: 'Patient Photos (multi-select)'},
   {key: 'cghsCard', label: 'CGHS / CAPF Card (multi-select)'},
@@ -164,27 +140,6 @@ const getBillingChargeMode = company =>
       company?.selected_charge_modes,
   ).toUpperCase();
 
-const getPaymentLabelFromBillingMode = mode => {
-  const normalizedMode = getBillingChargeMode({billingChargeMode: mode});
-
-  if (!normalizedMode) {
-    return 'Not available';
-  }
-
-  const labels = [];
-  if (normalizedMode.includes('C')) {
-    labels.push('Credit');
-  }
-  if (normalizedMode.includes('P')) {
-    labels.push('Paying');
-  }
-  if (normalizedMode.includes('F')) {
-    labels.push('Free');
-  }
-
-  return labels.length ? labels.join(' & ') : normalizedMode;
-};
-
 const getTestBillingChargeMode = test =>
   getBillingChargeMode({
     billingChargeMode:
@@ -196,14 +151,6 @@ const getTestBillingChargeMode = test =>
       test?.selectedChargeModes ||
       test?.selected_charge_modes,
   });
-
-const getFirstBillingChargeMode = items =>
-  (Array.isArray(items) ? items : []).reduce((resolvedMode, item) => {
-    if (resolvedMode) {
-      return resolvedMode;
-    }
-    return getBillingChargeMode(item) || getTestBillingChargeMode(item);
-  }, '');
 
 const getPanelCompanyName = company =>
   toStableValue(company?.name || company?.panelCompany || company?.panel_company);
@@ -231,36 +178,6 @@ const doesTestMatchPanelCompany = (test, company) => {
   const companyPanelName = getPanelCompanyName(company).toLowerCase();
 
   return Boolean(testPanelName && companyPanelName && testPanelName === companyPanelName);
-};
-
-const getBillingModeFromTests = ({tests, panelCompanies, activePanelCompany}) => {
-  const sourceTests = Array.isArray(tests) ? tests : [];
-  const sourceCompanies = Array.isArray(panelCompanies) ? panelCompanies : [];
-  const modes = [];
-  const pushMode = mode => {
-    if (mode && !modes.includes(mode)) {
-      modes.push(mode);
-    }
-  };
-
-  sourceTests.forEach(test => {
-    const directMode = getTestBillingChargeMode(test);
-    const matchedCompany =
-      (activePanelCompany && doesTestMatchPanelCompany(test, activePanelCompany)
-        ? activePanelCompany
-        : null) ||
-      sourceCompanies.find(company => doesTestMatchPanelCompany(test, company)) ||
-      (sourceCompanies.length === 1 ? sourceCompanies[0] : null);
-    const resolvedMode = directMode || getBillingChargeMode(matchedCompany);
-
-    pushMode(resolvedMode);
-  });
-
-  sourceCompanies.forEach(company => {
-    pushMode(getBillingChargeMode(company));
-  });
-
-  return modes.join(',');
 };
 
 const formatTestBookingStatusLabel = value => {
@@ -434,6 +351,34 @@ const getDocumentDisplayLabel = (document, fallbackLabel) => {
   );
 };
 
+const getDocumentIdentity = document => {
+  const uri = toStableValue(
+    typeof document === 'string'
+      ? document
+      : document?.uri ||
+          document?.url ||
+          document?.path ||
+          document?.imageSource?.uri ||
+          document?.id,
+  ).toLowerCase();
+  return uri;
+};
+
+const dedupeDocumentsByIdentity = documents => {
+  const seenDocuments = new Set();
+
+  return (Array.isArray(documents) ? documents : []).filter((document, index) => {
+    const identity = getDocumentIdentity(document) || `index-${index}`;
+
+    if (seenDocuments.has(identity)) {
+      return false;
+    }
+
+    seenDocuments.add(identity);
+    return true;
+  });
+};
+
 const buildApiDocumentItems = (items, labelPrefix) =>
   (Array.isArray(items) ? items : [])
     .map((item, index) => {
@@ -445,6 +390,30 @@ const buildApiDocumentItems = (items, labelPrefix) =>
 
       return {
         id: `${labelPrefix}-${uri}-${index}`,
+        label:
+          labelPrefix === 'Prescription'
+            ? 'Prescription Attached'
+            : getDocumentDisplayLabel(item, `${labelPrefix} ${index + 1}`),
+        documentType: labelPrefix,
+        uri,
+      };
+    })
+    .filter(Boolean);
+
+const buildTypedPatientDocumentItems = (items, type, labelPrefix) =>
+  (Array.isArray(items) ? items : [])
+    .filter(
+      item => toStableValue(item?.type || item?.document_type).toLowerCase() === type,
+    )
+    .map((item, index) => {
+      const uri = resolvePatientDocumentUrl(item);
+
+      if (!uri) {
+        return null;
+      }
+
+      return {
+        id: `${type}-${uri}-${index}`,
         label: getDocumentDisplayLabel(item, `${labelPrefix} ${index + 1}`),
         documentType: labelPrefix,
         uri,
@@ -464,17 +433,13 @@ function PatientDetailCard({
   onRemoveSelectedTest,
   panelCompanies = [],
   activePanelCompanyId = '',
-  testBookingStatusValue = 'none',
   testBookingStatusFromCce = '',
-  onTestBookingStatusChange,
   cghsEnabled = false,
   cghsIdValue = '',
   cghsDocumentsBySection = {},
   onCghsEnabledChange,
   onCghsIdChange,
   onCghsDocumentsChange,
-  manualSlipDocuments: manualSlipDocumentsProp = [],
-  onManualSlipDocumentsChange,
   onSelectPanelCompany,
   onRemovePanelCompany,
   paymentProofDocuments: paymentProofDocumentsProp = [],
@@ -494,8 +459,6 @@ function PatientDetailCard({
     isNarrowCard ? 260 : 320,
     420,
   );
-  const [isTestBookingStatusExpanded, setIsTestBookingStatusExpanded] =
-    useState(false);
   const [activeDocumentIndex, setActiveDocumentIndex] = useState(-1);
   const [activeCghsDocument, setActiveCghsDocument] = useState(null);
   const [documentZoom, setDocumentZoom] = useState(DOCUMENT_ZOOM_MIN);
@@ -503,9 +466,6 @@ function PatientDetailCard({
   const [cghsCameraLoadingSection, setCghsCameraLoadingSection] = useState('');
   const [paymentProofDocuments, setPaymentProofDocuments] = useState(
     Array.isArray(paymentProofDocumentsProp) ? paymentProofDocumentsProp : [],
-  );
-  const [manualSlipDocuments, setManualSlipDocuments] = useState(
-    Array.isArray(manualSlipDocumentsProp) ? manualSlipDocumentsProp : [],
   );
   const showPatientAlert = useCallback(
     (titleOrMessage, messageOrButtons, buttonsOrOptions, options) => {
@@ -544,31 +504,6 @@ function PatientDetailCard({
 
     return activeCompany || panelCompanies[0];
   }, [activePanelCompanyId, panelCompanies]);
-  const paymentSourceTests = useMemo(
-    () =>
-      selectedTestsSourceReady && selectedTests.length
-        ? selectedTests
-        : patient?.tests || [],
-    [patient?.tests, selectedTests, selectedTestsSourceReady],
-  );
-  const paymentBillingMode = useMemo(
-    () =>
-      getBillingModeFromTests({
-        tests: paymentSourceTests,
-        panelCompanies,
-        activePanelCompany,
-      }) ||
-      (paymentSourceTests.length
-        ? getFirstBillingChargeMode(panelCompanies)
-        : ''),
-    [activePanelCompany, panelCompanies, paymentSourceTests],
-  );
-  const paymentDisplayLabel = useMemo(
-    () => getPaymentLabelFromBillingMode(paymentBillingMode),
-    [paymentBillingMode],
-  );
-  const shouldShowManualSlipUpload = testBookingStatusValue === MANUAL_HC_SLIP_STATUS;
-  const shouldShowPaymentProofUpload = false;
   const shouldHighlightPaymentProofRequired = requiresPaymentProof;
   const genderBadge = useMemo(
     () => getGenderBadgeConfig(patient.gender),
@@ -589,13 +524,6 @@ function PatientDetailCard({
         : '',
     [testBookingStatusFromCce],
   );
-  const selectedTestBookingStatus = useMemo(
-    () =>
-      TEST_BOOKING_STATUS_OPTIONS.find(
-        option => option.value === testBookingStatusValue,
-      ) || TEST_BOOKING_STATUS_OPTIONS[0],
-    [testBookingStatusValue],
-  );
   const patientMobileDialable = useMemo(
     () => getDialablePhoneNumber(patient.mobileNumber),
     [patient.mobileNumber],
@@ -604,6 +532,8 @@ function PatientDetailCard({
     () => getDialablePhoneNumber(patient.alternateMobileNumber),
     [patient.alternateMobileNumber],
   );
+  const patientBookingDueAmount = Number(patient.bookingDueAmount || 0);
+  const patientBookingExtraAmount = Number(patient.bookingExtraAmount || 0);
 
   const renderConditionalFieldLabel = useCallback(
     label =>
@@ -618,11 +548,6 @@ function PatientDetailCard({
       Array.isArray(paymentProofDocumentsProp) ? paymentProofDocumentsProp : [],
     );
   }, [paymentProofDocumentsProp]);
-  useEffect(() => {
-    setManualSlipDocuments(
-      Array.isArray(manualSlipDocumentsProp) ? manualSlipDocumentsProp : [],
-    );
-  }, [manualSlipDocumentsProp]);
   const displayTests = useMemo(() => {
     if (selectedTestsSourceReady) {
       return dedupeSelectedTests(selectedTests).map(test => ({
@@ -662,11 +587,26 @@ function PatientDetailCard({
   ]);
   const normalizedDocuments = useMemo(
     () =>
-      [
+      dedupeDocumentsByIdentity([
         ...(Array.isArray(patient.documents) ? patient.documents : []),
         ...buildApiDocumentItems(
           patient.patientDocumentUrls || patient.patient_document_urls,
           'Patient Document',
+        ),
+        ...buildTypedPatientDocumentItems(
+          patient.patientDocuments,
+          'patient_photo',
+          'Patient Photo',
+        ),
+        ...buildTypedPatientDocumentItems(
+          patient.patientDocuments,
+          'cghs_card',
+          'CGHS Card',
+        ),
+        ...buildTypedPatientDocumentItems(
+          patient.patientDocuments,
+          'manual_slip',
+          'Manual Slip',
         ),
         ...buildApiDocumentItems(
           patient.prescriptionUrls || patient.prescription_urls,
@@ -709,7 +649,7 @@ function PatientDetailCard({
               documentSourceIndex: index,
             }))
           : []),
-      ]
+      ])
         .map((document, index) => {
           const imageSource = getDocumentImageSource(document);
 
@@ -732,6 +672,7 @@ function PatientDetailCard({
       cghsDocumentsBySection.cghsCard,
       cghsDocumentsBySection.patientPhotos,
       patient.documents,
+      patient.patientDocuments,
       patient.patientDocumentUrls,
       patient.patient_document_urls,
       patient.prescriptionUrls,
@@ -739,6 +680,83 @@ function PatientDetailCard({
       paymentProofDocuments,
     ],
   );
+  const backendPatientPhotoDocuments = useMemo(
+    () => buildTypedPatientDocumentItems(patient.patientDocuments, 'patient_photo', 'Patient Photo'),
+    [patient.patientDocuments],
+  );
+  const backendCghsCardDocuments = useMemo(
+    () => buildTypedPatientDocumentItems(patient.patientDocuments, 'cghs_card', 'CGHS Card'),
+    [patient.patientDocuments],
+  );
+  const backendPrescriptionDocuments = useMemo(
+    () => buildApiDocumentItems(
+      patient.prescriptionUrls || patient.prescription_urls,
+      'Prescription',
+    ),
+    [patient.prescriptionUrls, patient.prescription_urls],
+  );
+  const displayPatientPhotoDocuments = useMemo(
+    () =>
+      dedupeDocumentsByIdentity([
+        ...backendPatientPhotoDocuments.map(document => ({
+          ...document,
+          name: document.label,
+          canRemove: false,
+        })),
+        ...(Array.isArray(cghsDocumentsBySection.patientPhotos)
+          ? cghsDocumentsBySection.patientPhotos.map((document, index) => ({
+              ...document,
+              name:
+                document?.label || document?.name || `Patient Photo ${index + 1}`,
+              canRemove: true,
+              sourceIndex: index,
+            }))
+          : []),
+      ]),
+    [backendPatientPhotoDocuments, cghsDocumentsBySection.patientPhotos],
+  );
+  const displayCghsCardDocuments = useMemo(
+    () =>
+      dedupeDocumentsByIdentity([
+        ...backendCghsCardDocuments.map(document => ({
+          ...document,
+          name: document.label,
+          canRemove: false,
+        })),
+        ...(Array.isArray(cghsDocumentsBySection.cghsCard)
+          ? cghsDocumentsBySection.cghsCard.map((document, index) => ({
+              ...document,
+              name: document?.label || document?.name || `CGHS Card ${index + 1}`,
+              canRemove: true,
+              sourceIndex: index,
+            }))
+          : []),
+      ]),
+    [backendCghsCardDocuments, cghsDocumentsBySection.cghsCard],
+  );
+  const displayPrescriptionDocuments = useMemo(
+    () =>
+      dedupeDocumentsByIdentity([
+        ...backendPrescriptionDocuments.map(document => ({
+          ...document,
+          name: document.label,
+          canRemove: false,
+        })),
+        ...(Array.isArray(paymentProofDocuments)
+          ? paymentProofDocuments.map((document, index) => ({
+              ...document,
+              name:
+                document?.label || document?.name || `Prescription ${index + 1}`,
+              canRemove: true,
+              sourceIndex: index,
+            }))
+          : []),
+      ]),
+    [backendPrescriptionDocuments, paymentProofDocuments],
+  );
+  const hasBackendCghsDocuments =
+    backendPatientPhotoDocuments.length > 0 || backendCghsCardDocuments.length > 0;
+  const shouldShowPaymentProofUpload = false;
   const activeDocument = useMemo(
     () =>
       activeDocumentIndex >= 0
@@ -926,20 +944,6 @@ function PatientDetailCard({
       });
     },
     [onPaymentProofDocumentsChange, patient],
-  );
-  const appendManualSlipDocuments = useCallback(
-    pickedDocuments => {
-      if (!pickedDocuments.length) {
-        return;
-      }
-
-      setManualSlipDocuments(previousDocuments => {
-        const nextDocuments = [...previousDocuments, ...pickedDocuments];
-        onManualSlipDocumentsChange?.(patient, nextDocuments);
-        return nextDocuments;
-      });
-    },
-    [onManualSlipDocumentsChange, patient],
   );
   const pickDocumentsFromDevice = useCallback(
     async ({fileNamePrefix, onDocumentsPicked, emptyMessage, failureMessage}) => {
@@ -1136,18 +1140,6 @@ function PatientDetailCard({
     [showPatientAlert],
   );
 
-  useEffect(() => {
-    if (!shouldShowManualSlipUpload && manualSlipDocuments.length) {
-      setManualSlipDocuments(EMPTY_MANUAL_SLIP_DOCUMENTS);
-      onManualSlipDocumentsChange?.(patient, EMPTY_MANUAL_SLIP_DOCUMENTS);
-    }
-  }, [
-    manualSlipDocuments.length,
-    onManualSlipDocumentsChange,
-    patient,
-    shouldShowManualSlipUpload,
-  ]);
-
   const handlePickPaymentProofDocuments = async () => {
     openUploadSourceOptions({
       title: 'Prescription',
@@ -1171,32 +1163,6 @@ function PatientDetailCard({
         (_, index) => index !== indexToRemove,
       );
       onPaymentProofDocumentsChange?.(patient, nextDocuments);
-      return nextDocuments;
-    });
-  };
-  const handlePickManualSlipDocuments = async () => {
-    openUploadSourceOptions({
-      title: 'Manual HC Slip',
-      onCameraPress: () =>
-        captureDocumentFromCamera({
-          documentLabel: 'Manual HC Slip',
-          fileNamePrefix: 'manual-hc-slip',
-          onDocumentsPicked: appendManualSlipDocuments,
-        }),
-      onGalleryPress: () =>
-        pickDocumentsFromDevice({
-          fileNamePrefix: 'manual-hc-slip',
-          onDocumentsPicked: appendManualSlipDocuments,
-          failureMessage: 'Unable to select documents right now. Please try again.',
-        }),
-    });
-  };
-  const handleRemoveManualSlipDocument = indexToRemove => {
-    setManualSlipDocuments(previousDocuments => {
-      const nextDocuments = previousDocuments.filter(
-        (_, index) => index !== indexToRemove,
-      );
-      onManualSlipDocumentsChange?.(patient, nextDocuments);
       return nextDocuments;
     });
   };
@@ -1514,6 +1480,46 @@ function PatientDetailCard({
           </Text>
         </View>
       </View>
+      {patientBookingDueAmount > 0 || patientBookingExtraAmount > 0 ? (
+        <View style={styles.patientDetailMetaStrip}>
+          {patientBookingDueAmount > 0 ? (
+            <View
+              style={[
+                styles.patientDetailMetaItem,
+                isNarrowCard && styles.patientDetailMetaItemStacked,
+              ]}>
+              <Text style={styles.patientDetailMetaLabel}>Due</Text>
+              <Text style={styles.patientDetailMetaValue}>
+                Rs. {patientBookingDueAmount.toFixed(2)}
+              </Text>
+            </View>
+          ) : null}
+          {patientBookingExtraAmount > 0 ? (
+            <View
+              style={[
+                styles.patientDetailMetaItem,
+                isNarrowCard && styles.patientDetailMetaItemStacked,
+              ]}>
+              <Text style={styles.patientDetailMetaLabel}>Extra</Text>
+              <Text style={styles.patientDetailMetaValue}>
+                Rs. {patientBookingExtraAmount.toFixed(2)}
+              </Text>
+            </View>
+          ) : null}
+          {patient.bookingPaymentMode ? (
+            <View
+              style={[
+                styles.patientDetailMetaItem,
+                isNarrowCard && styles.patientDetailMetaItemStacked,
+              ]}>
+              <Text style={styles.patientDetailMetaLabel}>Mode</Text>
+              <Text style={styles.patientDetailMetaValue}>
+                {patient.bookingPaymentMode}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
       {false ? (
         <View style={styles.patientCghsSection}>
           <TouchableOpacity
@@ -1542,23 +1548,29 @@ function PatientDetailCard({
             </View>
           </TouchableOpacity>
 
-          {cghsEnabled ? (
+          {cghsEnabled || hasBackendCghsDocuments ? (
             <View style={styles.patientCghsInputBlock}>
-              <Text style={styles.cghsFieldLabel}>CGHS ID / CAPF ID</Text>
-              <TextInput
-                value={cghsIdValue}
-                onChangeText={nextValue => onCghsIdChange?.(patient, nextValue)}
-                placeholder="Enter CGHS ID"
-                placeholderTextColor="#7A7F87"
-                autoCapitalize="characters"
-                style={styles.cghsTextInput}
-                editable={typeof onCghsIdChange === 'function'}
-              />
+              {cghsEnabled ? (
+                <>
+                  <Text style={styles.cghsFieldLabel}>CGHS ID / CAPF ID</Text>
+                  <TextInput
+                    value={cghsIdValue}
+                    onChangeText={nextValue => onCghsIdChange?.(patient, nextValue)}
+                    placeholder="Enter CGHS ID"
+                    placeholderTextColor="#7A7F87"
+                    autoCapitalize="characters"
+                    style={styles.cghsTextInput}
+                    editable={typeof onCghsIdChange === 'function'}
+                  />
+                </>
+              ) : null}
 
               <View style={styles.patientCghsDocumentSectionList}>
                 {CGHS_DOCUMENT_SECTIONS.map(section => {
                   const sectionDocuments =
-                    cghsDocumentsBySection[section.key] || [];
+                    section.key === 'patientPhotos'
+                      ? displayPatientPhotoDocuments
+                      : displayCghsCardDocuments;
 
                   return (
                     <View
@@ -1627,18 +1639,23 @@ function PatientDetailCard({
                                 numberOfLines={1}>
                                 {document.name}
                               </Text>
-                              <TouchableOpacity
-                                activeOpacity={0.85}
-                                style={styles.patientCghsDocumentRemoveButton}
-                                onPress={() =>
-                                  handleRemoveCghsDocument(section.key, index)
-                                }>
-                                <Ionicons
-                                  name="close"
-                                  size={12}
-                                  style={styles.patientCghsDocumentRemoveIcon}
-                                />
-                              </TouchableOpacity>
+                              {document.canRemove ? (
+                                <TouchableOpacity
+                                  activeOpacity={0.85}
+                                  style={styles.patientCghsDocumentRemoveButton}
+                                  onPress={() =>
+                                    handleRemoveCghsDocument(
+                                      section.key,
+                                      document.sourceIndex ?? index,
+                                    )
+                                  }>
+                                  <Ionicons
+                                    name="close"
+                                    size={12}
+                                    style={styles.patientCghsDocumentRemoveIcon}
+                                  />
+                                </TouchableOpacity>
+                              ) : null}
                             </TouchableOpacity>
                           ))}
                         </View>
@@ -1661,163 +1678,6 @@ function PatientDetailCard({
           </Text>
         </View>
       ) : null}
-      <View
-        style={[
-          styles.patientDetailInfoRow,
-          isNarrowCard && styles.patientDetailInfoRowStacked,
-        ]}>
-        <RequiredLabel styles={styles}>Test booking status</RequiredLabel>
-        <View
-          style={[
-            styles.patientTestBookingStatusControl,
-            isNarrowCard && styles.patientTestBookingStatusControlStacked,
-          ]}>
-          <TouchableOpacity
-            activeOpacity={0.85}
-            style={[
-              styles.patientTestBookingStatusOption,
-              styles.patientTestBookingStatusOptionActive,
-            ]}
-            disabled={typeof onTestBookingStatusChange !== 'function'}
-            onPress={() =>
-              setIsTestBookingStatusExpanded(previousValue => !previousValue)
-            }>
-            <Ionicons
-              name={selectedTestBookingStatus.icon}
-              size={16}
-              style={[
-                styles.patientTestBookingStatusIcon,
-                styles.patientTestBookingStatusIconActive,
-              ]}
-            />
-            <Text
-              style={[
-                styles.patientTestBookingStatusText,
-                styles.patientTestBookingStatusTextActive,
-              ]}>
-              {selectedTestBookingStatus.label}
-            </Text>
-            <Ionicons
-              name={
-                isTestBookingStatusExpanded ? 'chevron-up' : 'chevron-down'
-              }
-              size={16}
-              style={styles.patientTestBookingStatusChevron}
-            />
-          </TouchableOpacity>
-
-          {isTestBookingStatusExpanded ? (
-            <View style={styles.patientTestBookingStatusOptionList}>
-              {TEST_BOOKING_STATUS_OPTIONS.filter(
-                option => option.value !== selectedTestBookingStatus.value,
-              ).map(option => (
-                <TouchableOpacity
-                  key={option.value}
-                  activeOpacity={0.85}
-                  style={styles.patientTestBookingStatusOption}
-                  onPress={() => {
-                    onTestBookingStatusChange?.(patient, option.value);
-                    setIsTestBookingStatusExpanded(false);
-                  }}>
-                  <Ionicons
-                    name={option.icon}
-                    size={16}
-                    style={styles.patientTestBookingStatusIcon}
-                  />
-                  <Text style={styles.patientTestBookingStatusText}>
-                    {option.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          ) : null}
-        </View>
-      </View>
-      {shouldShowManualSlipUpload ? (
-        <View style={styles.patientPaymentProofSection}>
-          {renderConditionalFieldLabel('Upload manual slip')}
-          <TouchableOpacity
-            activeOpacity={0.85}
-            style={styles.completeUploadBox}
-            onPress={handlePickManualSlipDocuments}>
-            <View style={styles.completeUploadIconWrap}>
-              <Ionicons
-                name="cloud-upload-outline"
-                size={22}
-                style={styles.completeUploadIcon}
-              />
-            </View>
-            <View style={styles.completeUploadTextWrap}>
-              <Text style={styles.completeUploadTitle}>Upload manual HC slip</Text>
-              <Text style={styles.completeUploadHint}>
-                Required to complete this booking
-              </Text>
-            </View>
-            <Ionicons
-              name="chevron-forward"
-              size={18}
-              style={styles.completeUploadChevron}
-            />
-          </TouchableOpacity>
-
-          {manualSlipDocuments.length ? (
-            <View style={styles.completeProofList}>
-              {manualSlipDocuments.map((document, index) => (
-                <View
-                  key={`${document.uri}-${index}`}
-                  style={styles.completeProofItem}>
-                  <Ionicons
-                    name="document-attach-outline"
-                    size={16}
-                    style={styles.completeProofIcon}
-                  />
-                  <Text style={styles.completeProofName} numberOfLines={1}>
-                    {document.name}
-                  </Text>
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    style={styles.completeProofRemoveButton}
-                    onPress={() => handleRemoveManualSlipDocument(index)}>
-                    <Ionicons
-                      name="close"
-                      size={14}
-                      style={styles.completeProofRemoveIcon}
-                    />
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </View>
-          ) : null}
-        </View>
-      ) : null}
-      <View
-        style={[
-          styles.patientDetailInfoRow,
-          isNarrowCard && styles.patientDetailInfoRowStacked,
-        ]}>
-        <Text style={styles.patientDetailLabel}>Payment</Text>
-        <View
-          style={[
-            styles.patientPaymentReadOnlyWrap,
-            isNarrowCard && styles.patientPaymentReadOnlyWrapStacked,
-          ]}>
-          <View
-            style={[
-              styles.patientPaymentReadOnlyChip,
-              shouldHighlightPaymentProofRequired &&
-                styles.patientPaymentReadOnlyChipCredit,
-            ]}>
-            <Text
-              style={[
-                styles.patientPaymentReadOnlyText,
-                shouldHighlightPaymentProofRequired &&
-                  styles.patientPaymentReadOnlyTextCredit,
-              ]}>
-              {paymentDisplayLabel}
-            </Text>
-          </View>
-        </View>
-      </View>
       {shouldShowPaymentProofUpload ? (
         <View style={styles.patientPaymentProofSection}>
           {renderConditionalFieldLabel('Prescription')}
@@ -1845,11 +1705,11 @@ function PatientDetailCard({
             />
           </TouchableOpacity>
 
-          {paymentProofDocuments.length ? (
+          {displayPrescriptionDocuments.length ? (
             <View style={styles.completeProofList}>
-              {paymentProofDocuments.map((document, index) => (
+              {displayPrescriptionDocuments.map((document, index) => (
                 <View
-                  key={`${document.uri}-${index}`}
+                  key={`${document.uri || document.id}-${index}`}
                   style={styles.completeProofItem}>
                   <Ionicons
                     name="document-attach-outline"
@@ -1859,16 +1719,22 @@ function PatientDetailCard({
                   <Text style={styles.completeProofName} numberOfLines={1}>
                     {document.name}
                   </Text>
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    style={styles.completeProofRemoveButton}
-                    onPress={() => handleRemovePaymentProofDocument(index)}>
-                    <Ionicons
-                      name="close"
-                      size={14}
-                      style={styles.completeProofRemoveIcon}
-                    />
-                  </TouchableOpacity>
+                  {document.canRemove ? (
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      style={styles.completeProofRemoveButton}
+                      onPress={() =>
+                        handleRemovePaymentProofDocument(
+                          document.sourceIndex ?? index,
+                        )
+                      }>
+                      <Ionicons
+                        name="close"
+                        size={14}
+                        style={styles.completeProofRemoveIcon}
+                      />
+                    </TouchableOpacity>
+                  ) : null}
                 </View>
               ))}
             </View>

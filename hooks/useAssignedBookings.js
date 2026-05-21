@@ -211,12 +211,19 @@ const toHandoverTubeName = tube =>
     ? toDisplayValue(tube)
     : toDisplayValue(tube?.tubeName || tube?.name || tube?.specimenName);
 
-const buildPendingHandoverRowsFromBooking = bookingDetail => {
+const getHandoverUserKey = loggedInUser => toDisplayValue(loggedInUser);
+
+const buildPendingHandoverRowsFromBooking = (bookingDetail, loggedInUser) => {
   const bookingId = toDisplayValue(bookingDetail?.id);
   if (!bookingId) {
     return [];
   }
 
+  const userKey = getHandoverUserKey(loggedInUser);
+  const appointmentId = toDisplayValue(
+    bookingDetail?.appointmentId || bookingDetail?.appointment_id,
+  );
+  const rowScopeId = appointmentId || 'booking';
   const bookingCode = toDisplayValue(
     bookingDetail?.bookingCode ||
       bookingDetail?.booking_code ||
@@ -244,9 +251,12 @@ const buildPendingHandoverRowsFromBooking = bookingDetail => {
         .map(toHandoverTubeName)
         .filter(Boolean)
         .map(tubeName => ({
-          row_key: `${bookingId}|${bookingPatientId}|${tubeName.toLowerCase()}`,
+          row_key: `${userKey || 'user'}|${bookingId}|${rowScopeId}|${bookingPatientId}|${tubeName.toLowerCase()}`,
+          user_key: userKey,
+          user_name: userKey,
           booking_id: bookingId,
           booking_code: bookingCode,
+          appointment_id: appointmentId,
           patient_id: patientId,
           booking_patient_id: bookingPatientId,
           patient_name: patientName,
@@ -395,7 +405,10 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       }
 
       try {
-        const pendingHandoverRows = buildPendingHandoverRowsFromBooking(bookingDetail);
+        const pendingHandoverRows = buildPendingHandoverRowsFromBooking(
+          bookingDetail,
+          loggedInUser,
+        );
         if (pendingHandoverRows.length) {
           await upsertLocalPendingHandoverRowsResponse(pendingHandoverRows);
         }
@@ -419,12 +432,12 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       });
 
       try {
-        await persistBookingDetail(bookingDetail);
+        await persistBookingDetail(bookingDetail, bookingDetail);
       } catch (error) {
         warnDebug('Completed booking detail cache update error:', error);
       }
     },
-    [],
+    [loggedInUser],
   );
 
   const persistUpdatedBookingDetail = useCallback(
@@ -433,7 +446,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         return;
       }
 
-      await persistBookingDetail(updatedBookingDetail);
+      await persistBookingDetail(updatedBookingDetail, updatedBookingDetail);
       await updateCachedBookingPatients({
         bookingId,
         patientCount:
@@ -634,7 +647,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         }
 
         try {
-          const cachedDetail = await getCachedBookingDetail(bookingId);
+          const cachedDetail = await getCachedBookingDetail(booking);
 
           if (cachedDetail) {
             continue;
@@ -644,7 +657,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
             accessToken,
             booking,
           });
-          await persistBookingDetail(bookingDetail);
+          await persistBookingDetail(bookingDetail, booking);
         } catch (error) {
           warnDebug('Assigned booking detail background cache skipped:', error);
         }
@@ -791,7 +804,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
   }, [accessToken]);
 
   const openAssignedBooking = useCallback(
-    async booking => {
+    async (booking, {onFreshBookingDetail} = {}) => {
       const bookingId = booking?.id;
 
       if (!bookingId) {
@@ -803,8 +816,14 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       }
 
       const normalizedBookingId = String(bookingId);
+      const routingMeta = resolveBookingRoutingMeta(booking);
+      const bookingDetailRequestKey = [
+        normalizedBookingId,
+        routingMeta.sourceType,
+        routingMeta.appointmentId || 'booking',
+      ].join('|');
       const refreshBookingDetailInBackground = () => {
-        if (inFlightBookingDetailRequestsRef.current.has(normalizedBookingId)) {
+        if (inFlightBookingDetailRequestsRef.current.has(bookingDetailRequestKey)) {
           return;
         }
 
@@ -815,22 +834,25 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
               accessToken,
               booking,
             });
-            await persistBookingDetail(bookingDetail);
+            await persistBookingDetail(bookingDetail, booking);
+            if (typeof onFreshBookingDetail === 'function') {
+              onFreshBookingDetail(bookingDetail);
+            }
           } catch (error) {
             warnDebug('Assigned booking detail background refresh skipped:', error);
           } finally {
-            inFlightBookingDetailRequestsRef.current.delete(normalizedBookingId);
+            inFlightBookingDetailRequestsRef.current.delete(bookingDetailRequestKey);
           }
         })();
 
         inFlightBookingDetailRequestsRef.current.set(
-          normalizedBookingId,
+          bookingDetailRequestKey,
           refreshPromise,
         );
       };
 
       try {
-        const cachedBookingDetail = await getCachedBookingDetail(bookingId);
+        const cachedBookingDetail = await getCachedBookingDetail(booking);
 
         if (cachedBookingDetail) {
           refreshBookingDetailInBackground();
@@ -843,12 +865,12 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
           accessToken,
           booking,
         });
-        await persistBookingDetail(bookingDetail);
+        await persistBookingDetail(bookingDetail, booking);
         return bookingDetail;
       } catch (error) {
         warnDebug('Assigned booking detail error:', error);
 
-        const cachedBookingDetail = await getCachedBookingDetail(bookingId);
+        const cachedBookingDetail = await getCachedBookingDetail(booking);
 
         if (cachedBookingDetail) {
           showPlatformMessage(

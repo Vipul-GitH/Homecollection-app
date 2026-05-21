@@ -82,16 +82,43 @@ export const getCachedBookingDetailsMap = async () => {
   return parsedValue && typeof parsedValue === 'object' ? parsedValue : {};
 };
 
-export const getCachedBookingDetail = async bookingId => {
+const toStableValue = value =>
+  value === null || value === undefined ? '' : String(value).trim();
+
+const buildCachedBookingDetailKey = booking => {
+  const bookingId = toStableValue(
+    typeof booking === 'object' ? booking?.id || booking?.bookingId || booking?.booking_id : booking,
+  );
+  const appointmentId = toStableValue(
+    typeof booking === 'object' ? booking?.appointmentId || booking?.appointment_id : '',
+  );
+  const sourceTypeRaw = toStableValue(
+    typeof booking === 'object' ? booking?.sourceType || booking?.source_type : '',
+  ).toUpperCase();
+  const sourceType = sourceTypeRaw || (appointmentId ? 'APPOINTMENT' : 'BOOKING');
+
   if (!bookingId) {
+    return '';
+  }
+
+  return [bookingId, sourceType, appointmentId || 'booking'].join('|');
+};
+
+export const getCachedBookingDetail = async booking => {
+  const cacheKey = buildCachedBookingDetailKey(booking);
+  const bookingId = toStableValue(
+    typeof booking === 'object' ? booking?.id || booking?.bookingId || booking?.booking_id : booking,
+  );
+
+  if (!cacheKey && !bookingId) {
     return null;
   }
 
   const detailsMap = await getCachedBookingDetailsMap();
-  return detailsMap[String(bookingId)] || null;
+  return detailsMap[cacheKey] || detailsMap[bookingId] || null;
 };
 
-export const persistBookingDetail = async bookingDetail => {
+export const persistBookingDetail = async (bookingDetail, bookingMeta = null) => {
   const bookingId = bookingDetail?.id;
 
   if (!bookingId) {
@@ -99,14 +126,36 @@ export const persistBookingDetail = async bookingDetail => {
   }
 
   const detailsMap = await getCachedBookingDetailsMap();
+  const detailCacheKey = buildCachedBookingDetailKey(bookingDetail);
+  const metaCacheKey = buildCachedBookingDetailKey(bookingMeta);
   const normalizedBookingId = String(bookingId);
-  const previousBookingDetail = detailsMap[normalizedBookingId];
-
-  if (toJsonString(previousBookingDetail || null) === toJsonString(bookingDetail)) {
+  const cacheKey = detailCacheKey || metaCacheKey || normalizedBookingId;
+  const cacheKeysToUpdate = Array.from(
+    new Set(
+      [
+        cacheKey,
+        detailCacheKey,
+        metaCacheKey,
+        normalizedBookingId,
+        ...Object.keys(detailsMap).filter(
+          key =>
+            key === normalizedBookingId ||
+            key.startsWith(`${normalizedBookingId}|`),
+        ),
+      ].filter(Boolean),
+    ),
+  );
+  if (
+    cacheKeysToUpdate.every(
+      key => toJsonString(detailsMap[key] || null) === toJsonString(bookingDetail),
+    )
+  ) {
     return;
   }
 
-  detailsMap[normalizedBookingId] = bookingDetail;
+  cacheKeysToUpdate.forEach(key => {
+    detailsMap[key] = bookingDetail;
+  });
 
   await writeJsonIfChanged(
     CACHED_BOOKING_DETAILS_KEY,
@@ -138,19 +187,22 @@ export const updateCachedBookingStatus = async (
   await persistAssignedBookings(nextCachedBookings);
 
   const detailsMap = await getCachedBookingDetailsMap();
-  const cachedDetail = detailsMap[normalizedBookingId];
+  let hasUpdatedDetail = false;
 
-  if (cachedDetail) {
-    detailsMap[normalizedBookingId] = {
-      ...cachedDetail,
-      status,
-      ...(bookingStatusCode ? {bookingStatusCode} : {}),
-    };
+  Object.keys(detailsMap).forEach(key => {
+    const cachedDetail = detailsMap[key];
+    if (String(cachedDetail?.id) === normalizedBookingId) {
+      detailsMap[key] = {
+        ...cachedDetail,
+        status,
+        ...(bookingStatusCode ? {bookingStatusCode} : {}),
+      };
+      hasUpdatedDetail = true;
+    }
+  });
 
-    await writeJsonIfChanged(
-      CACHED_BOOKING_DETAILS_KEY,
-      detailsMap,
-    );
+  if (hasUpdatedDetail) {
+    await writeJsonIfChanged(CACHED_BOOKING_DETAILS_KEY, detailsMap);
   }
 };
 
@@ -178,19 +230,22 @@ export const updateCachedBookingPatients = async ({
   await persistAssignedBookings(nextCachedBookings);
 
   const detailsMap = await getCachedBookingDetailsMap();
-  const cachedDetail = detailsMap[normalizedBookingId];
+  let hasUpdatedDetail = false;
 
-  if (cachedDetail) {
-    detailsMap[normalizedBookingId] = {
-      ...cachedDetail,
-      ...(patientCount ? {patientCount} : {}),
-      ...(Array.isArray(patients) ? {patients} : {}),
-    };
+  Object.keys(detailsMap).forEach(key => {
+    const cachedDetail = detailsMap[key];
+    if (String(cachedDetail?.id) === normalizedBookingId) {
+      detailsMap[key] = {
+        ...cachedDetail,
+        ...(patientCount ? {patientCount} : {}),
+        ...(Array.isArray(patients) ? {patients} : {}),
+      };
+      hasUpdatedDetail = true;
+    }
+  });
 
-    await writeJsonIfChanged(
-      CACHED_BOOKING_DETAILS_KEY,
-      detailsMap,
-    );
+  if (hasUpdatedDetail) {
+    await writeJsonIfChanged(CACHED_BOOKING_DETAILS_KEY, detailsMap);
   }
 };
 

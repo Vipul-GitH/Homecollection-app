@@ -63,6 +63,9 @@ const getPatientDisplayNames = booking => {
   return derivedNames;
 };
 
+const hasAppointmentId = booking =>
+  Boolean(String(booking?.appointmentId || booking?.appointment_id || '').trim());
+
 const getQueueBadgeStyle = (styles, status) => {
   const tone = getStatusTone(status);
 
@@ -84,30 +87,6 @@ const getQueueBadgeTextStyle = (styles, status) => {
     tone === 'started' && styles.assignedQueueBadgeTextStarted,
     tone === 'completed' && styles.assignedQueueBadgeTextCompleted,
     tone === 'cancelled' && styles.assignedQueueBadgeTextCancelled,
-  ];
-};
-
-const getActiveStatusChipStyle = (styles, status) => {
-  const tone = getStatusTone(status);
-
-  return [
-    styles.assignedActiveStatusChip,
-    tone === 'assigned' && styles.assignedActiveStatusChipAssigned,
-    tone === 'started' && styles.assignedActiveStatusChipStarted,
-    tone === 'completed' && styles.assignedActiveStatusChipCompleted,
-    tone === 'cancelled' && styles.assignedActiveStatusChipCancelled,
-  ];
-};
-
-const getActiveStatusTextStyle = (styles, status) => {
-  const tone = getStatusTone(status);
-
-  return [
-    styles.assignedActiveStatusText,
-    tone === 'assigned' && styles.assignedActiveStatusTextAssigned,
-    tone === 'started' && styles.assignedActiveStatusTextStarted,
-    tone === 'completed' && styles.assignedActiveStatusTextCompleted,
-    tone === 'cancelled' && styles.assignedActiveStatusTextCancelled,
   ];
 };
 
@@ -239,7 +218,11 @@ function AssignedAppointmentsScreen({
           {activeBooking ? (
             <TouchableOpacity
               activeOpacity={0.9}
-              style={styles.assignedActiveCard}
+              style={[
+                styles.assignedActiveCard,
+                hasAppointmentId(activeBooking) &&
+                  styles.assignedActiveCardAppointment,
+              ]}
               onPress={() => onAssignedViewTests(activeBooking)}
               disabled={loadingAssignedBookingId === activeBooking.id}>
               <View style={styles.assignedActiveBadge}>
@@ -250,9 +233,15 @@ function AssignedAppointmentsScreen({
                 />
                 <Text style={styles.assignedActiveBadgeText}>ACTIVE NOW</Text>
               </View>
-              <Text style={styles.assignedActiveCode}>
-                {activeBooking.bookingCode}
-              </Text>
+              {hasAppointmentId(activeBooking) ? (
+                <View style={styles.assignedQueueCodeRow}>
+                  <View style={styles.assignedAppointmentBadge}>
+                    <Text style={styles.assignedAppointmentBadgeText}>
+                      Appointment
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
               <View style={styles.assignedActiveMetaStack}>
                 {getPatientDisplayNames(activeBooking) ? (
                   <QueueMetaRow
@@ -286,11 +275,6 @@ function AssignedAppointmentsScreen({
                   active
                 />
               </View>
-              <View style={getActiveStatusChipStyle(styles, activeBooking.status)}>
-                <Text style={getActiveStatusTextStyle(styles, activeBooking.status)}>
-                  {activeBooking.status}
-                </Text>
-              </View>
               <View style={styles.assignedActiveButtonRow}>
                 <View style={styles.assignedActiveButton}>
                   <Text style={styles.assignedActiveButtonText}>
@@ -317,13 +301,23 @@ function AssignedAppointmentsScreen({
               return (
                 <View
                   key={`assigned-${booking.id || 'na'}-${booking.bookingCode || 'na'}-${index}`}
-                  style={styles.assignedQueueCard}>
+                  style={[
+                    styles.assignedQueueCard,
+                    hasAppointmentId(booking) &&
+                      styles.assignedQueueCardAppointment,
+                  ]}>
                   <View style={styles.assignedQueueCardMain}>
                     <View style={styles.assignedQueueCardHeader}>
                       <View style={styles.assignedQueueCardText}>
-                        <Text style={styles.assignedQueueCode}>
-                          {booking.bookingCode}
-                        </Text>
+                        {hasAppointmentId(booking) ? (
+                          <View style={styles.assignedQueueCodeRow}>
+                            <View style={styles.assignedAppointmentBadge}>
+                              <Text style={styles.assignedAppointmentBadgeText}>
+                                Appointment
+                              </Text>
+                            </View>
+                          </View>
+                        ) : null}
                         {getPatientDisplayNames(booking) ? (
                           <QueueMetaRow
                             styles={styles}

@@ -88,6 +88,22 @@ function PaymentSummarySection({
               Rs. {completeCreditAmount.toFixed(2)}
             </Text>
           </View>
+          {Number(localBillingSummary.dueAmount || 0) > 0 ? (
+            <View style={styles.paymentSummaryRow}>
+              <Text style={styles.paymentSummaryRowLabel}>Previous Due</Text>
+              <Text style={styles.paymentSummaryRowValue}>
+                + Rs. {Number(localBillingSummary.dueAmount || 0).toFixed(2)}
+              </Text>
+            </View>
+          ) : null}
+          {Number(localBillingSummary.extraAmount || 0) > 0 ? (
+            <View style={styles.paymentSummaryRow}>
+              <Text style={styles.paymentSummaryRowLabel}>Previous Extra</Text>
+              <Text style={styles.paymentSummaryRowValue}>
+                - Rs. {Number(localBillingSummary.extraAmount || 0).toFixed(2)}
+              </Text>
+            </View>
+          ) : null}
           <View style={styles.paymentSummaryTotalRow}>
             <Text style={styles.paymentSummaryTotalLabel}>Final Amount</Text>
             <Text style={styles.paymentSummaryTotalValue}>
@@ -109,16 +125,36 @@ function PaymentSummarySection({
             </View>
             <View style={styles.paymentSummaryRows}>
               {localBillingSummary.patientBillingRows.map(patientRow => (
-                <View
-                  key={`patient-total-${patientRow.patientId}`}
-                  style={styles.paymentSummaryRow}>
-                  <Text style={styles.paymentSummaryRowLabel}>
-                    {patientRow.patientName}
-                  </Text>
-                  <Text style={styles.paymentSummaryRowValue}>
-                    Rs. {Number(patientRow.finalAmount || 0).toFixed(2)}
-                  </Text>
-                </View>
+                <React.Fragment key={`patient-total-${patientRow.patientId}`}>
+                  <View style={styles.paymentSummaryRow}>
+                    <Text style={styles.paymentSummaryRowLabel}>
+                      {patientRow.patientName}
+                    </Text>
+                    <Text style={styles.paymentSummaryRowValue}>
+                      Rs. {Number(patientRow.finalAmount || 0).toFixed(2)}
+                    </Text>
+                  </View>
+                {Number(patientRow.dueAmount || 0) > 0 ? (
+                  <View style={styles.paymentSummaryRow}>
+                    <Text style={styles.paymentSummaryRowLabel}>
+                      {patientRow.patientName} Due
+                    </Text>
+                    <Text style={styles.paymentSummaryRowValue}>
+                      + Rs. {Number(patientRow.dueAmount || 0).toFixed(2)}
+                    </Text>
+                  </View>
+                ) : null}
+                {Number(patientRow.extraAmount || 0) > 0 ? (
+                  <View style={styles.paymentSummaryRow}>
+                    <Text style={styles.paymentSummaryRowLabel}>
+                      {patientRow.patientName} Extra
+                    </Text>
+                    <Text style={styles.paymentSummaryRowValue}>
+                      - Rs. {Number(patientRow.extraAmount || 0).toFixed(2)}
+                    </Text>
+                  </View>
+                ) : null}
+              </React.Fragment>
               ))}
             </View>
           </View>

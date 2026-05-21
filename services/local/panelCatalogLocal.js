@@ -24,8 +24,8 @@ export const getLocalPanelCompaniesResponse = async () =>
 export const getLocalPatientTagsResponse = async () =>
   getDatabasePatientTagsResponse();
 
-export const getLocalPendingHandoverRowsResponse = async () =>
-  getDatabasePendingHandoverRowsResponse();
+export const getLocalPendingHandoverRowsResponse = async userKey =>
+  getDatabasePendingHandoverRowsResponse(userKey);
 
 export const upsertLocalPendingHandoverRowsResponse = async rows =>
   upsertDatabasePendingHandoverRowsResponse(rows);

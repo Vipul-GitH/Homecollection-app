@@ -379,6 +379,7 @@ function HomeScreen({
               onPanelCompanySelect={onPanelCompanySelect}
               onToggleSelectedTest={onTogglePatientTestSelection}
               onRemoveSelectedTest={onRemovePatientSelectedTest}
+              onDone={() => onBookingScreenChange?.('details')}
               onSampleCollectionReset={() => {
                 if (!selectedPatientId) {
                   return;
@@ -511,6 +512,7 @@ function HomeScreen({
         <HandoverScreen
           styles={styles}
           accessToken={accessToken}
+          loggedInUser={loggedInUser}
           completedAppointments={completedAppointments}
           isLoadingCompletedAppointments={isLoadingCompletedAppointments}
           completedAppointmentsError={completedAppointmentsError}

@@ -54,6 +54,7 @@ function SelectedPatientAppointmentSection({
   onOpenSampleCollection,
   handleRemoveSelectedTestWithSampleReset,
   handlePatientAddPanelCompany,
+  useBackendTestPrices = false,
 }) {
   const {patient = null, index = 0} = selectedPatientItem || EMPTY_OBJECT;
   const patientStatusCode = Number(patient?.bookingPatientStatusCode || 0);
@@ -93,7 +94,7 @@ function SelectedPatientAppointmentSection({
     : defaultTestBookingStatus;
   const isManualHcSlipPatient = isManualHcSlipSelected(testBookingStatus);
   const shouldShowSampleCollectionForPatient =
-    shouldShowSampleCollectionSection && !isManualHcSlipPatient;
+    shouldShowSampleCollectionSection;
   const displayTests = useMemo(
     () =>
       buildPatientDisplayTests({
@@ -101,8 +102,15 @@ function SelectedPatientAppointmentSection({
         selectedTests,
         selectedTestsSourceReady: Boolean(hasSelectedTestsOverride),
         panelCompanies: companyChips,
+        useBackendPrice: useBackendTestPrices,
       }),
-    [companyChips, hasSelectedTestsOverride, patient, selectedTests],
+    [
+      companyChips,
+      hasSelectedTestsOverride,
+      patient,
+      selectedTests,
+      useBackendTestPrices,
+    ],
   );
   const testsSubtotal = useMemo(
     () => displayTests.reduce((total, test) => total + Number(test?.charge || 0), 0),
@@ -168,11 +176,7 @@ function SelectedPatientAppointmentSection({
         onEditPatient={
           canUseThisPatientActions ? handleEditPatientPress : undefined
         }
-        testBookingStatusValue={testBookingStatus}
         testBookingStatusFromCce={getPatientCceTestBookingStatus(patient)}
-        onTestBookingStatusChange={
-          canUseThisPatientActions ? handleTestBookingStatusChange : undefined
-        }
         cghsEnabled={Boolean(patientId && patientCghsEnabledMap[patientId])}
         cghsIdValue={patientId ? patientCghsIdMap[patientId] || '' : ''}
         cghsDocumentsBySection={
@@ -186,16 +190,6 @@ function SelectedPatientAppointmentSection({
         }
         onCghsDocumentsChange={
           canUseThisPatientActions ? handlePatientCghsDocumentsChange : undefined
-        }
-        manualSlipDocuments={
-          patientId
-            ? patientManualSlipDocumentsMap[patientId] || emptyUploadDocuments
-            : emptyUploadDocuments
-        }
-        onManualSlipDocumentsChange={
-          canUseThisPatientActions
-            ? handlePatientManualSlipDocumentsChange
-            : undefined
         }
         paymentProofDocuments={
           patientId
@@ -258,6 +252,21 @@ function SelectedPatientAppointmentSection({
             : 'Add Panel'
         }
         isAddPanelCompanyDisabled={Boolean(addingTestPatientId)}
+        testBookingStatusValue={testBookingStatus}
+        onTestBookingStatusChange={
+          canUseThisPatientActions ? handleTestBookingStatusChange : undefined
+        }
+        manualSlipDocuments={
+          patientId
+            ? patientManualSlipDocumentsMap[patientId] || emptyUploadDocuments
+            : emptyUploadDocuments
+        }
+        onManualSlipDocumentsChange={
+          canUseThisPatientActions
+            ? handlePatientManualSlipDocumentsChange
+            : undefined
+        }
+        showAlert={showAppAlert}
       />
       {onOpenSampleCollection && shouldShowSampleCollectionForPatient ? (
         <PatientSampleCollectionSection

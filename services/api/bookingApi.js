@@ -42,7 +42,13 @@ const parseJsonResponse = async response => {
   }
 };
 
-const logAppointmentDetailDebug = () => {};
+const logAppointmentDetailDebug = (label, payload) => {
+  if (label !== '[Appointment Details API Response]') {
+    return;
+  }
+
+  console.log(label, payload);
+};
 
 const isPatientBookingMappingError = message =>
   /patient\s+.+\s+is\s+not\s+mapped\s+to\s+booking\s+/i.test(
@@ -352,7 +358,7 @@ const postCompleteBookingStatus = async ({
     url: apiUrl,
     transport: hasUploadableAttachments ? 'multipart-fetch' : 'json-secure',
     hasUploadableAttachments,
-    payload,
+    fullPayload: payload,
     patientDocumentPatientIds: Object.keys(patientDocumentsMap || {}),
     manualSlipPatientIds: Object.keys(manualSlipDocumentsMap || {}),
     patientDocumentCounts: buildUploadCountMap(patientDocumentsMap),
@@ -384,6 +390,7 @@ const postCompleteBookingStatus = async ({
     });
 
     const responseData = await parseJsonResponse(response, '[Booking Status]');
+    logAppointmentDetailDebug('[Complete Booking API Response]', responseData);
     return {response, responseData};
   }
 
@@ -418,6 +425,7 @@ const postCompleteBookingStatus = async ({
   });
 
   const responseData = await parseJsonResponse(response, '[Booking Status]');
+  logAppointmentDetailDebug('[Complete Booking API Response]', responseData);
 
   return {response, responseData};
 };
@@ -619,11 +627,11 @@ export const updateAssignedBookingStatusApi = async ({
   };
 
   if (payload.action === 'completed') {
-    logAppointmentDetailDebug('[Complete Booking Flow Started]', {
+    logAppointmentDetailDebug('[Complete Booking API Full Status Payload]', {
       bookingId,
       appointmentId: normalizedAppointmentId,
       sourceType: normalizedSourceType,
-      payload,
+      statusPayload,
     });
     const numericAppointmentId = Number(normalizedAppointmentId);
     payload.appointment_id =
@@ -884,6 +892,8 @@ const normalizeHandoverHistoryItems = responseData => {
           item?.patientCount ||
           item?.batch?.patient_count ||
           item?.batch?.patientCount ||
+          (Array.isArray(item?.patients) ? item.patients.length : 0) ||
+          (Array.isArray(item?.batch?.patients) ? item.batch.patients.length : 0) ||
           0,
       ) || 0,
     tubeCount:
@@ -918,6 +928,12 @@ export const fetchAssignedBookingHandoverHistoryApi = async ({
   });
 
   const responseData = await parseJsonResponse(response, '[Handover Batch History]');
+  logAppointmentDetailDebug('[Handover Done API URL]', url);
+  logAppointmentDetailDebug('[Handover Done API HTTP Status]', {
+    status: response.status,
+    ok: response.ok,
+  });
+  logAppointmentDetailDebug('[Handover Done API Response]', responseData);
   const errorMessage = getApiErrorMessage(
     response,
     responseData,

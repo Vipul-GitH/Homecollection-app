@@ -35,6 +35,11 @@ const firstNonEmptyValue = (...values) => {
   return '';
 };
 
+const firstPresentValue = (...values) =>
+  values.find(
+    value => value !== null && value !== undefined && String(value).trim() !== '',
+  );
+
 const toCoordinateString = value => {
   if (value === null || value === undefined || value === '') {
     return '';
@@ -140,6 +145,16 @@ const getAddressValue = (booking, ...paths) => {
   return '';
 };
 
+const formatAddressFloor = value => {
+  const floor = toDisplayString(value);
+
+  if (!floor || floor === 'N/A') {
+    return floor;
+  }
+
+  return /^\d+$/.test(floor) ? `Floor-${floor}` : floor;
+};
+
 const buildAddressParts = booking => {
   const addressParts = [
     getAddressValue(booking, 'address.address_type', 'address.addressType'),
@@ -152,7 +167,7 @@ const buildAddressParts = booking => {
       'address.flatNo',
       'house_number',
     ),
-    getAddressValue(booking, 'address.floor', 'floor'),
+    formatAddressFloor(getAddressValue(booking, 'address.floor', 'floor')),
     getAddressValue(
       booking,
       'address.street_line',
@@ -339,7 +354,9 @@ const normalizePatientTests = source => {
           test?.test_code || test?.testCode || test?.TestCode,
         ),
         mrp: toNumberValue(test?.mrp || test?.MRP || test?.amount),
-        charge: toNumberValue(test?.charge || test?.Charge || test?.mrp || test?.MRP),
+        charge: toNumberValue(
+          firstPresentValue(test?.charge, test?.Charge, test?.mrp, test?.MRP),
+        ),
         percentageonstandard: toNumberValue(
           test?.percentageonstandard ||
             test?.percentageOnStandard ||
@@ -635,6 +652,20 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
   const patientCount = Number(
     booking?.patient_count || booking?.patientCount || fallbackBooking?.patientCount || 0,
   );
+  const appointmentId =
+    toDisplayString(booking?.appointment_id || booking?.appointmentId) ||
+    toDisplayString(
+      fallbackBooking?.appointmentId || fallbackBooking?.appointment_id,
+    ) ||
+    '';
+  const sourceType = toDisplayString(
+    booking?.source_type ||
+      booking?.sourceType ||
+      fallbackBooking?.sourceType ||
+      fallbackBooking?.source_type,
+  );
+  const shouldUseAppointmentPatientStatus =
+    sourceType.toUpperCase() === 'APPOINTMENT' && Boolean(appointmentId);
   const patients = (patientsSource.length ? patientsSource : fallbackPatients).map(
     (patient, index) => {
       const selectedCompCatIds = toDisplayString(
@@ -777,9 +808,18 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
             patient?.test_booking_status_label ||
             patient?.testBookingStatusLabel,
         ),
+        appointmentPatientStatusCode: toBookingStatusCode(
+          patient?.appointment_patient_status ??
+            patient?.appointmentPatientStatus,
+        ),
         bookingPatientStatusCode: toBookingStatusCode(
-          patient?.booking_patient_status ??
-            patient?.bookingPatientStatus ??
+          (shouldUseAppointmentPatientStatus
+            ? patient?.appointment_patient_status ??
+              patient?.appointmentPatientStatus ??
+              patient?.booking_patient_status ??
+              patient?.bookingPatientStatus
+            : patient?.booking_patient_status ??
+              patient?.bookingPatientStatus) ??
             patient?.status_code ??
             patient?.statusCode,
         ),
@@ -792,6 +832,25 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
             patient?.ad_dis,
             patient?.Ad_Dis,
           ),
+        ),
+        bookingDueAmount: toNumberValue(
+          firstNonEmptyValue(
+            patient?.booking_due_amount,
+            patient?.bookingDueAmount,
+            patient?.due_amount,
+            patient?.dueAmount,
+          ),
+        ),
+        bookingExtraAmount: toNumberValue(
+          firstNonEmptyValue(
+            patient?.booking_extra_amount,
+            patient?.bookingExtraAmount,
+            patient?.extra_amount,
+            patient?.extraAmount,
+          ),
+        ),
+        bookingPaymentMode: toDisplayString(
+          patient?.booking_payment_mode || patient?.bookingPaymentMode,
         ),
         tests: normalizePatientTests(
           patient?.tests || patient?.test_list || booking?.tests,
@@ -830,13 +889,6 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
           booking?.tests ||
           fallbackBooking?.testsSummary,
       );
-  const sourceType = toDisplayString(
-    booking?.source_type ||
-      booking?.sourceType ||
-      fallbackBooking?.sourceType ||
-      fallbackBooking?.source_type,
-  );
-
   return {
     id:
       toDisplayString(
@@ -851,12 +903,7 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
       ) ||
       fallbackBooking?.bookingCode ||
       'Assigned Booking',
-    appointmentId:
-      toDisplayString(booking?.appointment_id || booking?.appointmentId) ||
-      toDisplayString(
-        fallbackBooking?.appointmentId || fallbackBooking?.appointment_id,
-      ) ||
-      '',
+    appointmentId,
     sourceType: sourceType || 'BOOKING',
     visitDate:
       toDisplayString(

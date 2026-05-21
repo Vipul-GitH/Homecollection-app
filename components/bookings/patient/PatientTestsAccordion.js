@@ -1,6 +1,8 @@
-import React from 'react';
-import {Text, TouchableOpacity, View} from 'react-native';
+import React, {useEffect, useMemo, useState} from 'react';
+import {Modal, NativeModules, Text, TouchableOpacity, View} from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+
+const {LocalDocumentPickerModule} = NativeModules;
 
 const toStableValue = value =>
   value === null || value === undefined ? '' : String(value).trim();
@@ -111,6 +113,119 @@ const getTestPrice = test =>
 
     return charge || baseMrp;
   })();
+
+const TEST_BOOKING_STATUS_OPTIONS = [
+  {
+    value: 'none',
+    label: 'None',
+    icon: 'remove-circle-outline',
+  },
+  {
+    value: 'confirmed_booked',
+    label: 'Test confirmed & booked',
+    icon: 'checkmark-circle-outline',
+  },
+  {
+    value: 'manual_hc_slip',
+    label: 'Manual HC Slip',
+    icon: 'document-text-outline',
+  },
+  {
+    value: 'incomplete_reg_exec',
+    label: 'Incomplete Test Booking, registration Executive to complete',
+    icon: 'alert-circle-outline',
+  },
+];
+const MANUAL_HC_SLIP_STATUS = 'manual_hc_slip';
+
+const getMimeTypeFromFileName = fileName => {
+  const normalizedFileName = String(fileName || '').toLowerCase();
+
+  if (normalizedFileName.endsWith('.pdf')) {
+    return 'application/pdf';
+  }
+
+  if (normalizedFileName.endsWith('.jpg') || normalizedFileName.endsWith('.jpeg')) {
+    return 'image/jpeg';
+  }
+
+  if (normalizedFileName.endsWith('.png')) {
+    return 'image/png';
+  }
+
+  return 'application/octet-stream';
+};
+
+const normalizePickedDocuments = pickedFiles =>
+  (Array.isArray(pickedFiles) ? pickedFiles : [])
+    .filter(file => Boolean(file?.uri))
+    .map((file, index) => ({
+      uri: file.uri,
+      name:
+        String(file?.name || '').trim() || `manual-hc-slip-${Date.now()}-${index + 1}`,
+      type: file.type || getMimeTypeFromFileName(file?.name),
+    }));
+
+const resolveDocumentUrl = value => {
+  const rawValue = toStableValue(
+    typeof value === 'string'
+      ? value
+      : value?.url || value?.uri || value?.path || value?.file,
+  );
+
+  if (!rawValue) {
+    return '';
+  }
+
+  if (/^https?:\/\//i.test(rawValue)) {
+    return rawValue;
+  }
+
+  return `https://labmate.bhasinpathlabs.com:2010/${rawValue.replace(/^\/+/, '')}`;
+};
+
+const getDisplayNameFromUri = value => {
+  const rawValue = toStableValue(value);
+
+  if (!rawValue) {
+    return '';
+  }
+
+  const withoutQuery = rawValue.split('?')[0].split('#')[0];
+  const decodedValue = (() => {
+    try {
+      return decodeURIComponent(withoutQuery);
+    } catch {
+      return withoutQuery;
+    }
+  })();
+
+  return decodedValue.split(/[\\/]/).filter(Boolean).pop() || rawValue;
+};
+
+const buildBackendManualSlipDocuments = patient =>
+  (Array.isArray(patient?.patientDocuments) ? patient.patientDocuments : [])
+    .filter(
+      document =>
+        toStableValue(document?.type || document?.document_type).toLowerCase() ===
+        'manual_slip',
+    )
+    .map((document, index) => {
+      const uri = resolveDocumentUrl(document);
+      if (!uri) {
+        return null;
+      }
+
+      return {
+        uri,
+        name:
+          toStableValue(document?.name || document?.label) ||
+          getDisplayNameFromUri(document?.file || document?.url || document?.path) ||
+          `Manual Slip ${index + 1}`,
+        canRemove: false,
+      };
+    })
+    .filter(Boolean);
 
 const buildFallbackCompanyFromTests = ({patient, tests}) => {
   const firstTestWithPanel = (Array.isArray(tests) ? tests : []).find(
@@ -246,8 +361,97 @@ function PatientTestsAccordion({
   onAddPanelCompany,
   addPanelCompanyLabel = 'Add Panel',
   isAddPanelCompanyDisabled = false,
+  testBookingStatusValue = 'none',
+  onTestBookingStatusChange,
+  manualSlipDocuments = [],
+  onManualSlipDocumentsChange,
+  showAlert,
 }) {
+  const [isTestBookingStatusExpanded, setIsTestBookingStatusExpanded] =
+    useState(false);
   const panelGroups = buildPanelGroups({patient, tests, panelCompanies});
+  const selectedTestBookingStatus = useMemo(
+    () =>
+      TEST_BOOKING_STATUS_OPTIONS.find(
+        option => option.value === testBookingStatusValue,
+      ) || TEST_BOOKING_STATUS_OPTIONS[0],
+    [testBookingStatusValue],
+  );
+  const shouldShowManualSlipUpload =
+    testBookingStatusValue === MANUAL_HC_SLIP_STATUS;
+  const displayManualSlipDocuments = useMemo(
+    () => [
+      ...buildBackendManualSlipDocuments(patient),
+      ...(Array.isArray(manualSlipDocuments)
+        ? manualSlipDocuments.map((document, index) => ({
+            ...document,
+            canRemove: true,
+            sourceIndex: index,
+          }))
+        : []),
+    ],
+    [manualSlipDocuments, patient],
+  );
+
+  useEffect(() => {
+    if (
+      !shouldShowManualSlipUpload &&
+      Array.isArray(manualSlipDocuments) &&
+      manualSlipDocuments.length
+    ) {
+      onManualSlipDocumentsChange?.(patient, []);
+    }
+  }, [
+    manualSlipDocuments,
+    onManualSlipDocumentsChange,
+    patient,
+    shouldShowManualSlipUpload,
+  ]);
+
+  const handlePickManualSlipDocuments = async () => {
+    if (!LocalDocumentPickerModule?.pickDocuments) {
+      showAlert?.(
+        'Upload Not Available',
+        'Document picker module is not available in this build.',
+      );
+      return;
+    }
+
+    try {
+      const pickedFiles = await LocalDocumentPickerModule.pickDocuments();
+      const pickedDocuments = normalizePickedDocuments(pickedFiles);
+
+      if (!pickedDocuments.length) {
+        return;
+      }
+
+      onManualSlipDocumentsChange?.(patient, [
+        ...(Array.isArray(manualSlipDocuments) ? manualSlipDocuments : []),
+        ...pickedDocuments,
+      ]);
+    } catch (error) {
+      if (
+        error?.code === 'DOCUMENT_PICKER_CANCELLED' ||
+        String(error?.message || '').toLowerCase().includes('cancel')
+      ) {
+        return;
+      }
+
+      showAlert?.(
+        'Upload Failed',
+        'Unable to select documents right now. Please try again.',
+      );
+    }
+  };
+
+  const handleRemoveManualSlipDocument = indexToRemove => {
+    onManualSlipDocumentsChange?.(
+      patient,
+      (Array.isArray(manualSlipDocuments) ? manualSlipDocuments : []).filter(
+        (_, index) => index !== indexToRemove,
+      ),
+    );
+  };
 
   return (
     <View style={styles.patientTestsSection}>
@@ -288,6 +492,44 @@ function PatientTestsAccordion({
         </View>
       </View>
 
+      <View style={styles.patientTestsHeaderActions}>
+        <View style={styles.patientTestBookingStatusControl}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={[
+                styles.patientTestBookingStatusOption,
+                styles.patientTestBookingStatusOptionActive,
+              ]}
+              disabled={typeof onTestBookingStatusChange !== 'function'}
+              onPress={() =>
+                setIsTestBookingStatusExpanded(previousValue => !previousValue)
+              }>
+              <Ionicons
+                name={selectedTestBookingStatus.icon}
+                size={16}
+                style={[
+                  styles.patientTestBookingStatusIcon,
+                  styles.patientTestBookingStatusIconActive,
+                ]}
+              />
+              <Text
+                style={[
+                  styles.patientTestBookingStatusText,
+                  styles.patientTestBookingStatusTextActive,
+                ]}>
+                {selectedTestBookingStatus.label}
+              </Text>
+              <Ionicons
+                name={
+                  isTestBookingStatusExpanded ? 'chevron-up' : 'chevron-down'
+                }
+                size={16}
+                style={styles.patientTestBookingStatusChevron}
+              />
+            </TouchableOpacity>
+        </View>
+      </View>
+
       {panelGroups.length ? (
         <View style={styles.patientTestsPanelList}>
           {panelGroups.map(group => {
@@ -310,27 +552,27 @@ function PatientTestsAccordion({
                       numberOfLines={2}>
                       {group.name}
                     </Text>
-                  </View>
-                </View>
-
-                  <View style={styles.patientTestsPanelActions}>
                     {chargeModeLabel ? (
                       <View
                         style={[
-                          styles.patientTestsPanelModeChip,
+                          styles.patientTestsPanelHeaderModeChip,
                           chargeModeLabel === 'Credit' &&
-                            styles.patientTestsPanelModeChipCredit,
+                            styles.patientTestsPanelHeaderModeChipCredit,
                         ]}>
                         <Text
                           style={[
-                            styles.patientTestsPanelModeText,
+                            styles.patientTestsPanelHeaderModeText,
                             chargeModeLabel === 'Credit' &&
-                              styles.patientTestsPanelModeTextCredit,
+                              styles.patientTestsPanelHeaderModeTextCredit,
                           ]}>
                           {chargeModeLabel}
                         </Text>
                       </View>
                     ) : null}
+                  </View>
+                </View>
+
+                  <View style={styles.patientTestsPanelActions}>
                     <View style={styles.patientTestsPanelAmountChip}>
                       <Text style={styles.patientTestsPanelAmountText}>
                         Rs. {groupSubtotal.toFixed(2)}
@@ -434,6 +676,126 @@ function PatientTestsAccordion({
       ) : (
         <Text style={styles.patientTestsEmptyText}>No tests available</Text>
       )}
+
+      {shouldShowManualSlipUpload ? (
+        <View style={styles.patientPaymentProofSection}>
+          <Text style={styles.patientDetailLabel}>Upload manual slip</Text>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.completeUploadBox}
+            onPress={handlePickManualSlipDocuments}>
+            <View style={styles.completeUploadIconWrap}>
+              <Ionicons
+                name="cloud-upload-outline"
+                size={22}
+                style={styles.completeUploadIcon}
+              />
+            </View>
+            <View style={styles.completeUploadTextWrap}>
+              <Text style={styles.completeUploadTitle}>Upload manual slip</Text>
+              <Text style={styles.completeUploadHint}>
+                Pick image or PDF from device
+              </Text>
+            </View>
+          </TouchableOpacity>
+          {displayManualSlipDocuments.length ? (
+            <View style={styles.patientTestsManualSlipList}>
+              {displayManualSlipDocuments.map((document, index) => (
+                <View
+                  key={`${document?.uri || document?.name || 'manual-slip'}-${index}`}
+                  style={styles.patientTestsManualSlipItem}>
+                  <Text
+                    numberOfLines={1}
+                    style={styles.patientTestsManualSlipName}>
+                    {document?.name || `Manual Slip ${index + 1}`}
+                  </Text>
+                  {document?.canRemove ? (
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      style={styles.sampleCollectionRemoveButton}
+                      onPress={() =>
+                        handleRemoveManualSlipDocument(
+                          document.sourceIndex ?? index,
+                        )
+                      }>
+                      <Ionicons
+                        name="close"
+                        size={15}
+                        style={styles.sampleCollectionRemoveButtonIcon}
+                      />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ))}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      <Modal
+        visible={isTestBookingStatusExpanded}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsTestBookingStatusExpanded(false)}>
+        <View style={styles.patientTestBookingStatusModalOverlay}>
+          <TouchableOpacity
+            activeOpacity={1}
+            style={styles.patientTestBookingStatusModalBackdrop}
+            onPress={() => setIsTestBookingStatusExpanded(false)}
+          />
+          <View style={styles.patientTestBookingStatusModalCard}>
+            <Text style={styles.patientTestBookingStatusModalTitle}>
+              Test booking status
+            </Text>
+            <View style={styles.patientTestBookingStatusOptionList}>
+              {TEST_BOOKING_STATUS_OPTIONS.map(option => {
+                const isSelected =
+                  option.value === selectedTestBookingStatus.value;
+
+                return (
+                  <TouchableOpacity
+                    key={option.value}
+                    activeOpacity={0.85}
+                    style={[
+                      styles.patientTestBookingStatusOption,
+                      isSelected && styles.patientTestBookingStatusOptionActive,
+                    ]}
+                    onPress={() => {
+                      if (!isSelected) {
+                        onTestBookingStatusChange?.(patient, option.value);
+                      }
+                      setIsTestBookingStatusExpanded(false);
+                    }}>
+                    <Ionicons
+                      name={option.icon}
+                      size={16}
+                      style={[
+                        styles.patientTestBookingStatusIcon,
+                        isSelected && styles.patientTestBookingStatusIconActive,
+                      ]}
+                    />
+                    <Text
+                      style={[
+                        styles.patientTestBookingStatusText,
+                        isSelected &&
+                          styles.patientTestBookingStatusTextActive,
+                      ]}>
+                      {option.label}
+                    </Text>
+                    {isSelected ? (
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={18}
+                        style={styles.patientTestBookingStatusChevron}
+                      />
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

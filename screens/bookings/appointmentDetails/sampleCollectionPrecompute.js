@@ -70,6 +70,7 @@ export const groupSpecimenTestsByParent = tests => {
 export const buildPrecomputedSampleCollectionData = (
   normalizedSelectedTests,
   sampleTubeMaps,
+  options = {},
 ) => {
   const tests = Array.isArray(normalizedSelectedTests)
     ? normalizedSelectedTests
@@ -78,7 +79,12 @@ export const buildPrecomputedSampleCollectionData = (
   const childrenMap = sampleTubeMaps?.childrenMap || {};
 
   const expandedTests = tests.flatMap(test =>
-    collectTubeNodesForSelectedTest(test, testsMap, childrenMap).map(node => ({
+    collectTubeNodesForSelectedTest(test, testsMap, childrenMap, {
+      disableChildExpansion:
+        typeof options.disableChildExpansion === 'function'
+          ? options.disableChildExpansion(test)
+          : Boolean(options.disableChildExpansion),
+    }).map(node => ({
       ...node,
       removalKey: test?.key,
       panelCompanyName: test?.panelCompanyName,

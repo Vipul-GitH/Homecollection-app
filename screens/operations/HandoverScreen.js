@@ -40,10 +40,11 @@ const getHistoryTubeNames = patient =>
     )
     .filter(Boolean);
 
-const getTubeSelectionKey = ({rowKey, bookingId, patientId, tubeName}) =>
+const getTubeSelectionKey = ({rowKey, bookingId, appointmentId, patientId, tubeName}) =>
   toStableValue(rowKey) ||
   [
     toStableValue(bookingId),
+    toStableValue(appointmentId) || 'booking',
     toStableValue(patientId),
     toStableValue(tubeName).toLowerCase(),
   ].join('|');
@@ -62,6 +63,7 @@ const toPayloadId = value => {
 const buildTubeSelection = ({
   bookingId,
   bookingCode,
+  appointmentId,
   patientId,
   bookingPatientId,
   patientName,
@@ -71,9 +73,12 @@ const buildTubeSelection = ({
   rowKey: toStableValue(rowKey),
   bookingId: toStableValue(bookingId),
   bookingCode: toStableValue(bookingCode),
+  appointmentId: toStableValue(appointmentId),
   patientId: toStableValue(patientId),
   bookingPatientId: toStableValue(bookingPatientId),
-  patientKey: `${toStableValue(bookingId)}|${toStableValue(bookingPatientId || patientId)}`,
+  patientKey: `${toStableValue(bookingId)}|${
+    toStableValue(appointmentId) || 'booking'
+  }|${toStableValue(bookingPatientId || patientId)}`,
   patientName: toStableValue(patientName),
   tubeName: toStableValue(tubeName),
 });
@@ -88,14 +93,16 @@ const buildHandoverBatchPayload = ({
   const selectedEntries = Object.values(selectedTubeKeys).filter(Boolean);
 
   selectedEntries.forEach(selection => {
-    const bookingKey = toStableValue(selection?.bookingId);
+    const bookingId = toStableValue(selection?.bookingId);
+    const appointmentId = toStableValue(selection?.appointmentId);
+    const bookingKey = `${bookingId}|${appointmentId || 'booking'}`;
     const patientKey =
       toStableValue(selection?.bookingPatientId) ||
       toStableValue(selection?.patientId) ||
       toStableValue(selection?.patientKey);
     const tubeName = toStableValue(selection?.tubeName);
 
-    if (!bookingKey || !patientKey || !tubeName) {
+    if (!bookingId || !patientKey || !tubeName) {
       return;
     }
 
@@ -103,6 +110,7 @@ const buildHandoverBatchPayload = ({
       bookingMap.set(bookingKey, {
         booking_id: toPayloadId(selection?.bookingId),
         booking_code: toStableValue(selection?.bookingCode),
+        ...(appointmentId ? {appointment_id: toPayloadId(appointmentId)} : {}),
         patientsMap: new Map(),
       });
     }
@@ -125,6 +133,7 @@ const buildHandoverBatchPayload = ({
 
   const bookings = Array.from(bookingMap.values()).map(booking => ({
     booking_id: booking.booking_id,
+    ...(booking.appointment_id ? {appointment_id: booking.appointment_id} : {}),
     booking_code: booking.booking_code,
     patients: Array.from(booking.patientsMap.values()),
   }));
@@ -160,8 +169,10 @@ const formatHandoverDate = value => {
   }
 
   return date.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
     day: '2-digit',
     month: 'short',
+    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   });
@@ -172,6 +183,7 @@ const groupPendingHandoverRows = rows => {
 
   (Array.isArray(rows) ? rows : []).forEach(row => {
     const bookingId = toStableValue(row?.booking_id || row?.bookingId);
+    const appointmentId = toStableValue(row?.appointment_id || row?.appointmentId);
     const bookingCode = toStableValue(
       row?.booking_code || row?.bookingCode || bookingId,
     );
@@ -188,10 +200,17 @@ const groupPendingHandoverRows = rows => {
       return;
     }
 
-    if (!bookingMap.has(bookingId)) {
-      bookingMap.set(bookingId, {
-        id: bookingId,
+    const bookingKey = `${bookingId}|${appointmentId || 'booking'}`;
+
+    if (!bookingMap.has(bookingKey)) {
+      bookingMap.set(bookingKey, {
+        id: bookingKey,
+        bookingId,
+        appointmentId,
         bookingCode,
+        displayCode: appointmentId
+          ? `${bookingCode || bookingId} / Appointment ${appointmentId}`
+          : bookingCode,
         status: 'Completed',
         bookingStatusCode: 3,
         completedAt,
@@ -199,7 +218,7 @@ const groupPendingHandoverRows = rows => {
       });
     }
 
-    const booking = bookingMap.get(bookingId);
+    const booking = bookingMap.get(bookingKey);
 
     if (!booking.patientsMap.has(bookingPatientId)) {
       booking.patientsMap.set(bookingPatientId, {
@@ -215,6 +234,7 @@ const groupPendingHandoverRows = rows => {
     booking.patientsMap.get(bookingPatientId).tubes.push({
       tubeName,
       rowKey,
+      appointmentId,
     });
   });
 
@@ -230,7 +250,11 @@ const groupPendingHandoverRows = rows => {
     );
 };
 
-export default function HandoverScreen({styles, accessToken = ''}) {
+export default function HandoverScreen({
+  styles,
+  accessToken = '',
+  loggedInUser = '',
+}) {
   const [activeHandoverTab, setActiveHandoverTab] = useState('pending');
   const [expandedBookings, setExpandedBookings] = useState({});
   const [expandedHistoryBatches, setExpandedHistoryBatches] = useState({});
@@ -249,18 +273,28 @@ export default function HandoverScreen({styles, accessToken = ''}) {
     useState(false);
   const [handoverHistoryError, setHandoverHistoryError] = useState('');
   const initializedSelectionSignatureRef = useRef('');
+  const handoverUserKey = useMemo(
+    () => toStableValue(loggedInUser),
+    [loggedInUser],
+  );
 
   const loadPendingHandoverRows = useCallback(async () => {
+    if (!handoverUserKey) {
+      setPendingHandoverRows([]);
+      setIsLoadingPendingHandoverRows(false);
+      return;
+    }
+
     try {
       setIsLoadingPendingHandoverRows(true);
-      const response = await getLocalPendingHandoverRowsResponse();
+      const response = await getLocalPendingHandoverRowsResponse(handoverUserKey);
       setPendingHandoverRows(Array.isArray(response?.items) ? response.items : []);
     } catch (error) {
       setPendingHandoverRows([]);
     } finally {
       setIsLoadingPendingHandoverRows(false);
     }
-  }, []);
+  }, [handoverUserKey]);
 
   const loadHandoverHistory = useCallback(async () => {
     if (!toStableValue(accessToken)) {
@@ -404,12 +438,15 @@ export default function HandoverScreen({styles, accessToken = ''}) {
         .map(booking =>
           [
             toStableValue(booking?.id),
+            toStableValue(booking?.bookingId),
+            toStableValue(booking?.appointmentId),
             ...(Array.isArray(booking?.patients) ? booking.patients : []).flatMap(
               patient =>
                 (Array.isArray(patient?.tubes) ? patient.tubes : []).map(tube =>
                   getTubeSelectionKey({
                     rowKey: tube?.rowKey,
-                    bookingId: booking?.id,
+                    bookingId: booking?.bookingId || booking?.id,
+                    appointmentId: booking?.appointmentId,
                     patientId: patient?.handoverPatientKey,
                     tubeName: tube?.tubeName,
                   }),
@@ -439,14 +476,16 @@ export default function HandoverScreen({styles, accessToken = ''}) {
         (Array.isArray(patient?.tubes) ? patient.tubes : []).forEach(tube => {
           const selectionKey = getTubeSelectionKey({
             rowKey: tube?.rowKey,
-            bookingId: booking?.id,
+            bookingId: booking?.bookingId || booking?.id,
+            appointmentId: booking?.appointmentId,
             patientId: patient?.handoverPatientKey,
             tubeName: tube?.tubeName,
           });
 
           nextSelectedTubeKeys[selectionKey] = buildTubeSelection({
-            bookingId: booking?.id,
+            bookingId: booking?.bookingId || booking?.id,
             bookingCode: booking?.bookingCode,
+            appointmentId: booking?.appointmentId,
             patientId: patient?.patientId,
             bookingPatientId: patient?.bookingPatientId,
             patientName: patient?.name,
@@ -483,6 +522,7 @@ export default function HandoverScreen({styles, accessToken = ''}) {
   const toggleTubeSelection = ({
     bookingId,
     bookingCode,
+    appointmentId,
     patientId,
     bookingPatientId,
     patientName,
@@ -492,6 +532,7 @@ export default function HandoverScreen({styles, accessToken = ''}) {
     const selectionKey = getTubeSelectionKey({
       rowKey,
       bookingId,
+      appointmentId,
       patientId: bookingPatientId || patientId,
       tubeName,
     });
@@ -508,6 +549,7 @@ export default function HandoverScreen({styles, accessToken = ''}) {
         [selectionKey]: buildTubeSelection({
           bookingId,
           bookingCode,
+          appointmentId,
           patientId,
           bookingPatientId,
           patientName,
@@ -798,10 +840,10 @@ export default function HandoverScreen({styles, accessToken = ''}) {
                 onPress={() => toggleExpanded(booking.id)}>
                 <View style={styles.handoverBookingHeaderText}>
                   <Text style={styles.handoverBookingCode}>
-                    {booking?.bookingCode || booking?.id || 'Booking'}
+                    {booking?.displayCode || booking?.bookingCode || booking?.bookingId || 'Booking'}
                   </Text>
                   <Text style={styles.handoverBookingMeta}>
-                    {toStableValue(booking?.completedAt) || 'Completed'} | {patients.length}{' '}
+                    {formatHandoverDate(booking?.completedAt)} | {patients.length}{' '}
                     patient{patients.length === 1 ? '' : 's'}
                   </Text>
                 </View>
@@ -843,7 +885,8 @@ export default function HandoverScreen({styles, accessToken = ''}) {
                               const tubeName = toStableValue(tube?.tubeName);
                               const selectionKey = getTubeSelectionKey({
                                 rowKey: tube?.rowKey,
-                                bookingId: booking?.id,
+                                bookingId: booking?.bookingId || booking?.id,
+                                appointmentId: booking?.appointmentId,
                                 patientId: patientKey,
                                 tubeName,
                               });
@@ -859,8 +902,9 @@ export default function HandoverScreen({styles, accessToken = ''}) {
                                   ]}
                                   onPress={() =>
                                     toggleTubeSelection({
-                                      bookingId: booking?.id,
+                                      bookingId: booking?.bookingId || booking?.id,
                                       bookingCode: booking?.bookingCode,
+                                      appointmentId: booking?.appointmentId,
                                       patientId: patient?.patientId,
                                       bookingPatientId: patient?.bookingPatientId,
                                       patientName:
@@ -971,6 +1015,9 @@ export default function HandoverScreen({styles, accessToken = ''}) {
         ) : null}
         {handoverHistory.map((item, index) => {
           const historyId = toStableValue(item?.id || index);
+          const batchId = toStableValue(
+            item?.id || item?.batch_id || item?.batchId,
+          );
           const isExpanded = Boolean(expandedHistoryBatches[historyId]);
           const handoverToLabel =
             toStableValue(item?.handoverTo).toLowerCase() === 'rider'
@@ -1068,6 +1115,16 @@ export default function HandoverScreen({styles, accessToken = ''}) {
                   patients: Array.from(booking.patientsMap.values()),
                 }));
               })();
+          const derivedPatientCount = groupedBookings.reduce(
+            (total, booking) =>
+              total + (Array.isArray(booking?.patients) ? booking.patients.length : 0),
+            0,
+          );
+          const derivedBookingCount =
+            item?.bookingCount ||
+            (Array.isArray(item?.bookingIds) ? item.bookingIds.length : 0) ||
+            groupedBookings.length ||
+            0;
 
           return (
             <View
@@ -1083,6 +1140,7 @@ export default function HandoverScreen({styles, accessToken = ''}) {
                     {item?.riderName ? ` - ${item.riderName}` : ''}
                   </Text>
                   <Text style={styles.handoverBookingMeta}>
+                    {batchId ? `batch-${batchId} | ` : ''}
                     {formatHandoverDate(item?.handedOverAt)}
                   </Text>
                 </View>
@@ -1101,12 +1159,12 @@ export default function HandoverScreen({styles, accessToken = ''}) {
               <View style={styles.handoverHistoryStatsRow}>
                 <View style={styles.handoverHistoryStatPill}>
                   <Text style={styles.handoverHistoryStatText}>
-                    {item?.bookingCount || groupedBookings.length || 0} bookings
+                    {derivedBookingCount} bookings
                   </Text>
                 </View>
                 <View style={styles.handoverHistoryStatPill}>
                   <Text style={styles.handoverHistoryStatText}>
-                    {item?.patientCount || 0} patients
+                    {item?.patientCount || derivedPatientCount || 0} patients
                   </Text>
                 </View>
               </View>

@@ -13,8 +13,8 @@ function PatientDocumentsList({
   const safeDocuments = Array.isArray(documents) ? documents : [];
   const canOpenDocuments = safeDocuments.length > 0;
   const canUploadDocuments = typeof onUploadDocument === 'function';
-  const removableDocuments = safeDocuments.filter(document =>
-    Boolean(document?.canRemove),
+  const visibleDocuments = safeDocuments.filter(document =>
+    Boolean(document?.label),
   );
 
   if (!canOpenDocuments && !canUploadDocuments) {
@@ -40,7 +40,7 @@ function PatientDocumentsList({
             onPress={() => onOpenDocument(0)}>
             <Ionicons
               name="document-attach-outline"
-              size={18}
+              size={22}
               style={styles.patientDocumentIcon}
             />
             <Text style={styles.patientDocumentCount}>
@@ -61,23 +61,25 @@ function PatientDocumentsList({
             <Text style={styles.patientDocumentUploadText}>Upload</Text>
           </TouchableOpacity>
         ) : null}
-        {removableDocuments.length ? (
+        {visibleDocuments.length ? (
           <View style={styles.patientDocumentRemoveList}>
-            {removableDocuments.map(document => (
+            {visibleDocuments.map(document => (
               <View key={document.id} style={styles.patientDocumentRemoveChip}>
                 <Text style={styles.patientDocumentRemoveText} numberOfLines={1}>
                   {document.label}
                 </Text>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={styles.patientDocumentRemoveButton}
-                  onPress={() => onRemoveDocument?.(document)}>
-                  <Ionicons
-                    name="close"
-                    size={12}
-                    style={styles.patientDocumentRemoveIcon}
-                  />
-                </TouchableOpacity>
+                {document?.canRemove ? (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.patientDocumentRemoveButton}
+                    onPress={() => onRemoveDocument?.(document)}>
+                    <Ionicons
+                      name="close"
+                      size={12}
+                      style={styles.patientDocumentRemoveIcon}
+                    />
+                  </TouchableOpacity>
+                ) : null}
               </View>
             ))}
           </View>

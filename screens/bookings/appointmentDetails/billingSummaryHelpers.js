@@ -8,11 +8,73 @@ const toCurrencyNumber = value => {
 export const buildLocalBillingSummary = (
   completeBillingTests,
   patientAdditionalDiscountMap,
+  patients = [],
 ) => {
   const safeBillingTests = Array.isArray(completeBillingTests)
     ? completeBillingTests
     : [];
   const safePatientAdditionalDiscountMap = patientAdditionalDiscountMap || {};
+  const patientSeedAdditionalDiscountMap = (Array.isArray(patients)
+    ? patients
+    : []
+  ).reduce((accumulator, patient) => {
+    const patientId = normalizeFormText(
+      patient?.bookingPatientId ||
+        patient?.booking_patient_id ||
+        patient?.patientId ||
+        patient?.patient_id ||
+        patient?.id,
+    );
+    const additionalDiscount = toCurrencyNumber(
+      patient?.additionalDiscountAmount ||
+        patient?.additional_discount_amount ||
+        patient?.ad_dis ||
+        patient?.Ad_Dis,
+    );
+
+    if (patientId && additionalDiscount > 0) {
+      accumulator[patientId] = additionalDiscount;
+    }
+
+    return accumulator;
+  }, {});
+  const patientPaymentAdjustmentMap = (Array.isArray(patients) ? patients : []).reduce(
+    (accumulator, patient) => {
+      const patientId = normalizeFormText(
+        patient?.bookingPatientId ||
+          patient?.booking_patient_id ||
+          patient?.patientId ||
+          patient?.patient_id ||
+          patient?.id,
+      );
+
+      if (!patientId) {
+        return accumulator;
+      }
+
+      accumulator[patientId] = {
+        dueAmount: toCurrencyNumber(
+          patient?.bookingDueAmount ||
+            patient?.booking_due_amount ||
+            patient?.dueAmount ||
+            patient?.due_amount,
+        ),
+        extraAmount: toCurrencyNumber(
+          patient?.bookingExtraAmount ||
+            patient?.booking_extra_amount ||
+            patient?.extraAmount ||
+            patient?.extra_amount,
+        ),
+        paymentMode: normalizeFormText(
+          patient?.bookingPaymentMode || patient?.booking_payment_mode,
+        ),
+        patientName: normalizeFormText(patient?.name || patient?.full_name),
+      };
+
+      return accumulator;
+    },
+    {},
+  );
   let subtotal = 0;
   let payingSubtotal = 0;
   let creditSubtotal = 0;
@@ -96,32 +158,56 @@ export const buildLocalBillingSummary = (
       const enteredValue = toCurrencyNumber(
         safePatientAdditionalDiscountMap[entry.patientId],
       );
+      const seededAdditionalDiscount = toCurrencyNumber(
+        patientSeedAdditionalDiscountMap[entry.patientId],
+      );
+      const requestedAdditional = Math.max(
+        enteredValue,
+        seededAdditionalDiscount,
+      );
       const maxAdditionalAllowed = Math.max(
         0,
         entry.maxTotalDiscount - entry.baseDiscount,
       );
-      const effectiveAdditional = Math.min(enteredValue, maxAdditionalAllowed);
+      const effectiveAdditional = Math.min(
+        requestedAdditional,
+        maxAdditionalAllowed,
+      );
+      const paymentAdjustment = patientPaymentAdjustmentMap[entry.patientId] || {};
+      const dueAmount = toCurrencyNumber(paymentAdjustment.dueAmount);
+      const extraAmount = toCurrencyNumber(paymentAdjustment.extraAmount);
+      const finalPayingAmount = Math.max(
+        0,
+        entry.payingSubtotal - entry.baseDiscount - effectiveAdditional,
+      );
+      const nonPayingTotal = entry.creditTotal + entry.freeTotal;
+      const finalAmountBeforeAdjustment = Math.max(
+        0,
+        entry.subtotal -
+          entry.baseDiscount -
+          effectiveAdditional -
+          nonPayingTotal,
+      );
 
       return {
         ...entry,
         enteredAdditional: normalizeFormText(
           safePatientAdditionalDiscountMap[entry.patientId],
         ),
-        requestedAdditional: enteredValue,
+        requestedAdditional,
+        seededAdditionalDiscount,
         maxAdditionalAllowed,
         effectiveAdditional,
-        hasOverflow: enteredValue > maxAdditionalAllowed,
-        finalPayingAmount: Math.max(
-          0,
-          entry.payingSubtotal - entry.baseDiscount - effectiveAdditional,
-        ),
-        nonPayingTotal: entry.creditTotal + entry.freeTotal,
+        hasOverflow: requestedAdditional > maxAdditionalAllowed,
+        dueAmount,
+        extraAmount,
+        paymentMode: paymentAdjustment.paymentMode || '',
+        finalPayingAmount: Math.max(0, finalPayingAmount + dueAmount - extraAmount),
+        nonPayingTotal,
+        finalAmountBeforeAdjustment,
         finalAmount: Math.max(
           0,
-          entry.subtotal -
-            entry.baseDiscount -
-            effectiveAdditional -
-            (entry.creditTotal + entry.freeTotal),
+          finalAmountBeforeAdjustment + dueAmount - extraAmount,
         ),
       };
     });
@@ -148,7 +234,22 @@ export const buildLocalBillingSummary = (
   );
   const finalDiscount = baseDiscount + effectiveAdditional;
   const nonPayingTotal = creditTotal + freeTotal;
-  const finalAmount = Math.max(0, subtotal - finalDiscount - nonPayingTotal);
+  const dueAmount = patientBillingRows.reduce(
+    (total, patient) => total + toCurrencyNumber(patient.dueAmount),
+    0,
+  );
+  const extraAmount = patientBillingRows.reduce(
+    (total, patient) => total + toCurrencyNumber(patient.extraAmount),
+    0,
+  );
+  const finalAmountBeforeAdjustment = Math.max(
+    0,
+    subtotal - finalDiscount - nonPayingTotal,
+  );
+  const finalAmount = Math.max(
+    0,
+    finalAmountBeforeAdjustment + dueAmount - extraAmount,
+  );
 
   return {
     subtotal,
@@ -158,6 +259,8 @@ export const buildLocalBillingSummary = (
     creditTotal,
     freeTotal,
     nonPayingTotal,
+    dueAmount,
+    extraAmount,
     baseDiscount,
     payingBaseDiscount,
     maxTotalDiscount,
@@ -165,6 +268,7 @@ export const buildLocalBillingSummary = (
     requestedAdditional,
     effectiveAdditional,
     finalDiscount,
+    finalAmountBeforeAdjustment,
     finalAmount,
     patientBillingRows,
     patientAdditionalDiscountRows,
@@ -235,12 +339,16 @@ export const getCompleteBillingAmounts = ({
   hasPatientAdditionalDiscountEntry,
 }) => {
   const completeBillingTotal = localBillingSummary.subtotal;
-  const completeAdditionalDiscountAmount =
+  const rawAdditionalDiscountAmount =
     hasBackendPatientLevelAdditionalDiscount
       ? localBillingSummary.effectiveAdditional
       : preloadedAdditionalDiscount > 0 && !hasPatientAdditionalDiscountEntry
       ? preloadedAdditionalDiscount
       : localBillingSummary.effectiveAdditional;
+  const completeAdditionalDiscountAmount = Math.min(
+    rawAdditionalDiscountAmount,
+    localBillingSummary.maxAdditionalAllowed,
+  );
   const completeBaseDiscountAmount = localBillingSummary.baseDiscount;
   const completeDiscountAmount =
     completeBaseDiscountAmount + completeAdditionalDiscountAmount;
@@ -249,7 +357,9 @@ export const getCompleteBillingAmounts = ({
     0,
     completeBillingTotal -
       completeDiscountAmount -
-      localBillingSummary.nonPayingTotal,
+      localBillingSummary.nonPayingTotal +
+      toCurrencyNumber(localBillingSummary.dueAmount) -
+      toCurrencyNumber(localBillingSummary.extraAmount),
   );
 
   return {

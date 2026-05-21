@@ -69,10 +69,17 @@ function BookingControlActions({
           {shouldShowStartOnly ? (
             <TouchableOpacity
               activeOpacity={0.85}
-              style={styles.bookingDetailSecondaryButton}
+              style={[
+                styles.bookingDetailSecondaryButton,
+                styles.bookingDetailSecondaryButtonStart,
+              ]}
               onPress={() => onBookingAction('start')}
               disabled={Boolean(bookingActionLoading)}>
-              <Text style={styles.bookingDetailSecondaryButtonText}>
+              <Text
+                style={[
+                  styles.bookingDetailSecondaryButtonText,
+                  styles.bookingDetailSecondaryButtonStartText,
+                ]}>
                 {bookingActionLoading === 'start' ? 'STARTING...' : 'START'}
               </Text>
             </TouchableOpacity>
@@ -80,10 +87,17 @@ function BookingControlActions({
           {shouldShowProgressActions ? (
             <TouchableOpacity
               activeOpacity={0.85}
-              style={styles.bookingDetailSecondaryButton}
+              style={[
+                styles.bookingDetailSecondaryButton,
+                styles.bookingDetailSecondaryButtonStop,
+              ]}
               onPress={() => onBookingAction('stop')}
               disabled={Boolean(bookingActionLoading)}>
-              <Text style={styles.bookingDetailSecondaryButtonText}>
+              <Text
+                style={[
+                  styles.bookingDetailSecondaryButtonText,
+                  styles.bookingDetailSecondaryButtonStopText,
+                ]}>
                 {bookingActionLoading === 'stop' ? 'STOPPING...' : 'STOP'}
               </Text>
             </TouchableOpacity>

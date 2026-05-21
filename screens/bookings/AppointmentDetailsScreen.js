@@ -211,6 +211,10 @@ const toCurrencyNumber = value => {
   const normalizedValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
   return Number.isFinite(normalizedValue) ? normalizedValue : 0;
 };
+const hasCurrencyValue = value =>
+  value !== null && value !== undefined && String(value).trim() !== '';
+const getRawCurrencyValue = (...values) =>
+  values.find(value => hasCurrencyValue(value));
 const getTestStandardDiscountPercent = test =>
   toCurrencyNumber(
     test?.percentageonstandard ||
@@ -234,6 +238,78 @@ const getDiscountedTestPrice = test => {
     return Math.max(0, baseMrp - (baseMrp * standardDiscount) / 100);
   }
   return charge || baseMrp;
+};
+
+const getBackendPriceTestCode = test =>
+  normalizeFormText(
+    test?.booked_code || test?.code || test?.testcode1 || test?.test_code,
+  ).toUpperCase();
+
+const getBackendPriceTestForCode = (patient, test) => {
+  const testCode = getBackendPriceTestCode(test);
+
+  if (!testCode) {
+    return null;
+  }
+
+  return (Array.isArray(patient?.tests) ? patient.tests : []).find(
+    patientTest => getBackendPriceTestCode(patientTest) === testCode,
+  );
+};
+
+const getAppointmentBackendPricedTest = (patient, test, useBackendPrice) => {
+  if (!useBackendPrice) {
+    return test;
+  }
+
+  const backendTest = getBackendPriceTestForCode(patient, test);
+
+  if (!backendTest) {
+    return test;
+  }
+
+  return {
+    ...test,
+    mrp: getRawCurrencyValue(backendTest?.mrp, backendTest?.MRP, test?.mrp),
+    charge: getRawCurrencyValue(
+      backendTest?.charge,
+      backendTest?.Charge,
+      test?.charge,
+    ),
+    amount: getRawCurrencyValue(backendTest?.amount, test?.amount),
+    max_discount: getRawCurrencyValue(
+      backendTest?.max_discount,
+      backendTest?.maxDiscount,
+      test?.max_discount,
+      test?.maxDiscount,
+    ),
+    maxDiscount: getRawCurrencyValue(
+      backendTest?.maxDiscount,
+      backendTest?.max_discount,
+      test?.maxDiscount,
+      test?.max_discount,
+    ),
+    panelCompanyName:
+      backendTest?.panelCompanyName ||
+      backendTest?.panel_company ||
+      test?.panelCompanyName,
+    panelCompanyId:
+      backendTest?.compCatId ||
+      backendTest?.comp_cat_id ||
+      test?.panelCompanyId,
+  };
+};
+
+const getActualTestPrice = (test, useBackendPrice = false) => {
+  if (useBackendPrice && hasCurrencyValue(test?.charge)) {
+    return toCurrencyNumber(test.charge);
+  }
+
+  if (useBackendPrice && hasCurrencyValue(test?.Charge)) {
+    return toCurrencyNumber(test.Charge);
+  }
+
+  return getDiscountedTestPrice(test);
 };
 
 const getBillingChargeMode = company =>
@@ -491,11 +567,8 @@ const doesSelectedTestBelongToPanelCompany = (test, panelCompany) => {
 
 const getMergedPatientSelectedTests = (patient, selectedTests, panelCompany = null) => {
   const mergedMap = new Map();
-  const basePanelCompanyName =
-    normalizeFormText(panelCompany?.name) || 'Current Panel';
-  const basePanelCompanyId = normalizeFormText(
-    panelCompany?.compCatId,
-  );
+  const basePanelCompanyName = normalizeFormText(panelCompany?.name);
+  const basePanelCompanyId = normalizeFormText(panelCompany?.compCatId);
   const baseCenterId = normalizeFormText(
     panelCompany?.centerId || patient?.centerId || patient?.CenterID,
   );
@@ -525,10 +598,17 @@ const getMergedPatientSelectedTests = (patient, selectedTests, panelCompany = nu
       key: `seed|${test?.code || test?.booked_code || 'na'}|${
         test?.name || test?.test_name || 'na'
       }`,
-      panelCompanyName: basePanelCompanyName,
+      panelCompanyName:
+        normalizeFormText(
+          test?.panelCompanyName || test?.panel_company || test?.panel,
+        ) ||
+        basePanelCompanyName ||
+        'Current Panel',
       panelCompanySource: panelCompany?.chipSource || 'API',
       panelCompanyChipId: panelCompany?.chipId || panelCompany?.id || '',
-      panelCompanyId: basePanelCompanyId,
+      panelCompanyId:
+        normalizeFormText(test?.compCatId || test?.comp_cat_id) ||
+        basePanelCompanyId,
       centerId: baseCenterId,
       atype: baseAtype,
       panelCode: basePanelCode,
@@ -545,7 +625,12 @@ const getMergedPatientSelectedTests = (patient, selectedTests, panelCompany = nu
       test_code: test?.test_code || test?.code || test?.booked_code || '',
       description: test?.name || test?.test_name || 'Unnamed Test',
       specimenName: test?.specimen_name || test?.specimenName || 'N/A',
-      mrp: toCurrencyNumber(test?.mrp || test?.charge || test?.amount),
+      mrp: toCurrencyNumber(
+        getRawCurrencyValue(test?.mrp, test?.MRP, test?.amount, test?.charge),
+      ),
+      charge: toCurrencyNumber(
+        getRawCurrencyValue(test?.charge, test?.Charge, test?.mrp, test?.MRP),
+      ),
       percentageonstandard: getTestStandardDiscountPercent(test),
       billingChargeMode: getBillingChargeMode(test) || baseBillingChargeMode,
       chargeMode: getBillingChargeMode(test) || baseBillingChargeMode,
@@ -1388,10 +1473,46 @@ function AppointmentDetailsScreen({
           bookingPatientStatusCode: 4,
           bookingPatientStatus: 'Cancelled',
           booking_patient_status: 4,
+          appointmentPatientStatus: 4,
+          appointment_patient_status: 4,
           cancellationPayload,
         };
       }),
     [patientCancellationMap, selectedBooking?.patients],
+  );
+  const isAppointmentSourceBooking = useMemo(
+    () =>
+      normalizeFormText(
+        selectedBooking?.sourceType || selectedBooking?.source_type,
+      ).toUpperCase() === 'APPOINTMENT' ||
+      Boolean(
+        normalizeFormText(
+          selectedBooking?.appointmentId || selectedBooking?.appointment_id,
+        ),
+      ),
+    [
+      selectedBooking?.appointmentId,
+      selectedBooking?.appointment_id,
+      selectedBooking?.sourceType,
+      selectedBooking?.source_type,
+    ],
+  );
+  const isAppointmentPatientStatusContext = useMemo(
+    () =>
+      normalizeFormText(
+        selectedBooking?.sourceType || selectedBooking?.source_type,
+      ).toUpperCase() === 'APPOINTMENT' &&
+      Boolean(
+        normalizeFormText(
+          selectedBooking?.appointmentId || selectedBooking?.appointment_id,
+        ),
+      ),
+    [
+      selectedBooking?.appointmentId,
+      selectedBooking?.appointment_id,
+      selectedBooking?.sourceType,
+      selectedBooking?.source_type,
+    ],
   );
   const completeBookingPatientOptions = useMemo(
     () =>
@@ -2052,18 +2173,32 @@ function AppointmentDetailsScreen({
           : [];
 
         return sourceTests.map(test => {
+          const effectiveTest = getAppointmentBackendPricedTest(
+            patient,
+            test,
+            isAppointmentSourceBooking,
+          );
           const selectedChargeMode = getBillingModeForCalculation(
-            test?.selected_charge_mode ||
-              test?.selectedChargeMode ||
-              test?.billingChargeMode ||
-              test?.chargeMode ||
+            effectiveTest?.selected_charge_mode ||
+              effectiveTest?.selectedChargeMode ||
+              effectiveTest?.billingChargeMode ||
+              effectiveTest?.chargeMode ||
               patient?.billingChargeMode ||
               patient?.chargeMode,
           );
           const testMrp = toCurrencyNumber(
-            test?.mrp || test?.charge || test?.amount,
+            getRawCurrencyValue(
+              effectiveTest?.mrp,
+              effectiveTest?.MRP,
+              effectiveTest?.amount,
+              effectiveTest?.charge,
+              effectiveTest?.Charge,
+            ),
           );
-          const discountedTestPrice = getDiscountedTestPrice(test);
+          const discountedTestPrice = getActualTestPrice(
+            effectiveTest,
+            isAppointmentSourceBooking,
+          );
           const standardDiscountAmount = Math.max(
             0,
             testMrp - discountedTestPrice,
@@ -2071,29 +2206,42 @@ function AppointmentDetailsScreen({
 
           return {
             key:
-              normalizeFormText(test?.key) ||
-              `${normalizeFormText(test?.booked_code || test?.code)}-${patientId}`,
+              normalizeFormText(effectiveTest?.key) ||
+              `${normalizeFormText(
+                effectiveTest?.booked_code || effectiveTest?.code,
+              )}-${patientId}`,
             patientId,
             patientName: normalizeFormText(patient?.name),
-            code: normalizeFormText(test?.booked_code || test?.code),
+            code: normalizeFormText(
+              effectiveTest?.booked_code || effectiveTest?.code,
+            ),
             description:
-              normalizeFormText(test?.description || test?.name) || 'Unnamed Test',
+              normalizeFormText(effectiveTest?.description || effectiveTest?.name) ||
+              'Unnamed Test',
             selectedChargeMode,
             billingBucket: getBillingBucketFromChargeMode(selectedChargeMode),
             mrp: testMrp,
             charge: discountedTestPrice,
-            percentageonstandard: getTestStandardDiscountPercent(test),
+            percentageonstandard: getTestStandardDiscountPercent(effectiveTest),
             standard_discount_amount: standardDiscountAmount,
             max_discount:
-              toCurrencyNumber(test?.max_discount || test?.maxDiscount) ||
+              toCurrencyNumber(
+                getRawCurrencyValue(
+                  effectiveTest?.max_discount,
+                  effectiveTest?.maxDiscount,
+                ),
+              ) ||
               standardDiscountAmount,
             max_allowed_discount: toCurrencyNumber(
-              test?.max_allowed_discount || test?.maxAllowedDiscount,
+              getRawCurrencyValue(
+                effectiveTest?.max_allowed_discount,
+                effectiveTest?.maxAllowedDiscount,
+              ),
             ),
           };
         });
       }),
-    [patients, patientSelectedTestsMap],
+    [isAppointmentSourceBooking, patients, patientSelectedTestsMap],
   );
   const bookingAmountFields = useMemo(
     () => selectedBooking?.amountFields || {},
@@ -2104,8 +2252,9 @@ function AppointmentDetailsScreen({
       buildLocalBillingSummary(
         completeBillingTests,
         patientAdditionalDiscountMap,
+        selectedBooking?.patients,
       ),
-    [completeBillingTests, patientAdditionalDiscountMap],
+    [completeBillingTests, patientAdditionalDiscountMap, selectedBooking?.patients],
   );
   const patientSeedAdditionalDiscountTotal = useMemo(
     () => getPatientSeedAdditionalDiscountTotal(selectedBooking?.patients),
@@ -2271,31 +2420,53 @@ function AppointmentDetailsScreen({
         const panelMap = new Map();
 
         sourceTests.forEach(test => {
+          const effectiveTest = getAppointmentBackendPricedTest(
+            patient,
+            test,
+            isAppointmentSourceBooking,
+          );
+          const actualTestPrice = getActualTestPrice(
+            effectiveTest,
+            isAppointmentSourceBooking,
+          );
+          const actualTestMrp = toCurrencyNumber(
+            getRawCurrencyValue(
+              effectiveTest?.mrp,
+              effectiveTest?.MRP,
+              effectiveTest?.amount,
+              effectiveTest?.charge,
+              effectiveTest?.Charge,
+            ),
+          );
+          const actualStandardDiscount = Math.max(
+            0,
+            actualTestMrp - actualTestPrice,
+          );
           const panelCompany =
             normalizeFormText(
-            test?.panelCompanyName ||
-                test?.panel_company ||
+              effectiveTest?.panelCompanyName ||
+                effectiveTest?.panel_company ||
                 '',
           ) || 'Current Panel';
           const compCatId = normalizeFormText(
-            test?.panelCompanyId ||
-              test?.compCatId ||
-              test?.comp_cat_id ||
+            effectiveTest?.panelCompanyId ||
+              effectiveTest?.compCatId ||
+              effectiveTest?.comp_cat_id ||
               '',
           );
           const catDetails = normalizeFormText(
-            test?.cat_details ||
-              test?.catDetails ||
-              test?.panelCompanyDetails ||
-              test?.panel_company_details ||
-              test?.details,
+            effectiveTest?.cat_details ||
+              effectiveTest?.catDetails ||
+              effectiveTest?.panelCompanyDetails ||
+              effectiveTest?.panel_company_details ||
+              effectiveTest?.details,
           );
           const selectedChargeMode =
             normalizeCompleteChargeMode(
-              test?.selected_charge_mode ||
-                test?.selectedChargeMode ||
-                test?.billingChargeMode ||
-                test?.chargeMode ||
+              effectiveTest?.selected_charge_mode ||
+                effectiveTest?.selectedChargeMode ||
+                effectiveTest?.billingChargeMode ||
+                effectiveTest?.chargeMode ||
                 patient?.billingChargeMode ||
                 patient?.chargeMode,
             ) || 'C';
@@ -2318,31 +2489,30 @@ function AppointmentDetailsScreen({
 
           panelMap.get(panelKey).selected_tests.push({
             booked_code: normalizeFormText(
-              test?.booked_code ||
-                test?.code ||
-                test?.testcode1 ||
-                test?.test_code,
+              effectiveTest?.booked_code ||
+                effectiveTest?.code ||
+                effectiveTest?.testcode1 ||
+                effectiveTest?.test_code,
             ),
             description:
-              normalizeFormText(test?.description || test?.name) ||
+              normalizeFormText(effectiveTest?.description || effectiveTest?.name) ||
               'Unnamed Test',
-            mrp: toCurrencyNumber(test?.mrp || test?.charge || test?.amount),
-            charge: getDiscountedTestPrice(test),
-            percentageonstandard: getTestStandardDiscountPercent(test),
-            standard_discount_amount: Math.max(
-              0,
-              toCurrencyNumber(test?.mrp || test?.charge || test?.amount) -
-                getDiscountedTestPrice(test),
-            ),
+            mrp: actualTestMrp,
+            charge: actualTestPrice,
+            percentageonstandard: getTestStandardDiscountPercent(effectiveTest),
+            standard_discount_amount: actualStandardDiscount,
             max_discount:
-              toCurrencyNumber(test?.max_discount || test?.maxDiscount) ||
-              Math.max(
-                0,
-                toCurrencyNumber(test?.mrp || test?.charge || test?.amount) -
-                  getDiscountedTestPrice(test),
-              ),
+              toCurrencyNumber(
+                getRawCurrencyValue(
+                  effectiveTest?.max_discount,
+                  effectiveTest?.maxDiscount,
+                ),
+              ) || actualStandardDiscount,
             max_allowed_discount: toCurrencyNumber(
-              test?.max_allowed_discount || test?.maxAllowedDiscount,
+              getRawCurrencyValue(
+                effectiveTest?.max_allowed_discount,
+                effectiveTest?.maxAllowedDiscount,
+              ),
             ),
           });
         });
@@ -2394,7 +2564,24 @@ function AppointmentDetailsScreen({
           pendingGroup?.root_booked_code &&
           Array.isArray(pendingGroup?.pending) &&
           pendingGroup.pending.length,
-      );
+      )
+      .map(pendingGroup => {
+        const pendingTests = (Array.isArray(pendingGroup?.pending)
+          ? pendingGroup.pending
+          : []
+        ).map(pendingTest => ({
+          ...pendingTest,
+          description:
+            normalizeFormText(pendingTest?.description) ||
+            normalizeFormText(pendingTest?.name),
+        }));
+
+        return {
+          ...pendingGroup,
+          pending: pendingTests,
+          pending_child_tests: pendingTests,
+        };
+      });
     const paymentCollectionsPayload = completePayments
       .filter(payment => toCurrencyNumber(payment?.amount) > 0)
       .map(payment => ({
@@ -2547,7 +2734,9 @@ function AppointmentDetailsScreen({
           additional_discount_amount: toCurrencyNumber(
             billingRow?.effectiveAdditional,
           ),
-          booking_patient_status: bookingPatientStatus,
+          ...(isAppointmentPatientStatusContext
+            ? {appointment_patient_status: bookingPatientStatus}
+            : {booking_patient_status: bookingPatientStatus}),
           documents: patientDocumentMeta,
         };
 
@@ -2608,7 +2797,7 @@ function AppointmentDetailsScreen({
         ? linkedAppointmentTimeSlot
         : null,
       sample_collection_pick_count: samplePickCount,
-      sample_collection_pick_patients: nonManualCompleteBookingPatientOptions.filter(
+      sample_collection_pick_patients: completeBookingPatientOptions.filter(
         option => samplePickPatientIds.includes(option.id),
       ),
       sample_collection_easy_tough:
@@ -2617,7 +2806,7 @@ function AppointmentDetailsScreen({
           : sampleCollectionEasyTough,
       sample_collection_easy_tough_patients:
         sampleCollectionEasyTough === 'tough'
-          ? nonManualCompleteBookingPatientOptions.filter(option =>
+          ? completeBookingPatientOptions.filter(option =>
               sampleCollectionEasyToughPatientIds.includes(option.id),
             )
           : [],
@@ -2707,12 +2896,14 @@ function AppointmentDetailsScreen({
       }, {}),
     });
   }, [
-    nonManualCompleteBookingPatientOptions,
+    completeBookingPatientOptions,
     completePaymentPatientOptions,
     completeAdditionalDiscountAmount,
     completeAmountReceived,
     completePaymentMode,
     completePayments,
+    isAppointmentPatientStatusContext,
+    isAppointmentSourceBooking,
     isLinkedAppointmentSelected,
     linkedAppointmentDate,
     linkedAppointmentTimeSlot,
@@ -3105,14 +3296,14 @@ function AppointmentDetailsScreen({
     const floorValue = normalizeFormText(addressForm.floor);
 
     if (floorSpecial && floorSpecial !== 'None') {
-      return floorSpecial.replace(/_/g, ' ');
+      return floorSpecial;
     }
 
     if (!floorValue || floorValue === 'N/A') {
       return '';
     }
 
-    return /^\d+$/.test(floorValue) ? `Floor - ${floorValue}` : floorValue;
+    return /^\d+$/.test(floorValue) ? `Floor-${floorValue}` : floorValue;
   }, [addressForm.floor, addressForm.floor_special]);
   const mergedSelectedBookingAddress = [
     addressForm.house_flat_no,
@@ -3131,6 +3322,7 @@ function AppointmentDetailsScreen({
         selectedBooking.address.fullAddress !== 'Address not available'
       ? selectedBooking.address.fullAddress
       : mergedSelectedBookingAddress;
+  const locationSearchAddress = mergedSelectedBookingAddress || resolvedAddress;
   const resolvedLandmark = normalizeFormText(
     addressForm.landmark || selectedBooking.address.landmark,
   );
@@ -3149,14 +3341,14 @@ function AppointmentDetailsScreen({
   const patientCount = selectedBooking.patients.length;
 
   const handleOpenLocation = async () => {
-    if (!locationUrl && !resolvedAddress && (!latitude || !longitude)) {
+    if (!locationUrl && !locationSearchAddress && (!latitude || !longitude)) {
       return;
     }
 
     const mapsQuery =
       latitude && longitude
         ? `${latitude},${longitude}`
-        : encodeURIComponent(resolvedAddress);
+        : encodeURIComponent(locationSearchAddress);
     const mapsUrl =
       locationUrl ||
       `https://www.google.com/maps/search/?api=1&query=${mapsQuery}`;
@@ -3735,11 +3927,11 @@ function AppointmentDetailsScreen({
         return;
       }
 
-      if (nonManualCompleteBookingPatientOptions.length === 1) {
-        setSamplePickPatientIds([nonManualCompleteBookingPatientOptions[0].id]);
+      if (completeBookingPatientOptions.length === 1) {
+        setSamplePickPatientIds([completeBookingPatientOptions[0].id]);
       }
     },
-    [nonManualCompleteBookingPatientOptions],
+    [completeBookingPatientOptions],
   );
 
   const handleSamplePickPatientToggle = useCallback(patientId => {
@@ -3759,13 +3951,13 @@ function AppointmentDetailsScreen({
         return;
       }
 
-      if (nonManualCompleteBookingPatientOptions.length === 1) {
+      if (completeBookingPatientOptions.length === 1) {
         setSampleCollectionEasyToughPatientIds([
-          nonManualCompleteBookingPatientOptions[0].id,
+          completeBookingPatientOptions[0].id,
         ]);
       }
     },
-    [nonManualCompleteBookingPatientOptions],
+    [completeBookingPatientOptions],
   );
 
   const handleSampleCollectionEasyToughPatientToggle = useCallback(patientId => {
@@ -3908,6 +4100,14 @@ function AppointmentDetailsScreen({
             ? String(patientAdditionalDiscountDraftMap[normalizedPatientId] || '')
             : '',
       }));
+      showAppAlert(
+        requestedAdditional > 0
+          ? 'Additional Discount Applied'
+          : 'Additional Discount Removed',
+        requestedAdditional > 0
+          ? `Rs. ${requestedAdditional.toFixed(2)} additional discount applied for ${patientDiscount.patientName}.`
+          : `Additional discount removed for ${patientDiscount.patientName}.`,
+      );
     },
     [
       patientAdditionalDiscountDraftMap,
@@ -3918,9 +4118,10 @@ function AppointmentDetailsScreen({
   );
 
   const confirmCompleteBooking = async () => {
+    const hasSampleCollectionPatients = completeBookingPatientOptions.length > 0;
     const hasNonManualPatients = nonManualCompleteBookingPatientOptions.length > 0;
 
-    if (hasNonManualPatients && !samplePickCount) {
+    if (hasSampleCollectionPatients && !samplePickCount) {
       showAppAlert(
         'No. of Pricks Required',
         'Please select no. of pricks in sample collection.',
@@ -3929,9 +4130,9 @@ function AppointmentDetailsScreen({
     }
 
     if (
-      hasNonManualPatients &&
+      hasSampleCollectionPatients &&
       samplePickCount !== '1' &&
-      nonManualCompleteBookingPatientOptions.length &&
+      completeBookingPatientOptions.length &&
       !samplePickPatientIds.length
     ) {
       showAppAlert(
@@ -3941,7 +4142,7 @@ function AppointmentDetailsScreen({
       return;
     }
 
-    if (hasNonManualPatients && !sampleCollectionEasyTough) {
+    if (hasSampleCollectionPatients && !sampleCollectionEasyTough) {
       showAppAlert(
         'Sample Collection Required',
         'Please select whether sample collection was easy/tough.',
@@ -3950,9 +4151,9 @@ function AppointmentDetailsScreen({
     }
 
     if (
-      hasNonManualPatients &&
+      hasSampleCollectionPatients &&
       sampleCollectionEasyTough === 'tough' &&
-      nonManualCompleteBookingPatientOptions.length &&
+      completeBookingPatientOptions.length &&
       !sampleCollectionEasyToughPatientIds.length
     ) {
       showAppAlert(
@@ -5069,7 +5270,7 @@ function AppointmentDetailsScreen({
           selectedBooking={selectedBooking}
           patientCount={patientCount}
           bookingActionLoading={bookingActionLoading}
-          patientOptions={nonManualCompleteBookingPatientOptions}
+          patientOptions={completeBookingPatientOptions}
           isLinkedAppointmentSelected={isLinkedAppointmentSelected}
           onLinkedAppointmentChange={handleLinkedAppointmentChange}
           linkedAppointmentDate={linkedAppointmentDate}
@@ -5184,6 +5385,7 @@ function AppointmentDetailsScreen({
             patientPrecomputedSampleTubesMap={patientPrecomputedSampleTubesMap}
             patientSampleCollectionMap={patientSampleCollectionMap}
             patientTestBookingStatusMap={patientTestBookingStatusMap}
+            useBackendTestPrices={isAppointmentSourceBooking}
             patientCghsEnabledMap={patientCghsEnabledMap}
             patientCghsIdMap={patientCghsIdMap}
             patientCghsDocumentsMap={patientCghsDocumentsMap}

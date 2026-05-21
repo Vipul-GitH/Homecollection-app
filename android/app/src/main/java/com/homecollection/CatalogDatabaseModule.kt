@@ -326,8 +326,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       """
       CREATE TABLE IF NOT EXISTS handover_pending (
         row_key TEXT PRIMARY KEY,
+        user_key TEXT,
+        user_name TEXT,
         booking_id TEXT NOT NULL,
         booking_code TEXT,
+        appointment_id TEXT,
         patient_id TEXT,
         booking_patient_id TEXT NOT NULL,
         patient_name TEXT,
@@ -336,10 +339,13 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       )
       """.trimIndent(),
     )
+    ensureColumn(db, "handover_pending", "user_key", "TEXT")
+    ensureColumn(db, "handover_pending", "user_name", "TEXT")
+    ensureColumn(db, "handover_pending", "appointment_id", "TEXT")
     db.execSQL(
       """
       CREATE INDEX IF NOT EXISTS idx_handover_pending_booking
-      ON handover_pending(booking_id, booking_patient_id)
+      ON handover_pending(user_key, booking_id, appointment_id, booking_patient_id)
       """.trimIndent(),
     )
 
@@ -687,37 +693,45 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
-  fun getPendingHandoverRows(promise: Promise) {
+  fun getPendingHandoverRows(userKey: String, promise: Promise) {
     try {
       val db = openDatabase()
       val items = JSONArray()
+      val normalizedUserKey = userKey.trim()
 
       db.rawQuery(
         """
         SELECT
           row_key,
+          user_key,
+          user_name,
           booking_id,
           booking_code,
+          appointment_id,
           patient_id,
           booking_patient_id,
           patient_name,
           tube_name,
           completed_at
         FROM handover_pending
+        WHERE user_key = ?
         ORDER BY
           COALESCE(NULLIF(completed_at, ''), '0000-00-00 00:00:00') DESC,
           CAST(booking_id AS INTEGER),
           patient_name COLLATE NOCASE,
           tube_name COLLATE NOCASE
         """.trimIndent(),
-        emptyArray<String>(),
+        arrayOf(normalizedUserKey),
       ).use { cursor ->
         while (cursor.moveToNext()) {
           items.put(
             JSONObject()
               .put("row_key", cursor.stringValue("row_key"))
+              .put("user_key", cursor.stringValue("user_key"))
+              .put("user_name", cursor.stringValue("user_name"))
               .put("booking_id", cursor.stringValue("booking_id"))
               .put("booking_code", cursor.stringValue("booking_code"))
+              .put("appointment_id", cursor.stringValue("appointment_id"))
               .put("patient_id", cursor.stringValue("patient_id"))
               .put("booking_patient_id", cursor.stringValue("booking_patient_id"))
               .put("patient_name", cursor.stringValue("patient_name"))
@@ -745,12 +759,16 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         for (index in 0 until rows.length()) {
           val row = rows.optJSONObject(index) ?: continue
           val rowKey = rowString(row, "row_key")
+          val userKey = rowString(row, "user_key")
+          val userName = rowString(row, "user_name")
           val bookingId = rowString(row, "booking_id")
+          val appointmentId = rowString(row, "appointment_id")
           val bookingPatientId = rowString(row, "booking_patient_id")
           val tubeName = rowString(row, "tube_name")
 
           if (
             rowKey.isBlank() ||
+              userKey.isBlank() ||
               bookingId.isBlank() ||
               bookingPatientId.isBlank() ||
               tubeName.isBlank()
@@ -760,8 +778,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
 
           val values = ContentValues().apply {
             put("row_key", rowKey)
+            put("user_key", userKey)
+            put("user_name", userName)
             put("booking_id", bookingId)
             put("booking_code", rowString(row, "booking_code"))
+            put("appointment_id", appointmentId)
             put("patient_id", rowString(row, "patient_id"))
             put("booking_patient_id", bookingPatientId)
             put("patient_name", rowString(row, "patient_name"))

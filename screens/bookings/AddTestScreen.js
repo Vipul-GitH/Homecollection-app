@@ -262,6 +262,7 @@ function AddTestScreen({
   onPanelCompanySelect,
   onToggleSelectedTest,
   onRemoveSelectedTest,
+  onDone,
   onSampleCollectionReset,
   onLocalDatabaseLoadingChange,
 }) {
@@ -798,6 +799,10 @@ function AddTestScreen({
     setGroups([]);
     setSearchText('');
   };
+
+  const handleDonePress = useCallback(() => {
+    onDone?.();
+  }, [onDone]);
   const confirmSampleCollectionReset = useCallback(
     onConfirm => {
       if (!sampleCollectionDraft?.collected) {
@@ -1358,12 +1363,20 @@ function AddTestScreen({
             </ScrollView>
             {!selectedGroup && !selectedSubgroup ? (
               <View style={styles.testPickerSelectedBar}>
-                <Text style={styles.testPickerSelectedText}>
-                  {selectedTests.length} selected
-                </Text>
-                <Text style={styles.testPickerSelectedHint}>
-                  Added tests are saved automatically
-                </Text>
+                <View style={styles.testPickerSelectedContent}>
+                  <Text style={styles.testPickerSelectedText}>
+                    {selectedTests.length} selected
+                  </Text>
+                  <Text style={styles.testPickerSelectedHint}>
+                    Added tests are saved automatically
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.testPickerDoneButton}
+                  onPress={handleDonePress}>
+                  <Text style={styles.testPickerDoneButtonText}>Done</Text>
+                </TouchableOpacity>
               </View>
             ) : null}
           </View>

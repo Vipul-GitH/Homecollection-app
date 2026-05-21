@@ -78,6 +78,11 @@ const getMapChildren = (childrenMap, code) => {
   return Array.isArray(children) ? children : [];
 };
 
+const shouldDisableChildExpansionForTest = (test, options = {}) =>
+  typeof options.disableChildExpansion === 'function'
+    ? Boolean(options.disableChildExpansion(test))
+    : Boolean(options.disableChildExpansion);
+
 export const buildSampleTubeMapsFromTests = selectedTests => {
   const testsMap = {};
   const childrenMap = {};
@@ -121,6 +126,7 @@ export const collectTubesForSelectedTest = (
   test,
   providedTestsMap = null,
   providedChildrenMap = null,
+  options = {},
 ) => {
   const visitedCodes = new Set();
   const seenTubes = new Set();
@@ -140,10 +146,18 @@ export const collectTubesForSelectedTest = (
 
     const entry = getMapEntry(testsMap, code);
     const mapCode = normalizeCode(entry?.testcode1 || code);
-    const childCodes = getMapChildren(childrenMap, mapCode);
+    const disableChildExpansion = shouldDisableChildExpansionForTest(
+      test,
+      options,
+    );
+    const childCodes = disableChildExpansion
+      ? []
+      : getMapChildren(childrenMap, mapCode);
     const tube = getSpecimenName(entry);
     const tubeKey = tube.toLowerCase();
-    const shouldUseOwnTube = !isProfileTest(entry) && !childCodes.length;
+    const shouldUseOwnTube =
+      (disableChildExpansion || !isProfileTest(entry)) &&
+      !childCodes.length;
 
     if (shouldUseOwnTube && tube && !seenTubes.has(tubeKey)) {
       seenTubes.add(tubeKey);
@@ -163,6 +177,7 @@ export const collectUniqueTubesForSelectedTests = (
   selectedTests,
   providedTestsMap = null,
   providedChildrenMap = null,
+  options = {},
 ) => {
   const seenTubes = new Set();
   const tubes = [];
@@ -174,14 +189,19 @@ export const collectUniqueTubesForSelectedTests = (
   const childrenMap = providedChildrenMap || fallbackMaps.childrenMap;
 
   (Array.isArray(selectedTests) ? selectedTests : []).forEach(test => {
-    collectTubesForSelectedTest(test, testsMap, childrenMap).forEach(tube => {
-      const tubeKey = tube.toLowerCase();
+    collectTubesForSelectedTest(test, testsMap, childrenMap, {
+      ...options,
+      disableChildExpansion: shouldDisableChildExpansionForTest(test, options),
+    }).forEach(
+      tube => {
+        const tubeKey = tube.toLowerCase();
 
-      if (!seenTubes.has(tubeKey)) {
-        seenTubes.add(tubeKey);
-        tubes.push(tube);
-      }
-    });
+        if (!seenTubes.has(tubeKey)) {
+          seenTubes.add(tubeKey);
+          tubes.push(tube);
+        }
+      },
+    );
   });
 
   return orderTubesForDisplay(tubes);
@@ -191,6 +211,7 @@ export const collectTubeNodesForSelectedTest = (
   test,
   providedTestsMap = null,
   providedChildrenMap = null,
+  options = {},
 ) => {
   const seenNodes = new Set();
   const fallbackMaps =
@@ -216,9 +237,15 @@ export const collectTubeNodesForSelectedTest = (
     const mapCode = normalizeCode(entry?.testcode1 || code);
     const description =
       toStableValue(entry?.description || entry?.name) || mapCode || parentDescription;
-    const childCodes = getMapChildren(childrenMap, mapCode);
+    const disableChildExpansion = shouldDisableChildExpansionForTest(
+      test,
+      options,
+    );
+    const childCodes = disableChildExpansion
+      ? []
+      : getMapChildren(childrenMap, mapCode);
     const specimenName = getSpecimenName(entry);
-    const isProfile = isProfileTest(entry);
+    const isProfile = disableChildExpansion ? false : isProfileTest(entry);
     const nextPath = [...path, code];
     const parentDescription =
       parentDescriptions[parentDescriptions.length - 1] || '';

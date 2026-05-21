@@ -221,7 +221,7 @@ export const getDatabasePatientTagsResponse = async () => {
   return parseNativeJson(await CatalogDatabaseModule.getPatientTags());
 };
 
-export const getDatabasePendingHandoverRowsResponse = async () => {
+export const getDatabasePendingHandoverRowsResponse = async userKey => {
   if (
     !isCatalogDatabaseAvailable() ||
     !CatalogDatabaseModule.getPendingHandoverRows
@@ -229,7 +229,9 @@ export const getDatabasePendingHandoverRowsResponse = async () => {
     return null;
   }
 
-  return parseNativeJson(await CatalogDatabaseModule.getPendingHandoverRows());
+  return parseNativeJson(
+    await CatalogDatabaseModule.getPendingHandoverRows(String(userKey || '')),
+  );
 };
 
 export const upsertDatabasePendingHandoverRowsResponse = async rows => {
