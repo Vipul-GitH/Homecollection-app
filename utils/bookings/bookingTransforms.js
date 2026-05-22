@@ -513,6 +513,17 @@ export const normalizeAssignedBooking = (booking, index) => {
   const sourceType = toDisplayString(
     booking?.source_type || booking?.sourceType,
   );
+  const routeName = firstNonEmptyValue(
+    booking?.route,
+    booking?.route_no,
+    booking?.routeNo,
+    booking?.routeNumber,
+    booking?.address?.route_no,
+    booking?.address?.routeNo,
+    booking?.address?.routeNumber,
+    booking?.address?.route_no_snapshot,
+    booking?.address?.routeNumberSnapshot,
+  );
   const patientNamesRaw = booking?.patient_names ?? booking?.patientNames;
   const patientNamesText =
     typeof patientNamesRaw === 'string' ? toDisplayString(patientNamesRaw) : '';
@@ -569,6 +580,7 @@ export const normalizeAssignedBooking = (booking, index) => {
         : patientCount,
     preferredVisitDate: preferredVisitDate || 'Date not available',
     visitDate: preferredVisitDate || 'Date not available',
+    routeName,
     bookingStatusCode,
     status: getBookingStatusLabel(bookingStatusCode, booking?.status),
     timeSlot: preferredTimeSlot || 'Time not available',

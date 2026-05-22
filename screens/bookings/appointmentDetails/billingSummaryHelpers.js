@@ -158,13 +158,10 @@ export const buildLocalBillingSummary = (
       const enteredValue = toCurrencyNumber(
         safePatientAdditionalDiscountMap[entry.patientId],
       );
-      const seededAdditionalDiscount = toCurrencyNumber(
+      const backendAdditionalDiscount = toCurrencyNumber(
         patientSeedAdditionalDiscountMap[entry.patientId],
       );
-      const requestedAdditional = Math.max(
-        enteredValue,
-        seededAdditionalDiscount,
-      );
+      const requestedAdditional = enteredValue;
       const maxAdditionalAllowed = Math.max(
         0,
         entry.maxTotalDiscount - entry.baseDiscount,
@@ -195,7 +192,8 @@ export const buildLocalBillingSummary = (
           safePatientAdditionalDiscountMap[entry.patientId],
         ),
         requestedAdditional,
-        seededAdditionalDiscount,
+        seededAdditionalDiscount: backendAdditionalDiscount,
+        backendAdditionalDiscount,
         maxAdditionalAllowed,
         effectiveAdditional,
         hasOverflow: requestedAdditional > maxAdditionalAllowed,
@@ -340,15 +338,15 @@ export const getCompleteBillingAmounts = ({
 }) => {
   const completeBillingTotal = localBillingSummary.subtotal;
   const rawAdditionalDiscountAmount =
-    hasBackendPatientLevelAdditionalDiscount
-      ? localBillingSummary.effectiveAdditional
-      : preloadedAdditionalDiscount > 0 && !hasPatientAdditionalDiscountEntry
+    preloadedAdditionalDiscount > 0 && !hasPatientAdditionalDiscountEntry
       ? preloadedAdditionalDiscount
+      : hasBackendPatientLevelAdditionalDiscount
+      ? localBillingSummary.effectiveAdditional
       : localBillingSummary.effectiveAdditional;
-  const completeAdditionalDiscountAmount = Math.min(
-    rawAdditionalDiscountAmount,
-    localBillingSummary.maxAdditionalAllowed,
-  );
+  const completeAdditionalDiscountAmount =
+    preloadedAdditionalDiscount > 0 && !hasPatientAdditionalDiscountEntry
+      ? rawAdditionalDiscountAmount
+      : Math.min(rawAdditionalDiscountAmount, localBillingSummary.maxAdditionalAllowed);
   const completeBaseDiscountAmount = localBillingSummary.baseDiscount;
   const completeDiscountAmount =
     completeBaseDiscountAmount + completeAdditionalDiscountAmount;

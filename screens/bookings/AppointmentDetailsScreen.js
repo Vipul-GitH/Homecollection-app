@@ -885,6 +885,7 @@ function AppointmentDetailsScreen({
   onLocalDatabaseLoadingChange,
   selectedBookingScreen = 'details',
   onBookingScreenChange,
+  onBookingCompleted,
 }) {
   const {width} = useWindowDimensions();
   const isNarrowScreen = width < 390;
@@ -966,7 +967,8 @@ function AppointmentDetailsScreen({
   );
   const [linkedAppointmentCalendarMonth, setLinkedAppointmentCalendarMonth] =
     useState(() => new Date());
-  const [isAdditionalDiscountEnabled] = useState(true);
+  const [isAdditionalDiscountEnabled, setIsAdditionalDiscountEnabled] =
+    useState(() => Boolean(appointmentDetailState?.isAdditionalDiscountEnabled));
   const [completePayments, setCompletePayments] = useState(() =>
     normalizeCompletePaymentDrafts(appointmentDetailState?.completePayments),
   );
@@ -1143,6 +1145,9 @@ function AppointmentDetailsScreen({
     );
     setSelectedPatientKey(currentDraft?.selectedPatientKey || '');
     setPendingPaymentPatientId(currentDraft?.pendingPaymentPatientId || '');
+    setIsAdditionalDiscountEnabled(
+      Boolean(currentDraft?.isAdditionalDiscountEnabled),
+    );
   }, [
     selectedBooking?.amountFields?.additionalDiscount,
     selectedBooking?.amountFields?.amountReceived,
@@ -1385,6 +1390,57 @@ function AppointmentDetailsScreen({
       showAppAlert,
     ],
   );
+  const handleBookingControlAction = useCallback(
+    action => {
+      if (action !== 'stop') {
+        onBookingAction(action);
+        return;
+      }
+
+      const collectedPatientIds = Object.entries(patientSampleCollectionMap || {})
+        .filter(([, sampleCollection]) => Boolean(sampleCollection?.collected))
+        .map(([patientId]) => patientId);
+
+      if (!collectedPatientIds.length) {
+        onBookingAction('stop');
+        return;
+      }
+
+      showAppAlert(
+        'Reset Sample Collection?',
+        'Stopping this booking will reset sample collection for this booking. Tubes must be selected again after starting.',
+        [
+          {text: 'Cancel', style: 'cancel'},
+          {
+            text: 'Reset & Stop',
+            style: 'destructive',
+            onPress: () => {
+              onAppointmentDetailStateChange?.(previousState => {
+                const nextMap = {...(previousState?.patientSampleCollectionMap || {})};
+
+                collectedPatientIds.forEach(patientId => {
+                  delete nextMap[patientId];
+                });
+
+                return {
+                  ...previousState,
+                  patientSampleCollectionMap: nextMap,
+                };
+              });
+              onBookingAction('stop');
+            },
+          },
+        ],
+        {cancelable: true},
+      );
+    },
+    [
+      onAppointmentDetailStateChange,
+      onBookingAction,
+      patientSampleCollectionMap,
+      showAppAlert,
+    ],
+  );
   const confirmRemoveSelectedTest = useCallback(
     ({patient, testName, onConfirm}) => {
       const displayName = normalizeFormText(testName);
@@ -1524,6 +1580,7 @@ function AppointmentDetailsScreen({
         options.push({
           id: getCompleteBookingPatientOptionId(patient, index),
           patientId: getCompletePayloadPatientId(patient),
+          sourcePatientId: getPatientMutationId(patient),
           name: normalizeFormText(patient?.name) || `Patient ${index + 1}`,
         });
 
@@ -1548,29 +1605,13 @@ function AppointmentDetailsScreen({
         options.push({
           id: getCompleteBookingPatientOptionId(patient, index),
           patientId: getCompletePayloadPatientId(patient),
+          sourcePatientId: getPatientMutationId(patient),
           name: normalizeFormText(patient?.name) || `Patient ${index + 1}`,
         });
 
         return options;
       }, []),
     [patientTestBookingStatusMap, patients],
-  );
-  const completePaymentPatientOptions = useMemo(
-    () =>
-      patients.reduce((options, patient, index) => {
-        if (isPatientTerminalForCompletion(patient)) {
-          return options;
-        }
-
-        options.push({
-          id: getCompleteBookingPatientOptionId(patient, index),
-          patientId: getCompletePayloadPatientId(patient),
-          name: normalizeFormText(patient?.name) || `Patient ${index + 1}`,
-        });
-
-        return options;
-      }, []),
-    [patients],
   );
   const reportDeliveryPatients = useMemo(
     () =>
@@ -2286,6 +2327,38 @@ function AppointmentDetailsScreen({
       ),
     [localBillingSummary.patientAdditionalDiscountRows],
   );
+  const completePaymentPatientOptions = useMemo(() => {
+    const payingPatientIds = new Set(
+      (localBillingSummary.patientBillingRows || [])
+        .filter(
+          row =>
+            toCurrencyNumber(row?.payingTestCount) > 0 &&
+            toCurrencyNumber(row?.finalPayingAmount) > 0.009,
+        )
+        .map(row => normalizeFormText(row?.patientId))
+        .filter(Boolean),
+    );
+
+    return patients.reduce((options, patient, index) => {
+      const patientId = getPatientMutationId(patient);
+
+      if (
+        isPatientTerminalForCompletion(patient) ||
+        !payingPatientIds.has(normalizeFormText(patientId))
+      ) {
+        return options;
+      }
+
+      options.push({
+        id: getCompleteBookingPatientOptionId(patient, index),
+        patientId: getCompletePayloadPatientId(patient),
+        sourcePatientId: patientId,
+        name: normalizeFormText(patient?.name) || `Patient ${index + 1}`,
+      });
+
+      return options;
+    }, []);
+  }, [localBillingSummary.patientBillingRows, patients]);
   const patientAdditionalDiscountUiRows = useMemo(
     () =>
       localBillingSummary.patientAdditionalDiscountRows.map(patient => ({
@@ -2392,6 +2465,62 @@ function AppointmentDetailsScreen({
     pendingPaymentPatientId,
     shouldCollectPendingPaymentPatient,
   ]);
+  useEffect(() => {
+    setCompletePayments(previousPayments => {
+      if (!completePaymentPatientOptions.length) {
+        return previousPayments.length ? [] : previousPayments;
+      }
+
+      const findExistingPayment = patient =>
+        previousPayments.find(payment => {
+          const paymentOptionId = normalizeFormText(payment?.patientOptionId);
+          const paymentPatientId = normalizeFormText(payment?.patientId);
+          const patientOptionId = normalizeFormText(patient?.id);
+          const payloadPatientId = normalizeFormText(patient?.patientId);
+          const sourcePatientId = normalizeFormText(patient?.sourcePatientId);
+
+          return (
+            paymentOptionId === patientOptionId ||
+            paymentPatientId === payloadPatientId ||
+            paymentPatientId === sourcePatientId
+          );
+        });
+
+      const nextPayments = completePaymentPatientOptions.map(patient => {
+        const existingPayment = findExistingPayment(patient);
+
+        return createCompletePaymentEntry({
+          ...(existingPayment || {}),
+          id:
+            existingPayment?.id ||
+            `payment-patient-${normalizeFormText(patient.id)}`,
+          patientOptionId: patient.id,
+          patientId: patient.patientId,
+          patientName: patient.name,
+        });
+      });
+
+      const serializeComparablePayments = payments =>
+        JSON.stringify(
+          payments.map(payment => ({
+            id: payment.id,
+            patientOptionId: normalizeFormText(payment.patientOptionId),
+            patientId: normalizeFormText(payment.patientId),
+            patientName: normalizeFormText(payment.patientName),
+            mode: normalizeFormText(payment.mode),
+            amount: normalizeFormText(payment.amount),
+            proofDocuments: Array.isArray(payment.proofDocuments)
+              ? payment.proofDocuments
+              : [],
+          })),
+        );
+
+      return serializeComparablePayments(previousPayments) ===
+        serializeComparablePayments(nextPayments)
+        ? previousPayments
+        : nextPayments;
+    });
+  }, [completePaymentPatientOptions]);
 
   const completeBookingPayload = useMemo(() => {
     const patientAdditionalDiscountMapForPayload =
@@ -3338,7 +3467,7 @@ function AppointmentDetailsScreen({
   const locationUrl = normalizeFormText(
     addressForm.google_location || selectedBooking.address.locationUrl,
   );
-  const patientCount = selectedBooking.patients.length;
+  const patientCount = patientSelectorItems.length || selectedBooking.patients.length;
 
   const handleOpenLocation = async () => {
     if (!locationUrl && !locationSearchAddress && (!latitude || !longitude)) {
@@ -3491,37 +3620,60 @@ function AppointmentDetailsScreen({
       return;
     }
 
+    const patientIdentityValues = [
+      patient?.bookingPatientId,
+      patient?.booking_patient_id,
+      patient?.patientId,
+      patient?.patient_id,
+      patient?.id,
+    ]
+      .map(normalizeFormText)
+      .filter(Boolean);
+    const latestPatient =
+      patients.find(currentPatient =>
+        [
+          currentPatient?.bookingPatientId,
+          currentPatient?.booking_patient_id,
+          currentPatient?.patientId,
+          currentPatient?.patient_id,
+          currentPatient?.id,
+        ]
+          .map(normalizeFormText)
+          .filter(Boolean)
+          .some(value => patientIdentityValues.includes(value)),
+      ) || patient;
+
     const title = normalizeOptionValue(
-      patient.title,
+      latestPatient.title,
       TITLE_OPTIONS,
       INITIAL_PATIENT_FORM.title,
     );
-    const dateOfBirth = normalizeFormText(patient.dob);
+    const dateOfBirth = normalizeFormText(latestPatient.dob);
     const ageYears =
-      calculateAgeFromDob(dateOfBirth) || normalizeFormText(patient.age);
+      calculateAgeFromDob(dateOfBirth) || normalizeFormText(latestPatient.age);
 
-    setEditingPatient(patient);
+    setEditingPatient(latestPatient);
     setPatientForm({
       title,
-      fullName: normalizeFormText(patient.name),
-      gender: normalizeFormText(patient.gender) || getGenderFromTitle(title),
+      fullName: normalizeFormText(latestPatient.name),
+      gender: normalizeFormText(latestPatient.gender) || getGenderFromTitle(title),
       dateOfBirth,
       ageYears,
-      primaryMobile: normalizeMobileValue(patient.mobileNumber),
-      alternateMobile: normalizeMobileValue(patient.alternateMobileNumber),
-      email: normalizeFormText(patient.email),
-      labmatePid: normalizeFormText(patient.labmatePid),
+      primaryMobile: normalizeMobileValue(latestPatient.mobileNumber),
+      alternateMobile: normalizeMobileValue(latestPatient.alternateMobileNumber),
+      email: normalizeFormText(latestPatient.email),
+      labmatePid: normalizeFormText(latestPatient.labmatePid),
       panelCompany:
-        normalizeFormText(patient.panelCompany) ||
+        normalizeFormText(latestPatient.panelCompany) ||
         INITIAL_PATIENT_FORM.panelCompany,
       cghsCardNo: normalizeFormText(
-        patient.cardNo ||
-          patient.card_no ||
-          patient.cghsCardNo ||
-          patient.cghs_card_no,
+        latestPatient.cardNo ||
+          latestPatient.card_no ||
+          latestPatient.cghsCardNo ||
+          latestPatient.cghs_card_no,
       ),
-      tag: serializePatientTags(normalizePatientTagValues(patient.tag)),
-      tags: normalizePatientTagValues(patient.tag),
+      tag: serializePatientTags(normalizePatientTagValues(latestPatient.tag)),
+      tags: normalizePatientTagValues(latestPatient.tag),
     });
     setPatientDocuments([]);
 
@@ -4058,6 +4210,20 @@ function AppointmentDetailsScreen({
     },
     [],
   );
+  const handleAdditionalDiscountToggle = useCallback(() => {
+    setIsAdditionalDiscountEnabled(previousValue => {
+      const nextValue = !previousValue;
+
+      if (!nextValue) {
+        additionalDiscountLimitAlertKeyRef.current = '';
+        setPatientAdditionalDiscountDraftMap({});
+        setPatientAdditionalDiscountMap({});
+      }
+
+      return nextValue;
+    });
+  }, [setPatientAdditionalDiscountMap]);
+
   const handleApplyPatientAdditionalDiscount = useCallback(
     patientId => {
       const normalizedPatientId = normalizeFormText(patientId);
@@ -4190,6 +4356,35 @@ function AppointmentDetailsScreen({
       return;
     }
 
+    const patientPaymentsMissingAmount = completePaymentPatientOptions.filter(
+      patient => {
+        const payment = completePayments.find(paymentEntry => {
+          const paymentOptionId = normalizeFormText(
+            paymentEntry?.patientOptionId,
+          );
+          const paymentPatientId = normalizeFormText(paymentEntry?.patientId);
+
+          return (
+            paymentOptionId === normalizeFormText(patient?.id) ||
+            paymentPatientId === normalizeFormText(patient?.patientId) ||
+            paymentPatientId === normalizeFormText(patient?.sourcePatientId)
+          );
+        });
+
+        return !payment || toCurrencyNumber(payment?.amount) <= 0;
+      },
+    );
+
+    if (patientPaymentsMissingAmount.length) {
+      showAppAlert(
+        'Patient-wise Payment Required',
+        `Please enter payment amount for: ${patientPaymentsMissingAmount
+          .map(patient => patient.name)
+          .join(', ')}.`,
+      );
+      return;
+    }
+
     const paymentsMissingPatient = completePayments.filter(
       payment =>
         toCurrencyNumber(payment?.amount) > 0 &&
@@ -4251,6 +4446,11 @@ function AppointmentDetailsScreen({
     setIsCompleteBookingScreenVisible(false);
     setIsLinkedAppointmentCalendarVisible(false);
     setIsLinkedAppointmentTimeSlotSelectVisible(false);
+
+    if (onBookingCompleted) {
+      await onBookingCompleted();
+      return;
+    }
 
     showAppAlert(
       'Booking Completed',
@@ -4346,7 +4546,7 @@ function AppointmentDetailsScreen({
     [],
   );
   const pickUploadDocumentsFromDevice = useCallback(
-    async ({fileNamePrefix, onDocumentsPicked, failureMessage}) => {
+    async ({fileNamePrefix, documentName, onDocumentsPicked, failureMessage}) => {
       if (!LocalDocumentPickerModule?.pickDocuments) {
         showAppAlert(
           'Upload Not Available',
@@ -4360,6 +4560,7 @@ function AppointmentDetailsScreen({
         const normalizedDocuments = normalizeUploadDocuments(
           pickedFiles,
           fileNamePrefix,
+          documentName,
         );
 
         if (!normalizedDocuments.length) {
@@ -4385,7 +4586,7 @@ function AppointmentDetailsScreen({
     [showAppAlert],
   );
   const captureUploadPhoto = useCallback(
-    async ({fileNamePrefix, documentLabel, onDocumentsPicked}) => {
+    async ({fileNamePrefix, documentLabel, documentName, onDocumentsPicked}) => {
       if (!LocalGeoCameraModule?.captureStampedPhoto) {
         showAppAlert(
           'Camera Not Available',
@@ -4410,7 +4611,7 @@ function AppointmentDetailsScreen({
         onDocumentsPicked([
           {
             uri: capturedPhoto.uri,
-            name: capturedPhoto.name || `${fileNamePrefix}-${Date.now()}.jpg`,
+            name: normalizeFormText(documentName || documentLabel) || capturedPhoto.name || `${fileNamePrefix}-${Date.now()}.jpg`,
             type: capturedPhoto.type || 'image/jpeg',
           },
         ]);
@@ -4449,12 +4650,14 @@ function AppointmentDetailsScreen({
           captureUploadPhoto({
             fileNamePrefix: 'upi-payment-proof',
             documentLabel: 'UPI Payment Proof',
+            documentName: 'UPI Payment Proof',
             onDocumentsPicked: documents =>
               appendCompletePaymentProofDocuments(paymentId, documents),
           }),
         onGalleryPress: () =>
           pickUploadDocumentsFromDevice({
             fileNamePrefix: 'upi-payment-proof',
+            documentName: 'UPI Payment Proof',
             onDocumentsPicked: documents =>
               appendCompletePaymentProofDocuments(paymentId, documents),
             failureMessage:
@@ -5307,10 +5510,12 @@ function AppointmentDetailsScreen({
           completeNetAmount={completeNetAmount}
           localBillingSummary={localBillingSummary}
           isAdditionalDiscountEnabled={isAdditionalDiscountEnabled}
+          onAdditionalDiscountToggle={handleAdditionalDiscountToggle}
           patientAdditionalDiscountRows={patientAdditionalDiscountUiRows}
           completePayments={completePayments}
           completePaymentModeOptions={COMPLETE_PAYMENT_MODE_OPTIONS}
-          paymentPatientOptions={completeBookingPatientOptions}
+          paymentPatientOptions={completePaymentPatientOptions}
+          isPatientWisePaymentRequired={completePaymentPatientOptions.length > 0}
           pendingPaymentAmount={pendingPaymentAmount}
           extraPaymentAmount={extraPaymentAmount}
           pendingPaymentPatientId={pendingPaymentPatientId}
@@ -5357,7 +5562,7 @@ function AppointmentDetailsScreen({
             handleOpenLocation={handleOpenLocation}
             handleAddPatientPress={handleAddPatientPress}
             openCancelBookingModal={openCancelBookingModal}
-            onBookingAction={onBookingAction}
+            onBookingAction={handleBookingControlAction}
           />
 
           <PatientSelectorSection

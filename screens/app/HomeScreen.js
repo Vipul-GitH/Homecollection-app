@@ -145,6 +145,7 @@ function HomeScreen({
   loadingOverlayMessage,
   onLogout,
   onBookingAction,
+  onBookingCompleted,
   onOpenAddTest,
   onOpenSampleCollection,
   onRemovePatientSelectedTest,
@@ -430,6 +431,7 @@ function HomeScreen({
             styles={styles}
             isSmallPhone={isSmallPhone}
             onBookingAction={onBookingAction}
+            onBookingCompleted={onBookingCompleted}
             bookingActionLoading={bookingActionLoading}
             isAddingPatient={isAddingPatient}
             isUpdatingPatient={isUpdatingPatient}

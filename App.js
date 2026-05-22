@@ -113,6 +113,7 @@ function App() {
           loadingOverlayMessage={loadingOverlayMessage}
           onLogout={() => actions.setShowLogoutModal(true)}
           onBookingAction={actions.handleBookingAction}
+          onBookingCompleted={actions.handleBookingCompletedNavigation}
           onOpenAddTest={actions.handleOpenAddTest}
           onOpenSampleCollection={actions.handleOpenSampleCollection}
           onAddPatient={actions.handleAddPatient}

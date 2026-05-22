@@ -21,10 +21,12 @@ function PaymentSummarySection({
   completeNetAmount,
   localBillingSummary,
   isAdditionalDiscountEnabled,
+  onAdditionalDiscountToggle,
   patientAdditionalDiscountRows = [],
   completePayments,
   completePaymentModeOptions,
   paymentPatientOptions = [],
+  isPatientWisePaymentRequired = false,
   pendingPaymentAmount = 0,
   extraPaymentAmount = 0,
   pendingPaymentPatientId = '',
@@ -134,6 +136,27 @@ function PaymentSummarySection({
                       Rs. {Number(patientRow.finalAmount || 0).toFixed(2)}
                     </Text>
                   </View>
+                {Number(
+                  patientRow.effectiveAdditional ||
+                    patientRow.backendAdditionalDiscount ||
+                    patientRow.seededAdditionalDiscount ||
+                    0,
+                ) > 0 ? (
+                  <View style={styles.paymentSummaryRow}>
+                    <Text style={styles.paymentSummaryRowLabel}>
+                      {patientRow.patientName} Additional Discount
+                    </Text>
+                    <Text style={styles.paymentSummaryRowValue}>
+                      - Rs.{' '}
+                      {Number(
+                        patientRow.effectiveAdditional ||
+                          patientRow.backendAdditionalDiscount ||
+                          patientRow.seededAdditionalDiscount ||
+                          0,
+                      ).toFixed(2)}
+                    </Text>
+                  </View>
+                ) : null}
                 {Number(patientRow.dueAmount || 0) > 0 ? (
                   <View style={styles.paymentSummaryRow}>
                     <Text style={styles.paymentSummaryRowLabel}>
@@ -159,19 +182,37 @@ function PaymentSummarySection({
             </View>
           </View>
         ) : null}
-        <View style={styles.paymentSummaryDiscountAction}>
-          {isAdditionalDiscountEnabled && patientAdditionalDiscountRows.length ? (
-            <>
-              <View style={styles.sectionTitleRow}>
-                <Ionicons
-                  name="pricetag-outline"
-                  size={15}
-                  style={styles.completeSecondaryButtonIcon}
-                />
+        {patientAdditionalDiscountRows.length ? (
+          <View style={styles.paymentSummaryDiscountAction}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.completeAdditionalDiscountToggle}
+              onPress={onAdditionalDiscountToggle}>
+              <View
+                style={[
+                  styles.completeAdditionalDiscountCheckbox,
+                  isAdditionalDiscountEnabled &&
+                    styles.completeAdditionalDiscountCheckboxActive,
+                ]}>
+                {isAdditionalDiscountEnabled ? (
+                  <Ionicons
+                    name="checkmark"
+                    size={16}
+                    style={styles.completeAdditionalDiscountCheckboxIcon}
+                  />
+                ) : null}
+              </View>
+              <View style={styles.completeAdditionalDiscountToggleTextWrap}>
                 <Text style={styles.paymentSummarySubTitle}>
                   Patient-wise Additional Discount
                 </Text>
+                <Text style={styles.completeAdditionalDiscountToggleHint}>
+                  Check to enter additional discount.
+                </Text>
               </View>
+            </TouchableOpacity>
+            {isAdditionalDiscountEnabled ? (
+            <>
               {patientAdditionalDiscountRows.map(patientDiscount => (
                 <View
                   key={`additional-${patientDiscount.patientId}`}
@@ -179,9 +220,6 @@ function PaymentSummarySection({
                   <View style={styles.paymentSummaryRow}>
                     <Text style={styles.paymentSummaryRowLabel}>
                       {patientDiscount.patientName}
-                    </Text>
-                    <Text style={styles.paymentSummaryRowValue}>
-                      Max Rs. {patientDiscount.maxAdditionalAllowed.toFixed(2)}
                     </Text>
                   </View>
                   <View
@@ -222,14 +260,29 @@ function PaymentSummarySection({
                 </View>
               ))}
             </>
-          ) : null}
-        </View>
+            ) : null}
+          </View>
+        ) : null}
         {shouldShowPaymentsCollected ? (
           <View style={styles.completePaymentsCollectedCard}>
             <Text style={styles.paymentSummarySubTitle}>Payments Collected</Text>
             {completePayments.map((payment, index) => (
               <View key={payment.id} style={styles.completePaymentEntry}>
-                {patientOptions.length ? (
+                {isPatientWisePaymentRequired ? (
+                  <View style={styles.completePaymentPatientSection}>
+                    <Text style={styles.addPatientFieldLabel}>Patient</Text>
+                    <View style={styles.completePaymentFixedPatientCard}>
+                      <Ionicons
+                        name="person-circle-outline"
+                        size={17}
+                        style={styles.completePaymentFixedPatientIcon}
+                      />
+                      <Text style={styles.completePaymentFixedPatientName}>
+                        {payment.patientName || `Patient ${index + 1}`}
+                      </Text>
+                    </View>
+                  </View>
+                ) : patientOptions.length ? (
                   <View style={styles.completePaymentPatientSection}>
                     <Text style={styles.addPatientFieldLabel}>Patient</Text>
                     <View style={styles.completeBookingPatientChipRow}>
@@ -375,32 +428,36 @@ function PaymentSummarySection({
                     ) : null}
                   </View>
                 ) : null}
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={styles.completePaymentRemoveButton}
-                  onPress={() => handleRemoveCompletePayment(payment.id)}>
-                  <Text style={styles.completePaymentRemoveButtonText}>
-                    Remove
-                  </Text>
-                </TouchableOpacity>
+                {!isPatientWisePaymentRequired ? (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.completePaymentRemoveButton}
+                    onPress={() => handleRemoveCompletePayment(payment.id)}>
+                    <Text style={styles.completePaymentRemoveButtonText}>
+                      Remove
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
                 {index < completePayments.length - 1 ? (
                   <View style={styles.completePaymentEntryDivider} />
                 ) : null}
               </View>
             ))}
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={styles.completePaymentAddButton}
-              onPress={handleAddCompletePayment}>
-              <Ionicons
-                name="add"
-                size={14}
-                style={styles.completePaymentAddButtonIcon}
-              />
-              <Text style={styles.completePaymentAddButtonText}>
-                Add Payment
-              </Text>
-            </TouchableOpacity>
+            {!isPatientWisePaymentRequired ? (
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={styles.completePaymentAddButton}
+                onPress={handleAddCompletePayment}>
+                <Ionicons
+                  name="add"
+                  size={14}
+                  style={styles.completePaymentAddButtonIcon}
+                />
+                <Text style={styles.completePaymentAddButtonText}>
+                  Add Payment
+                </Text>
+              </TouchableOpacity>
+            ) : null}
             {shouldCollectPendingPaymentPatient ? (
               <View style={styles.completePendingPaymentCard}>
                 <View style={styles.completePendingPaymentHeader}>

@@ -3509,6 +3509,16 @@ const appStyles = StyleSheet.create({
   patientEditButtonIcon: {
     color: '#FFFFFF',
   },
+  patientCancelIconButton: {
+    backgroundColor: 'rgba(220,38,38,0.92)',
+    borderColor: 'rgba(254,226,226,0.7)',
+  },
+  patientCancelIconButtonDisabled: {
+    opacity: 0.65,
+  },
+  patientCancelIconButtonIcon: {
+    color: '#FFFFFF',
+  },
   patientPanelText: {
     fontSize: 14,
     fontWeight: '900',
@@ -3568,10 +3578,10 @@ const appStyles = StyleSheet.create({
     gap: 7,
   },
   patientCceStatusLabel: {
-    fontSize: 12,
-    lineHeight: 19,
+    fontSize: 14,
+    lineHeight: 21,
     fontWeight: '900',
-    color: '#9A3412',
+    color: '#D97706',
     textTransform: 'uppercase',
   },
   patientCceStatusValue: {
@@ -3583,10 +3593,10 @@ const appStyles = StyleSheet.create({
     backgroundColor: '#FFEDD5',
     borderWidth: 1,
     borderColor: '#FDBA74',
-    fontSize: 15,
-    lineHeight: 19,
+    fontSize: 17,
+    lineHeight: 22,
     fontWeight: '900',
-    color: '#7C2D12',
+    color: '#B45309',
     flexShrink: 1,
     flexWrap: 'wrap',
   },
@@ -3897,19 +3907,19 @@ const appStyles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#F8FAFF',
+    backgroundColor: '#FFF7ED',
     borderWidth: 1,
-    borderColor: '#D9E4F6',
+    borderColor: '#FED7AA',
   },
   patientTestBookingStatusOptionActive: {
-    backgroundColor: '#E7EFFF',
-    borderColor: BRAND.primary,
+    backgroundColor: '#FFEDD5',
+    borderColor: '#FDBA74',
   },
   patientTestBookingStatusIcon: {
-    color: BRAND.textMuted,
+    color: '#D97706',
   },
   patientTestBookingStatusIconActive: {
-    color: BRAND.primaryStrong,
+    color: '#B45309',
   },
   patientTestBookingStatusText: {
     flex: 1,
@@ -3918,13 +3928,13 @@ const appStyles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 19,
     fontWeight: '800',
-    color: BRAND.textMuted,
+    color: '#D97706',
   },
   patientTestBookingStatusTextActive: {
-    color: BRAND.primaryStrong,
+    color: '#B45309',
   },
   patientTestBookingStatusChevron: {
-    color: BRAND.primaryStrong,
+    color: '#B45309',
   },
   patientTestBookingStatusOptionList: {
     gap: 8,
@@ -5468,6 +5478,46 @@ const appStyles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  completeAdditionalDiscountToggle: {
+    minHeight: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    borderRadius: 12,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  completeAdditionalDiscountCheckbox: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+  },
+  completeAdditionalDiscountCheckboxActive: {
+    backgroundColor: BRAND.primary,
+    borderColor: BRAND.primaryStrong,
+  },
+  completeAdditionalDiscountCheckboxIcon: {
+    color: '#FFFFFF',
+  },
+  completeAdditionalDiscountToggleTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  completeAdditionalDiscountToggleHint: {
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+    color: '#64748B',
+  },
   completeAdditionalDiscountApplyButton: {
     minWidth: 72,
     minHeight: 48,
@@ -5497,6 +5547,29 @@ const appStyles = StyleSheet.create({
   },
   completePaymentPatientSection: {
     gap: 7,
+  },
+  completePaymentFixedPatientCard: {
+    minHeight: 38,
+    borderRadius: 10,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  completePaymentFixedPatientIcon: {
+    color: '#1D4ED8',
+  },
+  completePaymentFixedPatientName: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '900',
+    color: '#1E3A8A',
   },
   completePaymentModeRow: {
     flexDirection: 'row',

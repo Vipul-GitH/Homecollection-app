@@ -282,12 +282,12 @@ const formatStoredLocationTimestamp = value => {
   });
 };
 
-const normalizePickedDocuments = (pickedFiles, fileNamePrefix) =>
+const normalizePickedDocuments = (pickedFiles, fileNamePrefix, documentName = '') =>
   (Array.isArray(pickedFiles) ? pickedFiles : [])
     .filter(file => file?.uri)
     .map((file, index) => ({
       uri: file.uri,
-      name: file.name || `${fileNamePrefix}-${Date.now()}-${index}`,
+      name: toStableValue(documentName) || file.name || `${fileNamePrefix}-${Date.now()}-${index}`,
       type: file.type || getMimeTypeFromFileName(file.name),
     }));
 
@@ -351,17 +351,41 @@ const getDocumentDisplayLabel = (document, fallbackLabel) => {
   );
 };
 
+const normalizeDocumentIdentityValue = value => {
+  const rawValue = toStableValue(value).toLowerCase();
+
+  if (!rawValue) {
+    return '';
+  }
+
+  const withoutQuery = rawValue.split('?')[0].split('#')[0];
+  const withoutProtocol = withoutQuery.replace(/^https?:\/\/[^/]+\/?/i, '');
+  return withoutProtocol
+    .replace(/^\/+/, '')
+    .replace(/^static\/uploads\//, '')
+    .replace(/^uploads\//, '');
+};
+
 const getDocumentIdentity = document => {
-  const uri = toStableValue(
+  const primaryValue = toStableValue(
     typeof document === 'string'
       ? document
       : document?.uri ||
           document?.url ||
           document?.path ||
+          document?.file ||
+          document?.document_url ||
           document?.imageSource?.uri ||
           document?.id,
-  ).toLowerCase();
-  return uri;
+  );
+  const normalizedPrimaryValue = normalizeDocumentIdentityValue(primaryValue);
+
+  if (normalizedPrimaryValue) {
+    return normalizedPrimaryValue;
+  }
+
+  const fallbackLabel = getDocumentDisplayLabel(document, '');
+  return normalizeDocumentIdentityValue(fallbackLabel);
 };
 
 const dedupeDocumentsByIdentity = documents => {
@@ -390,10 +414,7 @@ const buildApiDocumentItems = (items, labelPrefix) =>
 
       return {
         id: `${labelPrefix}-${uri}-${index}`,
-        label:
-          labelPrefix === 'Prescription'
-            ? 'Prescription Attached'
-            : getDocumentDisplayLabel(item, `${labelPrefix} ${index + 1}`),
+        label: labelPrefix,
         documentType: labelPrefix,
         uri,
       };
@@ -414,7 +435,7 @@ const buildTypedPatientDocumentItems = (items, type, labelPrefix) =>
 
       return {
         id: `${type}-${uri}-${index}`,
-        label: getDocumentDisplayLabel(item, `${labelPrefix} ${index + 1}`),
+        label: labelPrefix,
         documentType: labelPrefix,
         uri,
       };
@@ -424,6 +445,7 @@ const buildTypedPatientDocumentItems = (items, type, labelPrefix) =>
 function PatientDetailCard({
   patient,
   styles,
+  children,
   onCancelBooking,
   onEditPatient,
   onPrimaryPanelCompanyPress,
@@ -946,7 +968,13 @@ function PatientDetailCard({
     [onPaymentProofDocumentsChange, patient],
   );
   const pickDocumentsFromDevice = useCallback(
-    async ({fileNamePrefix, onDocumentsPicked, emptyMessage, failureMessage}) => {
+    async ({
+      fileNamePrefix,
+      documentName,
+      onDocumentsPicked,
+      emptyMessage,
+      failureMessage,
+    }) => {
       if (!LocalDocumentPickerModule?.pickDocuments) {
         showPatientAlert(
           'Upload Not Available',
@@ -960,6 +988,7 @@ function PatientDetailCard({
         const pickedDocuments = normalizePickedDocuments(
           pickedFiles,
           fileNamePrefix,
+          documentName,
         );
 
         if (!pickedDocuments.length) {
@@ -1107,7 +1136,7 @@ function PatientDetailCard({
         onDocumentsPicked([
           {
             uri: capturedPhoto.uri,
-            name: capturedPhoto.name || `${fileNamePrefix}-${Date.now()}.jpg`,
+            name: toStableValue(documentLabel) || capturedPhoto.name || `${fileNamePrefix}-${Date.now()}.jpg`,
             type: capturedPhoto.type || 'image/jpeg',
           },
         ]);
@@ -1152,6 +1181,7 @@ function PatientDetailCard({
       onGalleryPress: () =>
         pickDocumentsFromDevice({
           fileNamePrefix: 'prescription',
+          documentName: 'Prescription',
           onDocumentsPicked: appendPaymentProofDocuments,
           failureMessage: 'Unable to select documents right now. Please try again.',
         }),
@@ -1182,6 +1212,7 @@ function PatientDetailCard({
   const handleUploadCghsDocuments = async sectionKey => {
     pickDocumentsFromDevice({
       fileNamePrefix: `cghs-document-${sectionKey}`,
+      documentName: sectionKey === 'patientPhotos' ? 'Patient Photo' : 'CGHS Card',
       onDocumentsPicked: pickedDocuments =>
         appendCghsDocuments(sectionKey, pickedDocuments),
       failureMessage: 'Unable to select documents right now. Please try again.',
@@ -1358,6 +1389,24 @@ function PatientDetailCard({
                   />
                 </TouchableOpacity>
               ) : null}
+              {onCancelBooking ? (
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={[
+                    styles.patientEditButton,
+                    styles.patientCancelIconButton,
+                    isCancelBookingDisabled && styles.patientCancelIconButtonDisabled,
+                  ]}
+                  onPress={() => onCancelBooking(patient)}
+                  disabled={isCancelBookingDisabled}
+                  accessibilityLabel={cancelBookingLabel}>
+                  <Ionicons
+                    name="close-circle-outline"
+                    size={18}
+                    style={styles.patientCancelIconButtonIcon}
+                  />
+                </TouchableOpacity>
+              ) : null}
             </View>
             <View style={styles.patientBadgeStack}>
               {patientStatusLabel ? (
@@ -1388,34 +1437,13 @@ function PatientDetailCard({
             </View>
           </View>
         </View>
-      {onCancelBooking || sampleCollected ? (
+      {sampleCollected ? (
         <View style={styles.patientTopActionRow}>
-          {sampleCollected ? (
-            <View style={styles.patientCollectedInlineBadge}>
-              <Text style={styles.patientCollectedInlineBadgeText}>
-                Sample Collected
-              </Text>
-            </View>
-          ) : null}
-          {onCancelBooking ? (
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={[
-                styles.patientCancelBookingButton,
-                isCancelBookingDisabled && styles.patientCancelBookingButtonDisabled,
-              ]}
-              onPress={() => onCancelBooking(patient)}
-              disabled={isCancelBookingDisabled}>
-              <Ionicons
-                name="close-circle-outline"
-                size={15}
-                style={styles.patientCancelBookingButtonIcon}
-              />
-              <Text style={styles.patientCancelBookingButtonText}>
-                {cancelBookingLabel}
-              </Text>
-            </TouchableOpacity>
-          ) : null}
+          <View style={styles.patientCollectedInlineBadge}>
+            <Text style={styles.patientCollectedInlineBadgeText}>
+              Sample Collected
+            </Text>
+          </View>
         </View>
       ) : null}
       <View style={styles.patientDetailMetaStrip}>
@@ -1678,6 +1706,7 @@ function PatientDetailCard({
           </Text>
         </View>
       ) : null}
+      {children}
       {shouldShowPaymentProofUpload ? (
         <View style={styles.patientPaymentProofSection}>
           {renderConditionalFieldLabel('Prescription')}

@@ -97,7 +97,7 @@ function PatientSelectorSection({
         <View style={styles.patientSelectorSelectedBadge}>
           <Text style={styles.patientSelectorSelectedBadgeText}>
             {selectedPatientItem
-              ? `Patient ${selectedPatientItem.index + 1}`
+              ? `Patient ${selectedPatientItem.index + 1} / ${patientCount}`
               : 'No Patient'}
           </Text>
         </View>

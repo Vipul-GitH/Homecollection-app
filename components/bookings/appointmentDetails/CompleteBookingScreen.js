@@ -43,10 +43,12 @@ function CompleteBookingScreen({
   completeNetAmount,
   localBillingSummary,
   isAdditionalDiscountEnabled,
+  onAdditionalDiscountToggle,
   patientAdditionalDiscountRows = [],
   completePayments,
   completePaymentModeOptions,
   paymentPatientOptions = [],
+  isPatientWisePaymentRequired = false,
   pendingPaymentAmount = 0,
   extraPaymentAmount = 0,
   pendingPaymentPatientId = '',
@@ -138,10 +140,12 @@ function CompleteBookingScreen({
           completeNetAmount={completeNetAmount}
           localBillingSummary={localBillingSummary}
           isAdditionalDiscountEnabled={isAdditionalDiscountEnabled}
+          onAdditionalDiscountToggle={onAdditionalDiscountToggle}
           patientAdditionalDiscountRows={patientAdditionalDiscountRows}
           completePayments={completePayments}
           completePaymentModeOptions={completePaymentModeOptions}
           paymentPatientOptions={paymentPatientOptions}
+          isPatientWisePaymentRequired={isPatientWisePaymentRequired}
           pendingPaymentAmount={pendingPaymentAmount}
           extraPaymentAmount={extraPaymentAmount}
           pendingPaymentPatientId={pendingPaymentPatientId}

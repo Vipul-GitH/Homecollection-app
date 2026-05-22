@@ -448,18 +448,6 @@ const buildAppointmentDetailStateFromBooking = booking => {
     }
 
     state.patientSelectedTestsMap[patientId] = buildSeededPatientTests(patient);
-    const patientAdditionalDiscount = toCurrencyNumber(
-      patient?.additionalDiscountAmount ||
-        patient?.additional_discount_amount ||
-        patient?.ad_dis ||
-        patient?.Ad_Dis,
-    );
-
-    if (patientAdditionalDiscount > 0) {
-      state.patientAdditionalDiscountMap[patientId] = String(
-        patientAdditionalDiscount,
-      );
-    }
   });
 
   return state;
@@ -485,12 +473,52 @@ const stripPrecomputedSampleCollectionMap = sampleCollectionMap => {
 };
 
 const getCollectedTubeNames = (patient, sampleCollection) => {
+  const getTubeName = tube =>
+    typeof tube === 'string'
+      ? toStableValue(tube)
+      : toStableValue(
+          tube?.tubeName ||
+            tube?.tube_name ||
+            tube?.name ||
+            tube?.specimenName ||
+            tube?.specimen_name ||
+            tube?.label ||
+            tube?.value,
+        );
+  const mergeTubeNames = tubeList => {
+    const seenTubeNames = new Set();
+    const mergedTubeNames = [];
+
+    tubeList.forEach(tube => {
+      const normalizedTubeName = getTubeName(tube);
+      const tubeKey = normalizedTubeName.toLowerCase();
+
+      if (!normalizedTubeName || seenTubeNames.has(tubeKey)) {
+        return;
+      }
+
+      seenTubeNames.add(tubeKey);
+      mergedTubeNames.push(normalizedTubeName);
+    });
+
+    return mergedTubeNames;
+  };
+  const appendAdditionalTubeNames = tubeList =>
+    [
+      ...tubeList,
+      ...selectedAdditionalTubes.map(getTubeName).filter(Boolean),
+    ];
   const selectedTubes = Array.isArray(sampleCollection?.selectedTubes)
     ? sampleCollection.selectedTubes
     : [];
+  const selectedAdditionalTubes = Array.isArray(
+    sampleCollection?.selectedAdditionalTubes,
+  )
+    ? sampleCollection.selectedAdditionalTubes
+    : [];
 
   if (selectedTubes.length) {
-    return selectedTubes;
+    return appendAdditionalTubeNames(mergeTubeNames(selectedTubes));
   }
 
   const tubeSummaryNames = (
@@ -503,16 +531,15 @@ const getCollectedTubeNames = (patient, sampleCollection) => {
     .filter(Boolean);
 
   if (tubeSummaryNames.length) {
-    return tubeSummaryNames;
+    return appendAdditionalTubeNames(mergeTubeNames(tubeSummaryNames));
   }
 
-  return (Array.isArray(patient?.tubes) ? patient.tubes : [])
-    .map(tube =>
-      typeof tube === 'string'
-        ? toStableValue(tube)
-        : toStableValue(tube?.tubeName || tube?.name || tube?.specimenName),
-    )
-    .filter(Boolean);
+  return appendAdditionalTubeNames(
+    mergeTubeNames(
+      (Array.isArray(patient?.tubes) ? patient.tubes : [])
+        .map(getTubeName),
+    ),
+  );
 };
 
 const buildCompletedBookingForHandover = (booking, appointmentDetailState) => {
@@ -1989,6 +2016,38 @@ export const useAppShellController = () => {
     [appointmentDetailState, bookings, selectedBooking],
   );
 
+  const handleBookingCompletedNavigation = useCallback(async () => {
+    const finishScreenTransition = beginScreenTransition(
+      'Opening Completed Appointments',
+      'Refreshing completed bookings...',
+      420,
+    );
+
+    setSelectedBooking(null);
+    setSelectedBookingScreen('details');
+    setSelectedSamplePatient(null);
+    setSelectedSamplePanelCompany(null);
+    setAppointmentDetailState(buildEmptyAppointmentDetailState());
+    setAppointmentsViewMode('completed');
+    setActiveTab('appointments');
+
+    if (!session.accessToken) {
+      bookings.setCompletedAppointmentsError(
+        bookings.completedAppointments.length
+          ? ''
+          : 'A valid login token is required before opening completed appointments.',
+      );
+      finishScreenTransition();
+      return;
+    }
+
+    try {
+      await bookings.fetchCompletedAppointments();
+    } finally {
+      finishScreenTransition();
+    }
+  }, [beginScreenTransition, bookings, session.accessToken]);
+
   const handleAddPatient = useCallback(
     async patientPayload => {
       if (!selectedBooking) {
@@ -2223,6 +2282,7 @@ export const useAppShellController = () => {
       handleAssignedCardPress,
       handleAssignedViewDetails,
       handleBookingAction,
+      handleBookingCompletedNavigation,
       handleCancelPatient,
       handleCompletedCardPress,
       handleCollectSample,

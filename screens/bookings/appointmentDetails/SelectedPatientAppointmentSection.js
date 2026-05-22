@@ -223,51 +223,52 @@ function SelectedPatientAppointmentSection({
             ? 'Cancelling...'
             : 'Cancel Patient'
         }
-      />
-      <PatientTestsAccordion
-        styles={styles}
-        patient={patient}
-        tests={displayTests}
-        subtotal={testsSubtotal}
-        isNarrow={isSmallPhone}
-        onRemoveSelectedTest={
-          canUseThisPatientTestActions
-            ? handleRemoveSelectedTestWithSampleReset
-            : undefined
-        }
-        panelCompanies={companyChips}
-        canOpenPanelCompanyTests={canUseThisPatientTestActions}
-        onSelectPanelCompany={
-          canUseThisPatientTestActions ? openPanelCompanyTests : undefined
-        }
-        onRemovePanelCompany={
-          canUseThisPatientTestActions ? handleRemovePatientPanelCompany : undefined
-        }
-        onAddPanelCompany={
-          canUseThisPatientTestActions ? handlePatientAddPanelCompany : undefined
-        }
-        addPanelCompanyLabel={
-          String(addingTestPatientId) === String(getPatientMutationId(patient))
-            ? 'Loading...'
-            : 'Add Panel'
-        }
-        isAddPanelCompanyDisabled={Boolean(addingTestPatientId)}
-        testBookingStatusValue={testBookingStatus}
-        onTestBookingStatusChange={
-          canUseThisPatientActions ? handleTestBookingStatusChange : undefined
-        }
-        manualSlipDocuments={
-          patientId
-            ? patientManualSlipDocumentsMap[patientId] || emptyUploadDocuments
-            : emptyUploadDocuments
-        }
-        onManualSlipDocumentsChange={
-          canUseThisPatientActions
-            ? handlePatientManualSlipDocumentsChange
-            : undefined
-        }
-        showAlert={showAppAlert}
-      />
+      >
+        <PatientTestsAccordion
+          styles={styles}
+          patient={patient}
+          tests={displayTests}
+          subtotal={testsSubtotal}
+          isNarrow={isSmallPhone}
+          onRemoveSelectedTest={
+            canUseThisPatientTestActions
+              ? handleRemoveSelectedTestWithSampleReset
+              : undefined
+          }
+          panelCompanies={companyChips}
+          canOpenPanelCompanyTests={canUseThisPatientTestActions}
+          onSelectPanelCompany={
+            canUseThisPatientTestActions ? openPanelCompanyTests : undefined
+          }
+          onRemovePanelCompany={
+            canUseThisPatientTestActions ? handleRemovePatientPanelCompany : undefined
+          }
+          onAddPanelCompany={
+            canUseThisPatientTestActions ? handlePatientAddPanelCompany : undefined
+          }
+          addPanelCompanyLabel={
+            String(addingTestPatientId) === String(getPatientMutationId(patient))
+              ? 'Loading...'
+              : 'Add Panel'
+          }
+          isAddPanelCompanyDisabled={Boolean(addingTestPatientId)}
+          testBookingStatusValue={testBookingStatus}
+          onTestBookingStatusChange={
+            canUseThisPatientActions ? handleTestBookingStatusChange : undefined
+          }
+          manualSlipDocuments={
+            patientId
+              ? patientManualSlipDocumentsMap[patientId] || emptyUploadDocuments
+              : emptyUploadDocuments
+          }
+          onManualSlipDocumentsChange={
+            canUseThisPatientActions
+              ? handlePatientManualSlipDocumentsChange
+              : undefined
+          }
+          showAlert={showAppAlert}
+        />
+      </PatientDetailCard>
       {onOpenSampleCollection && shouldShowSampleCollectionForPatient ? (
         <PatientSampleCollectionSection
           styles={styles}

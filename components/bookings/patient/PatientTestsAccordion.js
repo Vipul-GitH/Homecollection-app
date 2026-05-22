@@ -492,44 +492,6 @@ function PatientTestsAccordion({
         </View>
       </View>
 
-      <View style={styles.patientTestsHeaderActions}>
-        <View style={styles.patientTestBookingStatusControl}>
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={[
-                styles.patientTestBookingStatusOption,
-                styles.patientTestBookingStatusOptionActive,
-              ]}
-              disabled={typeof onTestBookingStatusChange !== 'function'}
-              onPress={() =>
-                setIsTestBookingStatusExpanded(previousValue => !previousValue)
-              }>
-              <Ionicons
-                name={selectedTestBookingStatus.icon}
-                size={16}
-                style={[
-                  styles.patientTestBookingStatusIcon,
-                  styles.patientTestBookingStatusIconActive,
-                ]}
-              />
-              <Text
-                style={[
-                  styles.patientTestBookingStatusText,
-                  styles.patientTestBookingStatusTextActive,
-                ]}>
-                {selectedTestBookingStatus.label}
-              </Text>
-              <Ionicons
-                name={
-                  isTestBookingStatusExpanded ? 'chevron-up' : 'chevron-down'
-                }
-                size={16}
-                style={styles.patientTestBookingStatusChevron}
-              />
-            </TouchableOpacity>
-        </View>
-      </View>
-
       {panelGroups.length ? (
         <View style={styles.patientTestsPanelList}>
           {panelGroups.map(group => {
@@ -676,6 +638,42 @@ function PatientTestsAccordion({
       ) : (
         <Text style={styles.patientTestsEmptyText}>No tests available</Text>
       )}
+
+      <View style={styles.patientTestsHeaderActions}>
+        <View style={styles.patientTestBookingStatusControl}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={[
+              styles.patientTestBookingStatusOption,
+              styles.patientTestBookingStatusOptionActive,
+            ]}
+            disabled={typeof onTestBookingStatusChange !== 'function'}
+            onPress={() =>
+              setIsTestBookingStatusExpanded(previousValue => !previousValue)
+            }>
+            <Ionicons
+              name={selectedTestBookingStatus.icon}
+              size={16}
+              style={[
+                styles.patientTestBookingStatusIcon,
+                styles.patientTestBookingStatusIconActive,
+              ]}
+            />
+            <Text
+              style={[
+                styles.patientTestBookingStatusText,
+                styles.patientTestBookingStatusTextActive,
+              ]}>
+              {selectedTestBookingStatus.label}
+            </Text>
+            <Ionicons
+              name={isTestBookingStatusExpanded ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              style={styles.patientTestBookingStatusChevron}
+            />
+          </TouchableOpacity>
+        </View>
+      </View>
 
       {shouldShowManualSlipUpload ? (
         <View style={styles.patientPaymentProofSection}>

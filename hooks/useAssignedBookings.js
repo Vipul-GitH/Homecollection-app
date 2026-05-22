@@ -74,9 +74,9 @@ const buildLocalPatientFromPayload = ({
 
   return {
     ...existingPatient,
-    id: toDisplayValue(patientId) || existingPatient?.id,
+    id: existingPatient?.id || toDisplayValue(patientId),
     bookingPatientId:
-      toDisplayValue(patientId) || existingPatient?.bookingPatientId || '',
+      existingPatient?.bookingPatientId || toDisplayValue(patientId) || '',
     patientId:
       toDisplayValue(patient?.existing_patient_id || linkedPatient?.id) ||
       existingPatient?.patientId ||
@@ -170,6 +170,25 @@ const getPatientMutationId = patient =>
       patient?.id,
   );
 
+const doesPatientMatchId = (patient, patientId) => {
+  const normalizedPatientId = toDisplayValue(patientId);
+
+  if (!normalizedPatientId) {
+    return false;
+  }
+
+  return [
+    patient?.bookingPatientId,
+    patient?.booking_patient_id,
+    patient?.patientId,
+    patient?.patient_id,
+    patient?.id,
+  ]
+    .map(toDisplayValue)
+    .filter(Boolean)
+    .includes(normalizedPatientId);
+};
+
 const resolveBookingRoutingMeta = booking => {
   const appointmentId =
     booking?.appointmentId || booking?.appointment_id || '';
@@ -247,22 +266,30 @@ const buildPendingHandoverRowsFromBooking = (bookingDetail, loggedInUser) => {
         return [];
       }
 
+      const tubeOccurrenceMap = new Map();
+
       return (Array.isArray(patient?.tubes) ? patient.tubes : [])
         .map(toHandoverTubeName)
         .filter(Boolean)
-        .map(tubeName => ({
-          row_key: `${userKey || 'user'}|${bookingId}|${rowScopeId}|${bookingPatientId}|${tubeName.toLowerCase()}`,
-          user_key: userKey,
-          user_name: userKey,
-          booking_id: bookingId,
-          booking_code: bookingCode,
-          appointment_id: appointmentId,
-          patient_id: patientId,
-          booking_patient_id: bookingPatientId,
-          patient_name: patientName,
-          tube_name: tubeName,
-          completed_at: completedAt,
-        }));
+        .map(tubeName => {
+          const tubeKey = tubeName.toLowerCase();
+          const occurrenceNumber = (tubeOccurrenceMap.get(tubeKey) || 0) + 1;
+          tubeOccurrenceMap.set(tubeKey, occurrenceNumber);
+
+          return {
+            row_key: `${userKey || 'user'}|${bookingId}|${rowScopeId}|${bookingPatientId}|${tubeKey}|${occurrenceNumber}`,
+            user_key: userKey,
+            user_name: userKey,
+            booking_id: bookingId,
+            booking_code: bookingCode,
+            appointment_id: appointmentId,
+            patient_id: patientId,
+            booking_patient_id: bookingPatientId,
+            patient_name: patientName,
+            tube_name: tubeName,
+            completed_at: completedAt,
+          };
+        });
     },
   );
 };
@@ -1134,10 +1161,33 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
           accessToken,
           booking,
         });
-        await persistUpdatedBookingDetail({bookingId, updatedBookingDetail});
+        const patchedBookingDetail = {
+          ...updatedBookingDetail,
+          patients: (Array.isArray(updatedBookingDetail?.patients)
+            ? updatedBookingDetail.patients
+            : []
+          ).map(previousPatient =>
+            doesPatientMatchId(previousPatient, patientId)
+              ? buildLocalPatientFromPayload({
+                  patient,
+                  existingPatient: previousPatient,
+                  patientId,
+                  isOfflinePending: false,
+                })
+              : previousPatient,
+          ),
+        };
+        patchedBookingDetail.patientCount =
+          patchedBookingDetail.patients?.length ||
+          updatedBookingDetail?.patientCount ||
+          booking.patientCount;
+        await persistUpdatedBookingDetail({
+          bookingId,
+          updatedBookingDetail: patchedBookingDetail,
+        });
 
         showPlatformMessage('Success', 'Patient updated successfully.');
-        return updatedBookingDetail;
+        return patchedBookingDetail;
       } catch (error) {
         if (isLikelyOfflineError(error)) {
           await queuePendingPatientAction({

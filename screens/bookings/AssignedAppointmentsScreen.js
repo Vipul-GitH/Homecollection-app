@@ -274,6 +274,16 @@ function AssignedAppointmentsScreen({
                   value={activeBooking.timeSlot}
                   active
                 />
+                {activeBooking.routeName ? (
+                  <QueueMetaRow
+                    styles={styles}
+                    icon="navigate-outline"
+                    label="Colony"
+                    value={activeBooking.routeName}
+                    active
+                    highlight
+                  />
+                ) : null}
               </View>
               <View style={styles.assignedActiveButtonRow}>
                 <View style={styles.assignedActiveButton}>
@@ -345,6 +355,15 @@ function AssignedAppointmentsScreen({
                           label="Time Slot"
                           value={booking.timeSlot}
                         />
+                        {booking.routeName ? (
+                          <QueueMetaRow
+                            styles={styles}
+                            icon="navigate-outline"
+                            label="Colony"
+                            value={booking.routeName}
+                            highlight
+                          />
+                        ) : null}
                       </View>
                       <QueueBadge styles={styles} label={booking.status} />
                     </View>

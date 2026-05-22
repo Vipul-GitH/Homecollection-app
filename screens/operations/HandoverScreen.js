@@ -387,6 +387,17 @@ export default function HandoverScreen({
     const bookingIds = new Set();
     const patientIds = new Set();
     const tubeCountMap = new Map();
+    const totalTubeCount = handoverBookings.reduce(
+      (total, booking) =>
+        total +
+        (Array.isArray(booking?.patients) ? booking.patients : []).reduce(
+          (patientTotal, patient) =>
+            patientTotal +
+            (Array.isArray(patient?.tubes) ? patient.tubes.length : 0),
+          0,
+        ),
+      0,
+    );
 
     selectedEntries.forEach(item => {
       bookingIds.add(item.bookingId);
@@ -401,13 +412,14 @@ export default function HandoverScreen({
       selectedBookingCount: bookingIds.size,
       selectedPatientCount: patientIds.size,
       selectedTubeCount: selectedEntries.length,
+      totalTubeCount,
       selectedTubeBreakdown: Array.from(tubeCountMap.entries())
         .map(([tubeName, count]) => ({tubeName, count}))
         .sort((leftItem, rightItem) =>
           leftItem.tubeName.localeCompare(rightItem.tubeName),
         ),
     };
-  }, [selectedTubeKeys]);
+  }, [handoverBookings, selectedTubeKeys]);
 
   const handoverLoadingOverlayVisible =
     isSavingHandover ||
@@ -561,7 +573,23 @@ export default function HandoverScreen({
   };
 
   const handleSaveHandover = () => {
-    if (isSavingHandover || !handoverSummary.selectedTubeCount) {
+    if (isSavingHandover) {
+      return;
+    }
+
+    if (!handoverSummary.selectedTubeCount) {
+      Alert.alert(
+        'Tube Selection Required',
+        'Please select all sample tubes before saving handover.',
+      );
+      return;
+    }
+
+    if (handoverSummary.selectedTubeCount < handoverSummary.totalTubeCount) {
+      Alert.alert(
+        'All Tubes Required',
+        'One or more sample tubes are unselected. Please select every tube before saving handover.',
+      );
       return;
     }
 

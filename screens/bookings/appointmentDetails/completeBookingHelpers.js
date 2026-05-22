@@ -4,21 +4,28 @@ export const DEFAULT_TEST_BOOKING_STATUS = 'none';
 export const MANUAL_HC_SLIP_STATUS = 'manual_hc_slip';
 export const EMPTY_UPLOAD_DOCUMENTS = [];
 
-export const normalizeUploadDocument = (file, fileNamePrefix, index = 0) => {
+export const normalizeUploadDocument = (
+  file,
+  fileNamePrefix,
+  index = 0,
+  documentName = '',
+) => {
   if (!file?.uri) {
     return null;
   }
 
   return {
     uri: file.uri,
-    name: file.name || `${fileNamePrefix}-${Date.now()}-${index}`,
+    name: normalizeFormText(documentName) || file.name || `${fileNamePrefix}-${Date.now()}-${index}`,
     type: file.type || getMimeTypeFromFileName(file.name),
   };
 };
 
-export const normalizeUploadDocuments = (pickedFiles, fileNamePrefix) =>
+export const normalizeUploadDocuments = (pickedFiles, fileNamePrefix, documentName = '') =>
   (Array.isArray(pickedFiles) ? pickedFiles : [])
-    .map((file, index) => normalizeUploadDocument(file, fileNamePrefix, index))
+    .map((file, index) =>
+      normalizeUploadDocument(file, fileNamePrefix, index, documentName),
+    )
     .filter(Boolean);
 
 export const normalizeStoredUploadDocuments = (documents, fileNamePrefix) => {
