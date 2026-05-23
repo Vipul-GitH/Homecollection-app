@@ -123,6 +123,59 @@ export const getMimeTypeFromFileName = fileName => {
   return 'application/octet-stream';
 };
 
+export const getFileExtensionFromName = fileName => {
+  const normalizedFileName = String(fileName || '').trim();
+  const match = normalizedFileName.match(/\.([a-z0-9]+)$/i);
+  return match ? `.${match[1].toLowerCase()}` : '';
+};
+
+export const getFileExtensionFromMimeType = mimeType => {
+  const normalizedMimeType = String(mimeType || '').toLowerCase();
+
+  if (normalizedMimeType.includes('pdf')) {
+    return '.pdf';
+  }
+
+  if (normalizedMimeType.includes('jpeg') || normalizedMimeType.includes('jpg')) {
+    return '.jpg';
+  }
+
+  if (normalizedMimeType.includes('png')) {
+    return '.png';
+  }
+
+  if (normalizedMimeType.includes('webp')) {
+    return '.webp';
+  }
+
+  return '';
+};
+
+export const getUploadFileName = ({
+  preferredName,
+  originalName,
+  mimeType,
+  fallbackPrefix = 'document',
+  fallbackIndex = 0,
+}) => {
+  const normalizedPreferredName = normalizeFormText(preferredName);
+  const normalizedOriginalName = normalizeFormText(originalName);
+  const baseName =
+    normalizedPreferredName ||
+    normalizedOriginalName ||
+    `${fallbackPrefix}-${Date.now()}-${fallbackIndex}`;
+
+  if (getFileExtensionFromName(baseName)) {
+    return baseName;
+  }
+
+  const extension =
+    getFileExtensionFromName(normalizedOriginalName) ||
+    getFileExtensionFromMimeType(mimeType);
+
+  return extension ? `${baseName}${extension}` : baseName;
+};
+
 export const getPatientMutationId = patient =>
   normalizeFormText(
     patient?.bookingPatientId ||

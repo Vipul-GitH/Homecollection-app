@@ -1,8 +1,9 @@
 import React, {useEffect, useMemo, useState} from 'react';
 import {Modal, NativeModules, Text, TouchableOpacity, View} from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import {getUploadFileName} from '../../../screens/bookings/appointmentDetails/helpers';
 
-const {LocalDocumentPickerModule} = NativeModules;
+const {LocalDocumentPickerModule, LocalGeoCameraModule} = NativeModules;
 
 const toStableValue = value =>
   value === null || value === undefined ? '' : String(value).trim();
@@ -159,12 +160,20 @@ const getMimeTypeFromFileName = fileName => {
 const normalizePickedDocuments = pickedFiles =>
   (Array.isArray(pickedFiles) ? pickedFiles : [])
     .filter(file => Boolean(file?.uri))
-    .map((file, index) => ({
-      uri: file.uri,
-      name:
-        String(file?.name || '').trim() || `manual-hc-slip-${Date.now()}-${index + 1}`,
-      type: file.type || getMimeTypeFromFileName(file?.name),
-    }));
+    .map((file, index) => {
+      const type = file.type || getMimeTypeFromFileName(file?.name);
+
+      return {
+        uri: file.uri,
+        name: getUploadFileName({
+          originalName: file.name,
+          mimeType: type,
+          fallbackPrefix: 'manual-hc-slip',
+          fallbackIndex: index + 1,
+        }),
+        type,
+      };
+    });
 
 const resolveDocumentUrl = value => {
   const rawValue = toStableValue(
@@ -392,6 +401,16 @@ function PatientTestsAccordion({
     ],
     [manualSlipDocuments, patient],
   );
+  const appendManualSlipDocuments = pickedDocuments => {
+    if (!pickedDocuments.length) {
+      return;
+    }
+
+    onManualSlipDocumentsChange?.(patient, [
+      ...(Array.isArray(manualSlipDocuments) ? manualSlipDocuments : []),
+      ...pickedDocuments,
+    ]);
+  };
 
   useEffect(() => {
     if (
@@ -408,7 +427,7 @@ function PatientTestsAccordion({
     shouldShowManualSlipUpload,
   ]);
 
-  const handlePickManualSlipDocuments = async () => {
+  const handlePickManualSlipDocumentsFromGallery = async () => {
     if (!LocalDocumentPickerModule?.pickDocuments) {
       showAlert?.(
         'Upload Not Available',
@@ -425,10 +444,7 @@ function PatientTestsAccordion({
         return;
       }
 
-      onManualSlipDocumentsChange?.(patient, [
-        ...(Array.isArray(manualSlipDocuments) ? manualSlipDocuments : []),
-        ...pickedDocuments,
-      ]);
+      appendManualSlipDocuments(pickedDocuments);
     } catch (error) {
       if (
         error?.code === 'DOCUMENT_PICKER_CANCELLED' ||
@@ -442,6 +458,58 @@ function PatientTestsAccordion({
         'Unable to select documents right now. Please try again.',
       );
     }
+  };
+  const handleCaptureManualSlipDocument = async () => {
+    if (!LocalGeoCameraModule?.captureStampedPhoto) {
+      showAlert?.(
+        'Camera Not Available',
+        'Camera module is not available in this build.',
+      );
+      return;
+    }
+
+    try {
+      const capturedPhoto = await LocalGeoCameraModule.captureStampedPhoto(
+        `Patient: ${patient?.name || 'N/A'}\nDocument: Manual HC Slip`,
+      );
+
+      if (!capturedPhoto?.uri) {
+        return;
+      }
+
+      const type = capturedPhoto.type || 'image/jpeg';
+      appendManualSlipDocuments([
+        {
+          uri: capturedPhoto.uri,
+          name: getUploadFileName({
+            preferredName: 'Manual HC Slip',
+            originalName: capturedPhoto.name,
+            mimeType: type,
+            fallbackPrefix: 'manual-hc-slip',
+          }),
+          type,
+        },
+      ]);
+    } catch (error) {
+      if (
+        error?.code === 'CAMERA_CANCELLED' ||
+        String(error?.message || '').toLowerCase().includes('cancel')
+      ) {
+        return;
+      }
+
+      showAlert?.(
+        'Camera Failed',
+        'Unable to capture manual slip right now. Please try again.',
+      );
+    }
+  };
+  const handlePickManualSlipDocuments = () => {
+    showAlert?.('Upload manual slip', 'Choose how to add this file.', [
+      {text: 'Camera', onPress: handleCaptureManualSlipDocument},
+      {text: 'Gallery', onPress: handlePickManualSlipDocumentsFromGallery},
+      {text: 'Cancel', style: 'cancel'},
+    ]);
   };
 
   const handleRemoveManualSlipDocument = indexToRemove => {

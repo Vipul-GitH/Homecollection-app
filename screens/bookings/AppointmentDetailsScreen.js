@@ -48,6 +48,7 @@ import {
   getGenderFromTitle,
   getPatientMutationId,
   getUpdatePatientId,
+  getUploadFileName,
   normalizeFormText,
   normalizeMobileValue,
   normalizeOptionValue,
@@ -2408,10 +2409,6 @@ function AppointmentDetailsScreen({
       COMPLETE_PAYMENT_MODE_OPTIONS[0],
     [completePayments],
   );
-  const hasEnteredCompletePaymentAmount = useMemo(
-    () => completePayments.some(payment => normalizeFormText(payment?.amount)),
-    [completePayments],
-  );
   const {pendingPaymentAmount, extraPaymentAmount} = useMemo(
     () => ({
       pendingPaymentAmount: Math.max(
@@ -2426,16 +2423,8 @@ function AppointmentDetailsScreen({
     [completeAmountReceived, completeNetAmount],
   );
   const shouldCollectPendingPaymentPatient = useMemo(
-    () =>
-      hasEnteredCompletePaymentAmount &&
-      (pendingPaymentAmount > 0.009 || extraPaymentAmount > 0.009) &&
-      completePaymentPatientOptions.length > 0,
-    [
-      completePaymentPatientOptions.length,
-      extraPaymentAmount,
-      hasEnteredCompletePaymentAmount,
-      pendingPaymentAmount,
-    ],
+    () => false,
+    [],
   );
   useEffect(() => {
     if (!shouldCollectPendingPaymentPatient) {
@@ -2735,7 +2724,10 @@ function AppointmentDetailsScreen({
       const optionId = getCompleteBookingPatientOptionId(patient, index);
 
       return completePayments.filter(payment => {
-        if (toCurrencyNumber(payment?.amount) <= 0) {
+        if (
+          !normalizeFormText(payment?.amount) ||
+          toCurrencyNumber(payment?.amount) < 0
+        ) {
           return false;
         }
 
@@ -4346,6 +4338,7 @@ function AppointmentDetailsScreen({
 
     if (
       hasNonManualPatients &&
+      !completePaymentPatientOptions.length &&
       completeNetAmount > 0.009 &&
       completeAmountReceived <= 0
     ) {
@@ -4371,7 +4364,7 @@ function AppointmentDetailsScreen({
           );
         });
 
-        return !payment || toCurrencyNumber(payment?.amount) <= 0;
+        return !payment || !normalizeFormText(payment?.amount);
       },
     );
 
@@ -4416,6 +4409,10 @@ function AppointmentDetailsScreen({
 
     const pendingUpiProofPayments = completePayments.filter(payment => {
       if (normalizeFormText(payment?.mode).toUpperCase() !== 'UPI') {
+        return false;
+      }
+
+      if (toCurrencyNumber(payment?.amount) <= 0) {
         return false;
       }
 
@@ -4611,7 +4608,12 @@ function AppointmentDetailsScreen({
         onDocumentsPicked([
           {
             uri: capturedPhoto.uri,
-            name: normalizeFormText(documentName || documentLabel) || capturedPhoto.name || `${fileNamePrefix}-${Date.now()}.jpg`,
+            name: getUploadFileName({
+              preferredName: documentName || documentLabel,
+              originalName: capturedPhoto.name,
+              mimeType: capturedPhoto.type || 'image/jpeg',
+              fallbackPrefix: fileNamePrefix,
+            }),
             type: capturedPhoto.type || 'image/jpeg',
           },
         ]);

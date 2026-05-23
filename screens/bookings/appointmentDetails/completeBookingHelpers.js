@@ -1,4 +1,8 @@
-import {getMimeTypeFromFileName, normalizeFormText} from './helpers';
+import {
+  getMimeTypeFromFileName,
+  getUploadFileName,
+  normalizeFormText,
+} from './helpers';
 
 export const DEFAULT_TEST_BOOKING_STATUS = 'none';
 export const MANUAL_HC_SLIP_STATUS = 'manual_hc_slip';
@@ -14,10 +18,18 @@ export const normalizeUploadDocument = (
     return null;
   }
 
+  const type = file.type || getMimeTypeFromFileName(file.name);
+
   return {
     uri: file.uri,
-    name: normalizeFormText(documentName) || file.name || `${fileNamePrefix}-${Date.now()}-${index}`,
-    type: file.type || getMimeTypeFromFileName(file.name),
+    name: getUploadFileName({
+      preferredName: documentName,
+      originalName: file.name,
+      mimeType: type,
+      fallbackPrefix: fileNamePrefix,
+      fallbackIndex: index,
+    }),
+    type,
   };
 };
 

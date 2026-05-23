@@ -19,6 +19,7 @@ import {
   getLastKnownGeoCapture,
   persistLastKnownGeoCapture,
 } from '../../utils/location/lastKnownGeoCapture';
+import {getUploadFileName} from '../../screens/bookings/appointmentDetails/helpers';
 import {BRAND} from '../../styles/appStyles';
 import PatientDocumentsList from './patient/PatientDocumentsList';
 import PatientDocumentViewerModal from './patient/PatientDocumentViewerModal';
@@ -285,11 +286,21 @@ const formatStoredLocationTimestamp = value => {
 const normalizePickedDocuments = (pickedFiles, fileNamePrefix, documentName = '') =>
   (Array.isArray(pickedFiles) ? pickedFiles : [])
     .filter(file => file?.uri)
-    .map((file, index) => ({
-      uri: file.uri,
-      name: toStableValue(documentName) || file.name || `${fileNamePrefix}-${Date.now()}-${index}`,
-      type: file.type || getMimeTypeFromFileName(file.name),
-    }));
+    .map((file, index) => {
+      const type = file.type || getMimeTypeFromFileName(file.name);
+
+      return {
+        uri: file.uri,
+        name: getUploadFileName({
+          preferredName: documentName,
+          originalName: file.name,
+          mimeType: type,
+          fallbackPrefix: fileNamePrefix,
+          fallbackIndex: index,
+        }),
+        type,
+      };
+    });
 
 const getDocumentImageSource = document => {
   if (document?.imageSource) {
@@ -1136,7 +1147,12 @@ function PatientDetailCard({
         onDocumentsPicked([
           {
             uri: capturedPhoto.uri,
-            name: toStableValue(documentLabel) || capturedPhoto.name || `${fileNamePrefix}-${Date.now()}.jpg`,
+            name: getUploadFileName({
+              preferredName: documentLabel,
+              originalName: capturedPhoto.name,
+              mimeType: capturedPhoto.type || 'image/jpeg',
+              fallbackPrefix: fileNamePrefix,
+            }),
             type: capturedPhoto.type || 'image/jpeg',
           },
         ]);
