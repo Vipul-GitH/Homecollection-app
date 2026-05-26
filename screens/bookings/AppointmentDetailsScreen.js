@@ -1042,6 +1042,31 @@ function AppointmentDetailsScreen({
     () => appointmentDetailState?.patientSampleCollectionMap || {},
     [appointmentDetailState?.patientSampleCollectionMap],
   );
+  const hasPendingSampleTubes = useMemo(() => {
+    const sampleCollections = Object.values(patientSampleCollectionMap || {});
+
+    if (!sampleCollections.length) {
+      return false;
+    }
+
+    return sampleCollections.some(sampleCollection => {
+      if (
+        Array.isArray(sampleCollection?.tubeSelectionSummary) &&
+        sampleCollection.tubeSelectionSummary.length
+      ) {
+        return sampleCollection.tubeSelectionSummary.some(
+          tube => Number(tube?.pendingCount || 0) > 0,
+        );
+      }
+
+      return Array.isArray(sampleCollection?.pendingChildTests)
+        ? sampleCollection.pendingChildTests.some(
+            pendingGroup =>
+              Array.isArray(pendingGroup?.pending) && pendingGroup.pending.length > 0,
+          )
+        : false;
+    });
+  }, [patientSampleCollectionMap]);
   const patientTestBookingStatusMap = useMemo(
     () => appointmentDetailState?.patientTestBookingStatusMap || {},
     [appointmentDetailState?.patientTestBookingStatusMap],
@@ -1190,6 +1215,17 @@ function AppointmentDetailsScreen({
     selectedBooking?.id,
     selectedPatientKey,
   ]);
+  useEffect(() => {
+    if (hasPendingSampleTubes || !isLinkedAppointmentSelected) {
+      return;
+    }
+
+    setIsLinkedAppointmentSelected(false);
+    setLinkedAppointmentDate('');
+    setLinkedAppointmentTimeSlot('');
+    setIsLinkedAppointmentCalendarVisible(false);
+    setIsLinkedAppointmentTimeSlotSelectVisible(false);
+  }, [hasPendingSampleTubes, isLinkedAppointmentSelected]);
   useEffect(() => {
     setAddressForm(buildAddressFormFromBooking(selectedBooking));
   }, [selectedBooking]);
@@ -2422,9 +2458,51 @@ function AppointmentDetailsScreen({
     }),
     [completeAmountReceived, completeNetAmount],
   );
+  const hasEnteredCompletePaymentAmount = useMemo(
+    () =>
+      completePayments.some(payment =>
+        Boolean(normalizeFormText(payment?.amount)),
+      ),
+    [completePayments],
+  );
+  const areAllPatientPaymentAmountsZero = useMemo(() => {
+    if (!completePaymentPatientOptions.length) {
+      return false;
+    }
+
+    return completePaymentPatientOptions.every(patient => {
+      const payment = completePayments.find(paymentEntry => {
+        const paymentOptionId = normalizeFormText(
+          paymentEntry?.patientOptionId,
+        );
+        const paymentPatientId = normalizeFormText(paymentEntry?.patientId);
+
+        return (
+          paymentOptionId === normalizeFormText(patient?.id) ||
+          paymentPatientId === normalizeFormText(patient?.patientId) ||
+          paymentPatientId === normalizeFormText(patient?.sourcePatientId)
+        );
+      });
+
+      return (
+        Boolean(normalizeFormText(payment?.amount)) &&
+        toCurrencyNumber(payment?.amount) === 0
+      );
+    });
+  }, [completePaymentPatientOptions, completePayments]);
   const shouldCollectPendingPaymentPatient = useMemo(
-    () => false,
-    [],
+    () =>
+      hasEnteredCompletePaymentAmount &&
+      !areAllPatientPaymentAmountsZero &&
+      completePaymentPatientOptions.length > 0 &&
+      (pendingPaymentAmount > 0.009 || extraPaymentAmount > 0.009),
+    [
+      areAllPatientPaymentAmountsZero,
+      completePaymentPatientOptions.length,
+      extraPaymentAmount,
+      hasEnteredCompletePaymentAmount,
+      pendingPaymentAmount,
+    ],
   );
   useEffect(() => {
     if (!shouldCollectPendingPaymentPatient) {
@@ -2511,7 +2589,7 @@ function AppointmentDetailsScreen({
     });
   }, [completePaymentPatientOptions]);
 
-  const completeBookingPayload = useMemo(() => {
+  const buildCompleteBookingPayload = useCallback(() => {
     const patientAdditionalDiscountMapForPayload =
       localBillingSummary.patientAdditionalDiscountRows.reduce(
         (accumulator, patientDiscount) => {
@@ -2892,6 +2970,9 @@ function AppointmentDetailsScreen({
       })
       .filter(Boolean);
 
+    const shouldSendLinkedAppointment =
+      hasPendingSampleTubes && Boolean(isLinkedAppointmentSelected);
+
     return sanitizePayloadValue({
       additional_discount_mode:
         completeAdditionalDiscountAmount > 0 ? 'amount' : '',
@@ -2905,16 +2986,16 @@ function AppointmentDetailsScreen({
       extra_payment_patient_option_id: pendingPaymentPatient?.id || '',
       extra_payment_patient_id: pendingPaymentPatient?.patientId || '',
       extra_payment_patient_name: pendingPaymentPatient?.name || '',
-      linked_appointment: isLinkedAppointmentSelected ? 'yes' : 'no',
-      linked_appointment_date: isLinkedAppointmentSelected
+      linked_appointment: shouldSendLinkedAppointment ? 'yes' : 'no',
+      linked_appointment_date: shouldSendLinkedAppointment
         ? linkedAppointmentDate
         : null,
-      linked_appointment_time_slot: isLinkedAppointmentSelected
+      linked_appointment_time_slot: shouldSendLinkedAppointment
         ? linkedAppointmentTimeSlot
         : null,
-      followup_required: Boolean(isLinkedAppointmentSelected),
-      followup_date: isLinkedAppointmentSelected ? linkedAppointmentDate : null,
-      followup_time_slot: isLinkedAppointmentSelected
+      followup_required: shouldSendLinkedAppointment,
+      followup_date: shouldSendLinkedAppointment ? linkedAppointmentDate : null,
+      followup_time_slot: shouldSendLinkedAppointment
         ? linkedAppointmentTimeSlot
         : null,
       sample_collection_pick_count: samplePickCount,
@@ -3023,6 +3104,7 @@ function AppointmentDetailsScreen({
     completeAmountReceived,
     completePaymentMode,
     completePayments,
+    hasPendingSampleTubes,
     isAppointmentPatientStatusContext,
     isAppointmentSourceBooking,
     isLinkedAppointmentSelected,
@@ -4253,10 +4335,14 @@ function AppointmentDetailsScreen({
       }));
       setPatientAdditionalDiscountMap(previousMap => ({
         ...previousMap,
-        [normalizedPatientId]:
-          requestedAdditional > 0
-            ? String(patientAdditionalDiscountDraftMap[normalizedPatientId] || '')
-            : '',
+        ...(requestedAdditional > 0
+          ? {
+              [normalizedPatientId]: String(
+                patientAdditionalDiscountDraftMap[normalizedPatientId] || '',
+              ),
+            }
+          : {}),
+        ...(requestedAdditional > 0 ? {} : {[normalizedPatientId]: '0'}),
       }));
       showAppAlert(
         requestedAdditional > 0
@@ -4278,6 +4364,8 @@ function AppointmentDetailsScreen({
   const confirmCompleteBooking = async () => {
     const hasSampleCollectionPatients = completeBookingPatientOptions.length > 0;
     const hasNonManualPatients = nonManualCompleteBookingPatientOptions.length > 0;
+    const shouldSendLinkedAppointment =
+      hasPendingSampleTubes && Boolean(isLinkedAppointmentSelected);
 
     if (hasSampleCollectionPatients && !samplePickCount) {
       showAppAlert(
@@ -4322,7 +4410,7 @@ function AppointmentDetailsScreen({
     }
 
     if (
-      isLinkedAppointmentSelected &&
+      shouldSendLinkedAppointment &&
       (!linkedAppointmentDate || !linkedAppointmentTimeSlot)
     ) {
       showAppAlert(
@@ -4434,7 +4522,10 @@ function AppointmentDetailsScreen({
       return;
     }
 
-    const didComplete = await onBookingAction('completed', completeBookingPayload);
+    const didComplete = await onBookingAction(
+      'completed',
+      buildCompleteBookingPayload(),
+    );
 
     if (!didComplete) {
       return;
@@ -4593,13 +4684,7 @@ function AppointmentDetailsScreen({
       }
 
       try {
-        const stampText = [
-          `Document: ${documentLabel || 'Document'}`,
-          `Time: ${new Date().toLocaleString('en-IN')}`,
-        ].join('\n');
-        const capturedPhoto = await LocalGeoCameraModule.captureStampedPhoto(
-          stampText,
-        );
+        const capturedPhoto = await LocalGeoCameraModule.captureStampedPhoto('');
 
         if (!capturedPhoto?.uri) {
           return;
@@ -5477,6 +5562,7 @@ function AppointmentDetailsScreen({
           bookingActionLoading={bookingActionLoading}
           patientOptions={completeBookingPatientOptions}
           isLinkedAppointmentSelected={isLinkedAppointmentSelected}
+          shouldShowLinkedAppointmentSection={hasPendingSampleTubes}
           onLinkedAppointmentChange={handleLinkedAppointmentChange}
           linkedAppointmentDate={linkedAppointmentDate}
           setIsLinkedAppointmentCalendarVisible={

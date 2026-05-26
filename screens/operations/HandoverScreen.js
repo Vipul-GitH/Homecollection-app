@@ -254,6 +254,7 @@ export default function HandoverScreen({
   styles,
   accessToken = '',
   loggedInUser = '',
+  onSessionExpired,
 }) {
   const [activeHandoverTab, setActiveHandoverTab] = useState('pending');
   const [expandedBookings, setExpandedBookings] = useState({});
@@ -276,6 +277,40 @@ export default function HandoverScreen({
   const handoverUserKey = useMemo(
     () => toStableValue(loggedInUser),
     [loggedInUser],
+  );
+
+  const handleSessionExpired = useCallback(
+    error => {
+      const message = toStableValue(error?.message).toLowerCase();
+      const shouldRelogin =
+        message.includes('invalid authentication credentials') ||
+        message.includes('token is invalidated') ||
+        message.includes('invalid or expired token') ||
+        message.includes('session has expired') ||
+        message.includes('please login again') ||
+        message.includes('please log in again') ||
+        message.includes('unauthorized');
+
+      if (!shouldRelogin) {
+        return false;
+      }
+
+      Alert.alert(
+        'Session Expired',
+        'Your session has expired. Please log in again.',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              Promise.resolve(onSessionExpired?.()).catch(() => {});
+            },
+          },
+        ],
+        {cancelable: false},
+      );
+      return true;
+    },
+    [onSessionExpired],
   );
 
   const loadPendingHandoverRows = useCallback(async () => {
@@ -312,13 +347,18 @@ export default function HandoverScreen({
       });
       setHandoverHistory(Array.isArray(historyItems) ? historyItems : []);
     } catch (error) {
+      if (handleSessionExpired(error)) {
+        setHandoverHistory([]);
+        setHandoverHistoryError('');
+        return;
+      }
       setHandoverHistoryError(
         error?.message || 'Unable to load handover history right now.',
       );
     } finally {
       setIsLoadingHandoverHistory(false);
     }
-  }, [accessToken]);
+  }, [accessToken, handleSessionExpired]);
 
   useEffect(() => {
     loadPendingHandoverRows();
@@ -361,6 +401,10 @@ export default function HandoverScreen({
           ),
         );
       } catch (error) {
+        if (handleSessionExpired(error)) {
+          setRiderSuggestions([]);
+          return;
+        }
         if (isActive) {
           setRiderSuggestions([]);
         }
@@ -375,7 +419,7 @@ export default function HandoverScreen({
       isActive = false;
       clearTimeout(timeoutId);
     };
-  }, [accessToken, handoverTo, riderName]);
+  }, [accessToken, handoverTo, handleSessionExpired, riderName]);
 
   const handoverBookings = useMemo(
     () => groupPendingHandoverRows(pendingHandoverRows),
@@ -654,6 +698,9 @@ export default function HandoverScreen({
                 'Selected sample tubes have been saved and removed from pending handover.',
               );
             } catch (error) {
+              if (handleSessionExpired(error)) {
+                return;
+              }
               Alert.alert(
                 'Handover Save Failed',
                 error?.message || 'Unable to save handover right now.',
@@ -1058,28 +1105,65 @@ export default function HandoverScreen({
                 const patients = Array.isArray(item?.patients) ? item.patients : [];
                 const tubes = Array.isArray(item?.tubes) ? item.tubes : [];
 
+                const getHistoryScope = row => {
+                  const appointmentId = toStableValue(
+                    row?.appointment_id || row?.appointmentId,
+                  );
+                  const sourceType = toStableValue(
+                    row?.source_type || row?.sourceType,
+                  ).toUpperCase();
+
+                  return {
+                    appointmentId,
+                    sourceType: sourceType || (appointmentId ? 'APPOINTMENT' : 'BOOKING'),
+                    scopeKey: appointmentId
+                      ? `appointment-${appointmentId}`
+                      : 'booking',
+                  };
+                };
+                const getHistoryBookingLabel = row => {
+                  const bookingCode =
+                    toStableValue(row?.booking_code || row?.bookingCode) ||
+                    toStableValue(row?.booking_id || row?.bookingId);
+                  const {appointmentId, sourceType} = getHistoryScope(row);
+
+                  if (appointmentId) {
+                    return `${bookingCode} / Appointment ${appointmentId}`;
+                  }
+
+                  return sourceType === 'BOOKING'
+                    ? `${bookingCode} / Booking`
+                    : bookingCode;
+                };
+
                 patients.forEach(patient => {
                   const bookingId = toStableValue(patient?.booking_id || patient?.bookingId);
+                  const {appointmentId, sourceType, scopeKey} =
+                    getHistoryScope(patient);
+                  const bookingKey = `${bookingId}|${scopeKey}`;
                   if (!bookingId) {
                     return;
                   }
 
-                  if (!bookingMap.has(bookingId)) {
-                    bookingMap.set(bookingId, {
+                  if (!bookingMap.has(bookingKey)) {
+                    bookingMap.set(bookingKey, {
                       booking_id: bookingId,
-                      booking_code:
-                        toStableValue(patient?.booking_code || patient?.bookingCode) ||
-                        bookingId,
+                      appointment_id: appointmentId,
+                      source_type: sourceType,
+                      booking_code: getHistoryBookingLabel(patient),
                       patientsMap: new Map(),
                     });
                   }
 
-                  const booking = bookingMap.get(bookingId);
+                  const booking = bookingMap.get(bookingKey);
                   const patientKey = toStableValue(
-                    patient?.booking_patient_id ||
+                    [
+                      scopeKey,
+                      patient?.booking_patient_id ||
                       patient?.bookingPatientId ||
                       patient?.patient_id ||
                       patient?.patientId,
+                    ].join('|'),
                   );
 
                   if (!patientKey) {
@@ -1100,11 +1184,16 @@ export default function HandoverScreen({
 
                 tubes.forEach(tube => {
                   const bookingId = toStableValue(tube?.booking_id || tube?.bookingId);
+                  const {appointmentId, sourceType, scopeKey} = getHistoryScope(tube);
+                  const bookingKey = `${bookingId}|${scopeKey}`;
                   const patientKey = toStableValue(
-                    tube?.booking_patient_id ||
+                    [
+                      scopeKey,
+                      tube?.booking_patient_id ||
                       tube?.bookingPatientId ||
                       tube?.patient_id ||
                       tube?.patientId,
+                    ].join('|'),
                   );
                   const tubeName = toStableValue(tube?.tube_name || tube?.tubeName);
 
@@ -1112,17 +1201,17 @@ export default function HandoverScreen({
                     return;
                   }
 
-                  if (!bookingMap.has(bookingId)) {
-                    bookingMap.set(bookingId, {
+                  if (!bookingMap.has(bookingKey)) {
+                    bookingMap.set(bookingKey, {
                       booking_id: bookingId,
-                      booking_code:
-                        toStableValue(tube?.booking_code || tube?.bookingCode) ||
-                        bookingId,
+                      appointment_id: appointmentId,
+                      source_type: sourceType,
+                      booking_code: getHistoryBookingLabel(tube),
                       patientsMap: new Map(),
                     });
                   }
 
-                  const booking = bookingMap.get(bookingId);
+                  const booking = bookingMap.get(bookingKey);
                   if (!booking.patientsMap.has(patientKey)) {
                     booking.patientsMap.set(patientKey, {
                       patient_id: tube?.patient_id || tube?.patientId,
@@ -1139,6 +1228,8 @@ export default function HandoverScreen({
 
                 return Array.from(bookingMap.values()).map(booking => ({
                   booking_id: booking.booking_id,
+                  appointment_id: booking.appointment_id,
+                  source_type: booking.source_type,
                   booking_code: booking.booking_code,
                   patients: Array.from(booking.patientsMap.values()),
                 }));

@@ -9,7 +9,6 @@ import {
   PermissionsAndroid,
   Platform,
 } from 'react-native';
-import {getAddressFromCoords} from '../utils/location/getAddressFromCoords';
 import {isAndroidEmulator} from '../utils/app/runtimeHelpers';
 import {logDebug, warnDebug} from '../utils/app/logger';
 
@@ -175,9 +174,9 @@ export const useLocationGate = () => {
 
       setLocationStatus('Fetching your location...');
 
-      let nextStateDistrict = 'N/A';
-      let nextSuburb = 'N/A';
-      let nextFullAddress = 'Location unavailable';
+      let nextStateDistrict = '';
+      let nextSuburb = '';
+      let nextFullAddress = '';
 
       try {
         logDebug('[LocationGate] Fetching current GPS position');
@@ -191,21 +190,14 @@ export const useLocationGate = () => {
           accuracy: location.accuracy,
           provider: location.provider,
         });
-
-        const address = await getAddressFromCoords(
-          location.latitude,
-          location.longitude,
-        );
-        logDebug('[LocationGate] Address resolved', {
-          stateDistrict: address?.rawAddress?.state_district || '',
-          suburb: address?.rawAddress?.suburb || '',
-          fullAddress: address?.fullAddress || address?.displayName || '',
+        nextFullAddress = [
+          `Lat: ${location.latitude}`,
+          `Long: ${location.longitude}`,
+          `Timestamp: ${new Date().toISOString()}`,
+        ].join(' | ');
+        logDebug('[LocationGate] GPS metadata prepared', {
+          fullAddress: nextFullAddress,
         });
-
-        nextStateDistrict = address?.rawAddress?.state_district || 'N/A';
-        nextSuburb = address?.rawAddress?.suburb || 'N/A';
-        nextFullAddress =
-          address?.fullAddress || address?.displayName || 'Address unavailable';
       } catch (locationError) {
         warnDebug('Location fetch warning:', locationError);
         nextFullAddress = 'Location is unavailable, but the app can continue';
@@ -227,8 +219,8 @@ export const useLocationGate = () => {
       });
 
       await AsyncStorage.multiSet([
-        ['state_district', nextStateDistrict === 'N/A' ? '' : nextStateDistrict],
-        ['suburb', nextSuburb === 'N/A' ? '' : nextSuburb],
+        ['state_district', nextStateDistrict],
+        ['suburb', nextSuburb],
         ['full_Address', nextFullAddress],
       ]);
     } catch (error) {

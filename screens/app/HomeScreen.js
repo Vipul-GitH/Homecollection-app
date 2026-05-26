@@ -144,6 +144,7 @@ function HomeScreen({
   loadingOverlayTitle,
   loadingOverlayMessage,
   onLogout,
+  onSessionExpired,
   onBookingAction,
   onBookingCompleted,
   onOpenAddTest,
@@ -515,6 +516,7 @@ function HomeScreen({
           styles={styles}
           accessToken={accessToken}
           loggedInUser={loggedInUser}
+          onSessionExpired={onSessionExpired}
           completedAppointments={completedAppointments}
           isLoadingCompletedAppointments={isLoadingCompletedAppointments}
           completedAppointmentsError={completedAppointmentsError}

@@ -4,7 +4,11 @@ import {
   diagnoseLoginConnectivity,
   loginUserApi,
 } from '../services/api/authApi';
-import {clearSession, persistSession} from '../services/storage/sessionStorage';
+import {
+  clearSession,
+  getPersistedSession,
+  persistSession,
+} from '../services/storage/sessionStorage';
 import {runCatalogSyncOnce} from '../services/sync/catalogSyncService';
 import {logDebug, warnDebug} from '../utils/app/logger';
 
@@ -39,16 +43,30 @@ export const useSessionAuth = () => {
   const [accessToken, setAccessToken] = useState('');
 
   useEffect(() => {
-    const resetPersistedSessionOnLaunch = async () => {
+    let isMounted = true;
+
+    const restorePersistedSessionOnLaunch = async () => {
       try {
-        await clearSession();
-        logDebug('[Session] Cleared persisted login session on app launch');
+        const persistedSession = await getPersistedSession();
+
+        if (!isMounted || !persistedSession.accessToken) {
+          return;
+        }
+
+        setAccessToken(persistedSession.accessToken);
+        setLoggedInUser(persistedSession.loggedInUser);
+        setCurrentScreen('home');
+        logDebug('[Session] Restored persisted login session on app launch');
       } catch (error) {
-        warnDebug('Session launch reset error:', error);
+        warnDebug('Session restore error:', error);
       }
     };
 
-    resetPersistedSessionOnLaunch();
+    restorePersistedSessionOnLaunch();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const handleUsernameChange = useCallback(

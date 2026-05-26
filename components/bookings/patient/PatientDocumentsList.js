@@ -63,11 +63,17 @@ function PatientDocumentsList({
         ) : null}
         {visibleDocuments.length ? (
           <View style={styles.patientDocumentRemoveList}>
-            {visibleDocuments.map(document => (
+            {visibleDocuments.map((document, index) => (
               <View key={document.id} style={styles.patientDocumentRemoveChip}>
-                <Text style={styles.patientDocumentRemoveText} numberOfLines={1}>
-                  {document.label}
-                </Text>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.patientDocumentRemovePreviewButton}
+                  onPress={() => onOpenDocument?.(index)}
+                  disabled={typeof onOpenDocument !== 'function'}>
+                  <Text style={styles.patientDocumentRemoveText} numberOfLines={1}>
+                    {document.label}
+                  </Text>
+                </TouchableOpacity>
                 {document?.canRemove ? (
                   <TouchableOpacity
                     activeOpacity={0.85}

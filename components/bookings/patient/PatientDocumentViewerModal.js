@@ -1,6 +1,18 @@
-import React from 'react';
-import {Image, Modal, ScrollView, Text, TouchableOpacity, View} from 'react-native';
+import React, {useEffect, useState} from 'react';
+import {
+  ActivityIndicator,
+  Image,
+  Modal,
+  NativeModules,
+  Platform,
+  ScrollView,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+
+const {SecureApiModule} = NativeModules;
 
 function PatientDocumentViewerModal({
   styles,
@@ -19,6 +31,48 @@ function PatientDocumentViewerModal({
   onTouchMove,
   onTouchEnd,
 }) {
+  const [isImageLoading, setIsImageLoading] = useState(false);
+  const [imageError, setImageError] = useState('');
+  const imageUri = viewerDocument?.imageSource?.uri || '';
+  const [resolvedImageSource, setResolvedImageSource] = useState(
+    viewerDocument?.imageSource || null,
+  );
+
+  useEffect(() => {
+    let isActive = true;
+
+    setImageError('');
+    setResolvedImageSource(viewerDocument?.imageSource || null);
+    setIsImageLoading(Boolean(imageUri));
+
+    const shouldDownloadRemoteDocument =
+      Platform.OS === 'android' &&
+      /^https?:\/\//i.test(imageUri) &&
+      Boolean(SecureApiModule?.downloadToCache);
+
+    if (!shouldDownloadRemoteDocument) {
+      return () => {
+        isActive = false;
+      };
+    }
+
+    SecureApiModule.downloadToCache(imageUri, 20000)
+      .then(localUri => {
+        if (isActive && localUri) {
+          setResolvedImageSource({uri: localUri});
+        }
+      })
+      .catch(() => {
+        if (isActive) {
+          setResolvedImageSource(viewerDocument?.imageSource || null);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [imageUri, viewerDocument?.imageSource]);
+
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
       <View style={styles.patientDocumentViewerOverlay}>
@@ -80,7 +134,7 @@ function PatientDocumentViewerModal({
                 onResponderTerminationRequest={() => false}
                 onResponderTerminate={onTouchEnd}>
                 <Image
-                  source={viewerDocument.imageSource}
+                  source={resolvedImageSource || viewerDocument.imageSource}
                   style={[
                     styles.patientDocumentViewerImage,
                     {height: documentViewerHeight},
@@ -93,7 +147,36 @@ function PatientDocumentViewerModal({
                     },
                   ]}
                   resizeMode="contain"
+                  onLoadStart={() => {
+                    setImageError('');
+                    setIsImageLoading(true);
+                  }}
+                  onLoadEnd={() => setIsImageLoading(false)}
+                  onError={() => {
+                    setIsImageLoading(false);
+                    setImageError('Unable to load this document.');
+                  }}
                 />
+                {isImageLoading ? (
+                  <View style={styles.patientDocumentViewerImageState}>
+                    <ActivityIndicator color="#1557B7" size="large" />
+                    <Text style={styles.patientDocumentViewerImageStateText}>
+                      Loading document...
+                    </Text>
+                  </View>
+                ) : null}
+                {imageError ? (
+                  <View style={styles.patientDocumentViewerImageState}>
+                    <Ionicons
+                      name="alert-circle-outline"
+                      size={22}
+                      style={styles.patientDocumentViewerImageStateIcon}
+                    />
+                    <Text style={styles.patientDocumentViewerImageStateText}>
+                      {imageError}
+                    </Text>
+                  </View>
+                ) : null}
               </View>
             ) : null}
           </View>

@@ -469,9 +469,7 @@ function PatientTestsAccordion({
     }
 
     try {
-      const capturedPhoto = await LocalGeoCameraModule.captureStampedPhoto(
-        `Patient: ${patient?.name || 'N/A'}\nDocument: Manual HC Slip`,
-      );
+      const capturedPhoto = await LocalGeoCameraModule.captureStampedPhoto('');
 
       if (!capturedPhoto?.uri) {
         return;

@@ -21,7 +21,6 @@ export const getLastKnownGeoCapture = async () => {
     const parsedValue = JSON.parse(serializedValue);
     const latitude = toCoordinateNumber(parsedValue?.latitude);
     const longitude = toCoordinateNumber(parsedValue?.longitude);
-    const addressText = toStableValue(parsedValue?.addressText);
     const capturedAt = toStableValue(parsedValue?.capturedAt);
 
     if (latitude === null || longitude === null) {
@@ -31,7 +30,6 @@ export const getLastKnownGeoCapture = async () => {
     return {
       latitude,
       longitude,
-      addressText,
       capturedAt,
     };
   } catch {
@@ -42,13 +40,11 @@ export const getLastKnownGeoCapture = async () => {
 export const persistLastKnownGeoCapture = async ({
   latitude,
   longitude,
-  addressText = '',
   capturedAt = new Date().toISOString(),
 }) => {
   const nextValue = {
     latitude: toCoordinateNumber(latitude),
     longitude: toCoordinateNumber(longitude),
-    addressText: toStableValue(addressText),
     capturedAt: toStableValue(capturedAt) || new Date().toISOString(),
   };
 

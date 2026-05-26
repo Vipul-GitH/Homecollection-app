@@ -944,6 +944,7 @@ const getLoadingOverlayCopy = ({
   isLoadingCompletedAppointments,
   loadingAssignedBookingId,
   bookingActionLoading,
+  bookingActionProgressLabel,
   isAddingPatient,
   isUpdatingPatient,
   cancellingPatientId,
@@ -968,7 +969,7 @@ const getLoadingOverlayCopy = ({
     : 'Loading Appointments';
 
   const message = bookingActionLoading
-    ? 'Updating the booking status...'
+    ? bookingActionProgressLabel || 'Updating the booking status...'
     : isAddingPatient
     ? 'Saving patient details...'
     : isUpdatingPatient
@@ -1017,6 +1018,7 @@ export const useAppShellController = () => {
   const bookings = useAssignedBookings({
     accessToken: session.accessToken,
     loggedInUser: session.loggedInUser,
+    onSessionExpired: session.resetSession,
   });
 
   const isTinyPhone = width < 350;
@@ -1104,6 +1106,7 @@ export const useAppShellController = () => {
         isLoadingCompletedAppointments: bookings.isLoadingCompletedAppointments,
         loadingAssignedBookingId: bookings.loadingAssignedBookingId,
         bookingActionLoading: bookings.bookingActionLoading,
+        bookingActionProgressLabel: bookings.bookingActionProgressLabel,
         isAddingPatient: bookings.isAddingPatient,
         isUpdatingPatient: bookings.isUpdatingPatient,
         cancellingPatientId: bookings.cancellingPatientId,
@@ -2217,6 +2220,10 @@ export const useAppShellController = () => {
   }, [bookings, resetHomeNavigation, session]);
 
   const handleGoBack = useCallback(() => {
+    if (bookings.isBookingActionNavigationLocked) {
+      return;
+    }
+
     if (selectedBooking && selectedBookingScreen !== 'details') {
       setSelectedSamplePatient(null);
       setSelectedSamplePanelCompany(null);
@@ -2249,7 +2256,7 @@ export const useAppShellController = () => {
       setActiveTab(previousTab || 'home');
       return nextHistory;
     });
-  }, [selectedBooking, selectedBookingScreen]);
+  }, [bookings.isBookingActionNavigationLocked, selectedBooking, selectedBookingScreen]);
 
   return {
     activeTab,

@@ -1,6 +1,7 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   ActivityIndicator,
+  Image,
   Linking,
   Modal,
   NativeModules,
@@ -14,7 +15,6 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import GetLocation from 'react-native-get-location';
-import {getAddressFromCoords} from '../../utils/location/getAddressFromCoords';
 import {
   getLastKnownGeoCapture,
   persistLastKnownGeoCapture,
@@ -302,15 +302,37 @@ const normalizePickedDocuments = (pickedFiles, fileNamePrefix, documentName = ''
       };
     });
 
+const normalizeDocumentPreviewUri = value => {
+  const uri = toStableValue(value);
+
+  if (!uri || !/^https?:\/\//i.test(uri)) {
+    return uri;
+  }
+
+  try {
+    return encodeURI(decodeURI(uri));
+  } catch {
+    return encodeURI(uri);
+  }
+};
+
 const getDocumentImageSource = document => {
   if (document?.imageSource) {
     return document.imageSource;
   }
 
   const uri =
-    typeof document === 'string' ? toStableValue(document) : toStableValue(document?.uri);
+    typeof document === 'string'
+      ? toStableValue(document)
+      : toStableValue(
+          document?.uri ||
+            document?.url ||
+            document?.path ||
+            document?.document_url ||
+            document?.file,
+        );
 
-  return uri ? {uri} : null;
+  return uri ? {uri: normalizeDocumentPreviewUri(uri)} : null;
 };
 
 const resolvePatientDocumentUrl = value => {
@@ -325,10 +347,12 @@ const resolvePatientDocumentUrl = value => {
   }
 
   if (/^https?:\/\//i.test(rawUrl)) {
-    return rawUrl;
+    return normalizeDocumentPreviewUri(rawUrl);
   }
 
-  return `${PATIENT_DOCUMENT_BASE_URL}${rawUrl.replace(/^\/+/, '')}`;
+  return normalizeDocumentPreviewUri(
+    `${PATIENT_DOCUMENT_BASE_URL}${rawUrl.replace(/^\/+/, '')}`,
+  );
 };
 
 const getDisplayNameFromUri = value => {
@@ -713,6 +737,34 @@ function PatientDetailCard({
       paymentProofDocuments,
     ],
   );
+  useEffect(() => {
+    const remoteDocumentUris = normalizedDocuments
+      .map(document => toStableValue(document?.imageSource?.uri))
+      .filter(uri => /^https?:\/\//i.test(uri));
+
+    if (!remoteDocumentUris.length) {
+      return;
+    }
+
+    const uniqueUris = Array.from(new Set(remoteDocumentUris));
+    const deferredTimers = [];
+
+    uniqueUris.forEach((uri, index) => {
+      if (index < 3) {
+        Image.prefetch(uri).catch(() => {});
+        return;
+      }
+
+      const timerId = setTimeout(() => {
+        Image.prefetch(uri).catch(() => {});
+      }, (index - 2) * 900);
+      deferredTimers.push(timerId);
+    });
+
+    return () => {
+      deferredTimers.forEach(timerId => clearTimeout(timerId));
+    };
+  }, [normalizedDocuments]);
   const backendPatientPhotoDocuments = useMemo(
     () => buildTypedPatientDocumentItems(patient.patientDocuments, 'patient_photo', 'Patient Photo'),
     [patient.patientDocuments],
@@ -1041,7 +1093,6 @@ function PatientDetailCard({
 
       try {
         let location = null;
-        let addressText = '';
         let locationStatusLabel = '';
         let fallbackLocationTimestamp = '';
 
@@ -1068,34 +1119,10 @@ function PatientDetailCard({
               timeout: 20000,
             });
             locationStatusLabel = 'Live GPS';
-
-            try {
-              const address = await getAddressFromCoords(
-                location.latitude,
-                location.longitude,
-              );
-              addressText = address?.fullAddress || address?.displayName || '';
-            } catch {
-              addressText = '';
-            }
-
-            if (addressText) {
-              await persistLastKnownGeoCapture({
-                latitude: location.latitude,
-                longitude: location.longitude,
-                addressText,
-              });
-            } else {
-              lastKnownGeoCapture = await getLastKnownGeoCapture();
-
-              if (lastKnownGeoCapture?.addressText) {
-                addressText = lastKnownGeoCapture.addressText;
-                locationStatusLabel = 'Live GPS + last known address';
-                fallbackLocationTimestamp = formatStoredLocationTimestamp(
-                  lastKnownGeoCapture.capturedAt,
-                );
-              }
-            }
+            await persistLastKnownGeoCapture({
+              latitude: location.latitude,
+              longitude: location.longitude,
+            });
           } catch {
             lastKnownGeoCapture = await getLastKnownGeoCapture();
 
@@ -1111,7 +1138,6 @@ function PatientDetailCard({
               latitude: lastKnownGeoCapture.latitude,
               longitude: lastKnownGeoCapture.longitude,
             };
-            addressText = lastKnownGeoCapture.addressText || '';
             locationStatusLabel = 'Last known location fallback';
             fallbackLocationTimestamp = formatStoredLocationTimestamp(
               lastKnownGeoCapture.capturedAt,
@@ -1119,23 +1145,23 @@ function PatientDetailCard({
           }
         }
 
-        const stampText = [
-          `Patient: ${patient?.name || 'N/A'}`,
-          `Document: ${documentLabel || 'Document'}`,
-          locationStatusLabel ? `Location Status: ${locationStatusLabel}` : '',
-          location
-            ? `Lat: ${formatGeoCoordinate(location.latitude)}, Long: ${formatGeoCoordinate(
-                location.longitude,
-              )}`
-            : '',
-          addressText ? `Address: ${addressText}` : '',
-          fallbackLocationTimestamp
-            ? `Last Known Captured: ${fallbackLocationTimestamp}`
-            : '',
-          `Time: ${formatPhotoTimestamp()}`,
-        ]
-          .filter(Boolean)
-          .join('\n');
+        const stampText = requireLocationMeta
+          ? [
+              `Patient: ${patient?.name || 'N/A'}`,
+              locationStatusLabel ? `Location Status: ${locationStatusLabel}` : '',
+              location
+                ? `Lat: ${formatGeoCoordinate(
+                    location.latitude,
+                  )}, Long: ${formatGeoCoordinate(location.longitude)}`
+                : '',
+              fallbackLocationTimestamp
+                ? `Last Known Captured: ${fallbackLocationTimestamp}`
+                : '',
+              `Time: ${formatPhotoTimestamp()}`,
+            ]
+              .filter(Boolean)
+              .join('\n')
+          : '';
         const capturedPhoto = await LocalGeoCameraModule.captureStampedPhoto(
           stampText,
         );

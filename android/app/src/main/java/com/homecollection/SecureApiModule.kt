@@ -7,7 +7,9 @@ import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableNativeMap
 import org.json.JSONObject
 import java.io.BufferedWriter
+import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -78,6 +80,38 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
       }
       else -> FileInputStream(java.io.File(uriString))
     }
+  }
+
+  private fun openSecureConnection(url: String, timeoutMs: Int): HttpURLConnection {
+    val connection = URL(url.replace(" ", "%20")).openConnection() as HttpURLConnection
+    connection.connectTimeout = timeoutMs
+    connection.readTimeout = timeoutMs
+    connection.instanceFollowRedirects = true
+    connection.doInput = true
+
+    if (connection is HttpsURLConnection) {
+      val sslContext = createSslContext()
+      connection.sslSocketFactory = sslContext.socketFactory
+      connection.hostnameVerifier = HttpsURLConnection.getDefaultHostnameVerifier()
+    }
+
+    return connection
+  }
+
+  private fun cacheFileForUrl(url: String): File {
+    val path = try {
+      URL(url.replace(" ", "%20")).path
+    } catch (_: Exception) {
+      ""
+    }
+    val extension = path.substringAfterLast('.', "jpg")
+      .lowercase()
+      .takeIf { it in setOf("jpg", "jpeg", "png", "webp") }
+      ?: "jpg"
+    val directory = File(reactApplicationContext.cacheDir, "remote-documents").apply {
+      mkdirs()
+    }
+    return File(directory, "document-${url.hashCode()}.$extension")
   }
 
   private fun writeMultipartTextPart(
@@ -177,6 +211,53 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
       connection.disconnect()
     } catch (error: Exception) {
       promise.reject("SECURE_API_ERROR", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun downloadToCache(url: String, timeoutMs: Int?, promise: Promise) {
+    var connection: HttpURLConnection? = null
+
+    try {
+      val normalizedUrl = url.trim()
+      if (normalizedUrl.isBlank()) {
+        throw IllegalArgumentException("Document URL is empty")
+      }
+
+      val targetFile = cacheFileForUrl(normalizedUrl)
+      if (targetFile.exists() && targetFile.length() > 0) {
+        promise.resolve(android.net.Uri.fromFile(targetFile).toString())
+        return
+      }
+
+      val resolvedTimeoutMs = (timeoutMs ?: 20000).coerceAtLeast(5000)
+      connection = openSecureConnection(normalizedUrl, resolvedTimeoutMs)
+      connection.requestMethod = "GET"
+
+      val responseCode = connection.responseCode
+      if (responseCode !in 200..299) {
+        throw IllegalStateException("Document download failed: HTTP $responseCode")
+      }
+
+      connection.inputStream.use { inputStream ->
+        FileOutputStream(targetFile, false).use { outputStream ->
+          val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+          while (true) {
+            val bytesRead = inputStream.read(buffer)
+            if (bytesRead <= 0) {
+              break
+            }
+            outputStream.write(buffer, 0, bytesRead)
+          }
+          outputStream.flush()
+        }
+      }
+
+      promise.resolve(android.net.Uri.fromFile(targetFile).toString())
+    } catch (error: Exception) {
+      promise.reject("SECURE_DOWNLOAD_ERROR", error.message, error)
+    } finally {
+      connection?.disconnect()
     }
   }
 

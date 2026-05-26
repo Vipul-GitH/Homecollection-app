@@ -7,6 +7,7 @@ import {
 } from '../../constants/config/appVersion';
 
 const logAuthDebug = () => {};
+const LOGIN_REQUEST_TIMEOUT_MS = 15000;
 
 const buildDiagnosticTargetUrls = () => {
   try {
@@ -30,7 +31,10 @@ const runConnectivityProbe = async ({label, url, method = 'GET'}) => {
   }
 
   try {
-    const response = await secureFetch(url, {method});
+    const response = await secureFetch(url, {
+      method,
+      timeoutMs: LOGIN_REQUEST_TIMEOUT_MS,
+    });
 
     const probeResult = {
       label,
@@ -164,6 +168,7 @@ export const loginUserApi = async ({username, password}) => {
         app_version_name: APP_VERSION_NAME,
         platform: 'android',
       }),
+      timeoutMs: LOGIN_REQUEST_TIMEOUT_MS,
     });
 
     const responseData = await parseLoginResponse(response);

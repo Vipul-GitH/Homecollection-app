@@ -30,8 +30,14 @@ import {
   getLocalPanelCompaniesResponse,
 } from '../local/panelCatalogLocal';
 
-const WRITE_REQUEST_TIMEOUT_MS = 4000;
-const COMPLETE_BOOKING_REQUEST_TIMEOUT_MS = 7000;
+const LIGHT_GET_REQUEST_TIMEOUT_MS = 10000;
+const DETAIL_GET_REQUEST_TIMEOUT_MS = 15000;
+const NORMAL_WRITE_REQUEST_TIMEOUT_MS = 20000;
+const STATUS_REQUEST_TIMEOUT_MS = 30000;
+const UPLOAD_REQUEST_TIMEOUT_MS = 45000;
+const HANDOVER_HISTORY_REQUEST_TIMEOUT_MS = 15000;
+const COMPLETE_UPLOAD_MAX_FILES = 12;
+const COMPLETE_UPLOAD_MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024;
 
 const parseJsonResponse = async response => {
   try {
@@ -42,22 +48,38 @@ const parseJsonResponse = async response => {
   }
 };
 
-const logAppointmentDetailDebug = (label, payload) => {
-  const normalizedLabel = String(label || '');
-  if (
-    normalizedLabel !== '[Handover Save API Payload]' &&
-    normalizedLabel !== '[My Assigned Appointments API Response]'
-  ) {
-    return;
-  }
+const getDurationMs = startedAt => Date.now() - startedAt;
 
-  console.log(label, payload);
+const logAppointmentDetailDebug = (label, value) => {
+  if (
+    label === '[Appointment Details API URL]' ||
+    label === '[Appointment Details API HTTP Status]' ||
+    label === '[Appointment Details API Response]'
+  ) {
+    console.log(label, value);
+  }
 };
 
 const isPatientBookingMappingError = message =>
   /patient\s+.+\s+is\s+not\s+mapped\s+to\s+booking\s+/i.test(
     String(message || ''),
   );
+
+const shouldRetryCompleteBookingRequest = ({
+  response,
+  errorMessage,
+  usedReusableBookingDetail,
+}) => {
+  if (!usedReusableBookingDetail) {
+    return false;
+  }
+
+  if (response?.status !== 400) {
+    return false;
+  }
+
+  return isPatientBookingMappingError(errorMessage);
+};
 
 const getMappedMasterPatientId = (bookingDetail, sourcePatientId) => {
   if (!sourcePatientId) {
@@ -203,6 +225,42 @@ const buildPaymentProofUploadCountMap = (bookingDetail, paymentProofs) =>
     {},
   );
 
+const summarizeAttachmentCounts = ({
+  bookingDetail,
+  patientDocumentsMap,
+  manualSlipDocumentsMap,
+  paymentProofs,
+  patientCghsDocumentsMap,
+}) => ({
+  patientDocuments: buildUploadCountMap(patientDocumentsMap),
+  manualSlipDocuments: buildUploadCountMap(manualSlipDocumentsMap),
+  patientCghsDocuments: buildSectionUploadCountMap(patientCghsDocumentsMap),
+  paymentProofs: buildPaymentProofUploadCountMap(bookingDetail, paymentProofs),
+});
+
+const validateCompleteBookingAttachments = fileParts => {
+  if (fileParts.length > COMPLETE_UPLOAD_MAX_FILES) {
+    throw new Error(
+      `You can upload up to ${COMPLETE_UPLOAD_MAX_FILES} files while completing a booking.`,
+    );
+  }
+
+  const oversizedFile = fileParts.find(filePart => {
+    const size = Number(
+      filePart?.sizeBytes ?? filePart?.size ?? filePart?.fileSize ?? 0,
+    );
+    return Number.isFinite(size) && size > COMPLETE_UPLOAD_MAX_FILE_SIZE_BYTES;
+  });
+
+  if (oversizedFile) {
+    throw new Error(
+      `Each upload must be smaller than ${Math.round(
+        COMPLETE_UPLOAD_MAX_FILE_SIZE_BYTES / (1024 * 1024),
+      )} MB.`,
+    );
+  }
+};
+
 const hasCompleteBookingAttachments = ({
   patientDocumentsMap,
   manualSlipDocumentsMap,
@@ -243,6 +301,9 @@ const buildUploadDocumentPart = (fieldName, document) => {
     uri: document.uri,
     name: document.name || `${fieldName}-${Date.now()}`,
     type: document.type || 'application/octet-stream',
+    sizeBytes: Number(
+      document?.fileSize ?? document?.size ?? document?.sizeBytes ?? 0,
+    ),
   };
 };
 
@@ -309,7 +370,11 @@ const buildPaymentProofParts = ({
   return fileParts;
 };
 
-const fetchWithTimeout = async (url, options = {}, timeoutMs = WRITE_REQUEST_TIMEOUT_MS) => {
+const fetchWithTimeout = async (
+  url,
+  options = {},
+  timeoutMs = NORMAL_WRITE_REQUEST_TIMEOUT_MS,
+) => {
   const supportsAbortController = typeof AbortController === 'function';
 
   if (!supportsAbortController || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
@@ -349,7 +414,9 @@ const postCompleteBookingStatus = async ({
   manualSlipDocumentsMap,
   paymentProofs,
   patientCghsDocumentsMap,
+  onProgress,
 }) => {
+  const startedAt = Date.now();
   const apiUrl = getAssignedBookingStatusApiUrl(bookingId);
   const hasUploadableAttachments = hasCompleteBookingAttachments({
     patientDocumentsMap,
@@ -364,8 +431,39 @@ const postCompleteBookingStatus = async ({
     hasUploadableAttachments,
     payload,
   });
+  console.log('[Complete Booking API Payload]', {
+    url: apiUrl,
+    transport: hasUploadableAttachments ? 'multipart-fetch' : 'json-secure',
+    hasUploadableAttachments,
+    payload,
+  });
+  console.log(
+    '[Complete Booking API Payload JSON]',
+    JSON.stringify(
+      {
+        url: apiUrl,
+        transport: hasUploadableAttachments ? 'multipart-fetch' : 'json-secure',
+        hasUploadableAttachments,
+        payload,
+      },
+      null,
+      2,
+    ),
+  );
+
+  const attachmentCounts = summarizeAttachmentCounts({
+    bookingDetail,
+    patientDocumentsMap,
+    manualSlipDocumentsMap,
+    paymentProofs,
+    patientCghsDocumentsMap,
+  });
 
   if (!hasUploadableAttachments) {
+    onProgress?.({
+      stage: 'completing',
+      message: 'Completing booking...',
+    });
     const response = await secureFetch(apiUrl, {
       method: 'POST',
       headers: {
@@ -373,7 +471,7 @@ const postCompleteBookingStatus = async ({
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(payload),
-      timeoutMs: COMPLETE_BOOKING_REQUEST_TIMEOUT_MS,
+      timeoutMs: STATUS_REQUEST_TIMEOUT_MS,
     });
 
     logAppointmentDetailDebug('[Complete Booking API HTTP Status]', {
@@ -384,9 +482,18 @@ const postCompleteBookingStatus = async ({
 
     const responseData = await parseJsonResponse(response, '[Booking Status]');
     logAppointmentDetailDebug('[Complete Booking API Response]', responseData);
+    console.log('[AssignedBookingAPI][Complete][Duration]', {
+      bookingId,
+      transport: 'json-secure',
+      durationMs: getDurationMs(startedAt),
+    });
     return {response, responseData};
   }
 
+  onProgress?.({
+    stage: 'uploading',
+    message: 'Uploading booking files...',
+  });
   const files = [
     ...buildPatientDocumentParts({
       patientDocumentsMap,
@@ -398,6 +505,12 @@ const postCompleteBookingStatus = async ({
       paymentProofs,
     }),
   ];
+  validateCompleteBookingAttachments(files);
+  console.log('[AssignedBookingAPI][Complete][Uploads]', {
+    bookingId,
+    fileCount: files.length,
+    attachmentCounts,
+  });
 
   const response = await secureMultipartFetch({
     url: apiUrl,
@@ -409,7 +522,7 @@ const postCompleteBookingStatus = async ({
       payload: JSON.stringify(payload),
     },
     files,
-    timeoutMs: COMPLETE_BOOKING_REQUEST_TIMEOUT_MS,
+    timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
   });
   logAppointmentDetailDebug('[Complete Booking API HTTP Status]', {
     status: response.status,
@@ -419,6 +532,12 @@ const postCompleteBookingStatus = async ({
 
   const responseData = await parseJsonResponse(response, '[Booking Status]');
   logAppointmentDetailDebug('[Complete Booking API Response]', responseData);
+  console.log('[AssignedBookingAPI][Complete][Duration]', {
+    bookingId,
+    transport: 'multipart-secure',
+    durationMs: getDurationMs(startedAt),
+    fileCount: files.length,
+  });
 
   return {response, responseData};
 };
@@ -426,6 +545,15 @@ const postCompleteBookingStatus = async ({
 const getApiErrorMessage = (response, responseData, fallbackMessage) => {
   if (response.status === 0) {
     return 'Network request failed';
+  }
+
+  if (response.status === 401) {
+    return (
+      responseData?.message ||
+      responseData?.detail ||
+      responseData?.error ||
+      'Token is invalidated. Please login again'
+    );
   }
 
   const bodyIndicatesFailure =
@@ -481,6 +609,15 @@ const buildAssignedBookingCancelPayload = statusPayload => {
     remark,
     reschedule_requested: isRescheduleRequested,
   };
+  if (payload.complete_time !== undefined && payload.complete_time !== null) {
+    cancelPayload.complete_time = payload.complete_time;
+  }
+  if (
+    payload.complete_location !== undefined &&
+    payload.complete_location !== null
+  ) {
+    cancelPayload.complete_location = payload.complete_location;
+  }
   if (payload.appointment_id !== undefined && payload.appointment_id !== null) {
     cancelPayload.appointment_id = payload.appointment_id;
   }
@@ -494,12 +631,14 @@ const buildAssignedBookingCancelPayload = statusPayload => {
 };
 
 export const fetchAssignedBookingsApi = async ({accessToken, loggedInUser}) => {
+  const startedAt = Date.now();
   const response = await secureFetch(MY_ASSIGNED_BOOKINGS_API_URL, {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${accessToken}`,
     },
+    timeoutMs: LIGHT_GET_REQUEST_TIMEOUT_MS,
   });
 
   const responseData = await parseJsonResponse(response, '[Assigned]');
@@ -518,7 +657,16 @@ export const fetchAssignedBookingsApi = async ({accessToken, loggedInUser}) => {
     throw new Error(errorMessage);
   }
 
-  return extractAssignedBookings(responseData).map(normalizeAssignedBooking);
+  const normalizedBookings = extractAssignedBookings(responseData).map(
+    normalizeAssignedBooking,
+  );
+  console.log('[AssignedBookingAPI][List][Duration]', {
+    user: loggedInUser || '',
+    count: normalizedBookings.length,
+    durationMs: getDurationMs(startedAt),
+    status: response.status,
+  });
+  return normalizedBookings;
 };
 
 export const fetchAssignedBookingHistoryApi = async ({accessToken}) => {
@@ -528,6 +676,7 @@ export const fetchAssignedBookingHistoryApi = async ({accessToken}) => {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${accessToken}`,
     },
+    timeoutMs: HANDOVER_HISTORY_REQUEST_TIMEOUT_MS,
   });
 
   const responseData = await parseJsonResponse(response, '[Assigned History]');
@@ -545,6 +694,7 @@ export const fetchAssignedBookingHistoryApi = async ({accessToken}) => {
 };
 
 export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
+  const startedAt = Date.now();
   const bookingId = booking?.id;
   const appointmentId = booking?.appointmentId || booking?.appointment_id;
   const sourceType = booking?.sourceType || booking?.source_type;
@@ -553,6 +703,12 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
     appointmentId,
     sourceType,
   );
+  console.log('[AssignedBookingAPI][Detail][Request]', {
+    bookingId,
+    appointmentId,
+    sourceType,
+    apiUrl,
+  });
 
   const response = await secureFetch(apiUrl, {
     method: 'GET',
@@ -560,6 +716,7 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
       Authorization: `Bearer ${accessToken}`,
       Accept: 'application/json',
     },
+    timeoutMs: DETAIL_GET_REQUEST_TIMEOUT_MS,
   });
 
   const responseData = await parseJsonResponse(response, '[Assigned Detail]');
@@ -567,6 +724,15 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
   logAppointmentDetailDebug('[Appointment Details API HTTP Status]', {
     status: response.status,
     ok: response.ok,
+  });
+  console.log('[AssignedBookingAPI][Detail][Response]', {
+    bookingId,
+    appointmentId,
+    sourceType,
+    apiUrl,
+    status: response.status,
+    ok: response.ok,
+    durationMs: getDurationMs(startedAt),
   });
   logAppointmentDetailDebug('[Appointment Details API Response]', responseData);
   const errorMessage = getApiErrorMessage(
@@ -591,7 +757,10 @@ export const updateAssignedBookingStatusApi = async ({
   appointmentId,
   sourceType,
   statusPayload = {},
+  bookingDetail = null,
+  onProgress,
 }) => {
+  const startedAt = Date.now();
   const normalizedSourceType = String(sourceType || '')
     .trim()
     .toUpperCase();
@@ -623,8 +792,19 @@ export const updateAssignedBookingStatusApi = async ({
     ...statusPayloadFields,
     action: action === 'complete' ? 'completed' : action,
   };
+  console.log('[AssignedBookingAPI][Status][Request]', {
+    bookingId,
+    action,
+    appointmentId: normalizedAppointmentId,
+    sourceType: normalizedSourceType,
+    statusPayloadKeys: Object.keys(statusPayloadFields || {}),
+  });
 
   if (payload.action === 'completed') {
+    onProgress?.({
+      stage: 'preparing',
+      message: 'Preparing completion payload...',
+    });
     logAppointmentDetailDebug('[Complete Booking API Full Status Payload]', {
       bookingId,
       appointmentId: normalizedAppointmentId,
@@ -643,10 +823,18 @@ export const updateAssignedBookingStatusApi = async ({
       appointmentId: normalizedAppointmentId,
       sourceType: normalizedSourceType,
     };
-    const latestBookingDetail = await fetchAssignedBookingDetailApi({
-      accessToken,
-      booking: routingBooking,
-    });
+    const hasReusableBookingDetail =
+      bookingDetail &&
+      String(bookingDetail?.id || '') === String(bookingId) &&
+      Array.isArray(bookingDetail?.patients) &&
+      bookingDetail.patients.length > 0;
+    const usedReusableBookingDetail = Boolean(hasReusableBookingDetail);
+    const latestBookingDetail = hasReusableBookingDetail
+      ? bookingDetail
+      : await fetchAssignedBookingDetailApi({
+          accessToken,
+          booking: routingBooking,
+        });
     let resolvedPatientDocumentsMap = buildMasterPatientDocumentMap(
       latestBookingDetail,
       patientDocumentsMap,
@@ -672,6 +860,7 @@ export const updateAssignedBookingStatusApi = async ({
         manualSlipDocumentsMap: resolvedManualSlipDocumentsMap,
         paymentProofs,
         patientCghsDocumentsMap: resolvedPatientCghsDocumentsMap,
+        onProgress,
       }));
     } catch (error) {
       logAppointmentDetailDebug('[Complete Booking API Error]', {
@@ -687,7 +876,18 @@ export const updateAssignedBookingStatusApi = async ({
       'Unable to update booking status right now.',
     );
 
-    if (errorMessage && isPatientBookingMappingError(errorMessage)) {
+    if (
+      errorMessage &&
+      shouldRetryCompleteBookingRequest({
+        response,
+        errorMessage,
+        usedReusableBookingDetail,
+      })
+    ) {
+      onProgress?.({
+        stage: 'preparing',
+        message: 'Refreshing latest booking details...',
+      });
       const refreshedBookingDetail = await fetchAssignedBookingDetailApi({
         accessToken,
         booking: routingBooking,
@@ -714,6 +914,7 @@ export const updateAssignedBookingStatusApi = async ({
         manualSlipDocumentsMap: resolvedManualSlipDocumentsMap,
         paymentProofs,
         patientCghsDocumentsMap: resolvedPatientCghsDocumentsMap,
+        onProgress,
       }));
       logAppointmentDetailDebug(
         '[Complete Booking API Retry Response]',
@@ -730,6 +931,11 @@ export const updateAssignedBookingStatusApi = async ({
       throw new Error(errorMessage);
     }
 
+    console.log('[AssignedBookingAPI][Status][Duration]', {
+      bookingId,
+      action: payload.action,
+      durationMs: getDurationMs(startedAt),
+    });
     return responseData;
   }
 
@@ -748,7 +954,7 @@ export const updateAssignedBookingStatusApi = async ({
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(cancelPayload),
-      timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
+      timeoutMs: NORMAL_WRITE_REQUEST_TIMEOUT_MS,
     });
 
     const responseData = await parseJsonResponse(response, '[Cancel Booking]');
@@ -793,10 +999,19 @@ export const updateAssignedBookingStatusApi = async ({
       Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify(payload),
-    timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
+    timeoutMs: STATUS_REQUEST_TIMEOUT_MS,
   });
 
   const responseData = await parseJsonResponse(response, '[Booking Status]');
+  console.log('[AssignedBookingAPI][Status][Response]', {
+    bookingId,
+    action: payload.action,
+    appointmentId: normalizedAppointmentId,
+    sourceType: normalizedSourceType,
+    status: response.status,
+    ok: response.ok,
+    durationMs: getDurationMs(startedAt),
+  });
   const errorMessage = getApiErrorMessage(
     response,
     responseData,
@@ -828,7 +1043,7 @@ export const saveAssignedBookingHandoverBatchApi = async ({
       Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify(payload || {}),
-    timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
+    timeoutMs: NORMAL_WRITE_REQUEST_TIMEOUT_MS,
   });
 
   const responseData = await parseJsonResponse(response, '[Handover Batch Save]');
@@ -928,6 +1143,7 @@ export const fetchAssignedBookingHandoverHistoryApi = async ({
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
+    timeoutMs: LIGHT_GET_REQUEST_TIMEOUT_MS,
   });
 
   const responseData = await parseJsonResponse(response, '[Handover Batch History]');
@@ -1041,7 +1257,7 @@ export const addAssignedBookingPatientApi = async ({
       body: JSON.stringify({
         existing_patient_id: Number(patient.existing_patient_id),
       }),
-      timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
+      timeoutMs: NORMAL_WRITE_REQUEST_TIMEOUT_MS,
     });
 
     const responseData = await parseJsonResponse(response, '[Add Existing Patient]');
@@ -1091,7 +1307,7 @@ export const addAssignedBookingPatientApi = async ({
         ...(patient?.card_no ? {card_no: String(patient.card_no)} : {}),
         ...(patient?.tag ? {tag: String(patient.tag)} : {}),
       }),
-      timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
+      timeoutMs: NORMAL_WRITE_REQUEST_TIMEOUT_MS,
     });
 
     const responseData = await parseJsonResponse(response, '[Add Patient]');
@@ -1143,13 +1359,17 @@ export const addAssignedBookingPatientApi = async ({
 
   // SecureApiModule currently accepts string bodies only, so multipart upload
   // must use native fetch for this endpoint.
-  const response = await fetchWithTimeout(getAssignedBookingPatientsApiUrl(bookingId), {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
+  const response = await fetchWithTimeout(
+    getAssignedBookingPatientsApiUrl(bookingId),
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: formData,
     },
-    body: formData,
-  });
+    UPLOAD_REQUEST_TIMEOUT_MS,
+  );
 
   const responseData = await parseJsonResponse(response, '[Add Patient]');
   const errorMessage = getApiErrorMessage(
@@ -1177,7 +1397,7 @@ export const updateAssignedBookingAddressApi = async ({
       Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify(addressPayload || {}),
-    timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
+    timeoutMs: DETAIL_GET_REQUEST_TIMEOUT_MS,
   });
 
   const responseData = await parseJsonResponse(response, '[Update Address]');
@@ -1209,7 +1429,7 @@ export const cancelAssignedBookingPatientApi = async ({
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(cancelPayload || {}),
-      timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
+      timeoutMs: NORMAL_WRITE_REQUEST_TIMEOUT_MS,
     },
   );
 
@@ -1303,12 +1523,13 @@ export const updateAssignedBookingPatientApi = async ({
   const response = await fetchWithTimeout(
     url,
     {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: formData,
     },
-    body: formData,
-    },
+    UPLOAD_REQUEST_TIMEOUT_MS,
   );
 
   const responseData = await parseJsonResponse(response, '[Update Patient]');
@@ -1381,6 +1602,7 @@ export const fetchPanelCatalogByCompanyApi = async ({
   gcode = '',
   scode = '',
   query = '',
+  patientGender = '',
 }) => {
   if (catalogLevel === 'groups') {
     const localResponseData =
@@ -1409,6 +1631,7 @@ export const fetchPanelCatalogByCompanyApi = async ({
         panelCompany: panelCompany || {compCatId},
         gcode,
         scode,
+        patientGender,
       });
 
     if (localResponseData?.ok && Array.isArray(localResponseData?.tests)) {
@@ -1422,6 +1645,7 @@ export const fetchPanelCatalogByCompanyApi = async ({
         panelCompany: panelCompany || {compCatId},
         query,
         limit: 80,
+        patientGender,
       });
 
     if (localResponseData?.ok && Array.isArray(localResponseData?.tests)) {

@@ -106,16 +106,12 @@ const buildCachedBookingDetailKey = booking => {
 
 export const getCachedBookingDetail = async booking => {
   const cacheKey = buildCachedBookingDetailKey(booking);
-  const bookingId = toStableValue(
-    typeof booking === 'object' ? booking?.id || booking?.bookingId || booking?.booking_id : booking,
-  );
-
-  if (!cacheKey && !bookingId) {
+  if (!cacheKey) {
     return null;
   }
 
   const detailsMap = await getCachedBookingDetailsMap();
-  return detailsMap[cacheKey] || detailsMap[bookingId] || null;
+  return detailsMap[cacheKey] || null;
 };
 
 export const persistBookingDetail = async (bookingDetail, bookingMeta = null) => {
@@ -128,23 +124,17 @@ export const persistBookingDetail = async (bookingDetail, bookingMeta = null) =>
   const detailsMap = await getCachedBookingDetailsMap();
   const detailCacheKey = buildCachedBookingDetailKey(bookingDetail);
   const metaCacheKey = buildCachedBookingDetailKey(bookingMeta);
-  const normalizedBookingId = String(bookingId);
-  const cacheKey = detailCacheKey || metaCacheKey || normalizedBookingId;
   const cacheKeysToUpdate = Array.from(
     new Set(
       [
-        cacheKey,
         detailCacheKey,
         metaCacheKey,
-        normalizedBookingId,
-        ...Object.keys(detailsMap).filter(
-          key =>
-            key === normalizedBookingId ||
-            key.startsWith(`${normalizedBookingId}|`),
-        ),
       ].filter(Boolean),
     ),
   );
+  if (!cacheKeysToUpdate.length) {
+    return;
+  }
   if (
     cacheKeysToUpdate.every(
       key => toJsonString(detailsMap[key] || null) === toJsonString(bookingDetail),
@@ -157,10 +147,40 @@ export const persistBookingDetail = async (bookingDetail, bookingMeta = null) =>
     detailsMap[key] = bookingDetail;
   });
 
-  await writeJsonIfChanged(
-    CACHED_BOOKING_DETAILS_KEY,
-    detailsMap,
+  await writeJsonIfChanged(CACHED_BOOKING_DETAILS_KEY, detailsMap);
+};
+
+export const removeCachedBookingDetail = async booking => {
+  const cacheKey = buildCachedBookingDetailKey(booking);
+  const normalizedBookingId = toStableValue(
+    typeof booking === 'object'
+      ? booking?.id || booking?.bookingId || booking?.booking_id
+      : booking,
   );
+
+  if (!cacheKey && !normalizedBookingId) {
+    return;
+  }
+
+  const detailsMap = await getCachedBookingDetailsMap();
+  const nextDetailsMap = {...detailsMap};
+  let didRemoveDetail = false;
+
+  Object.keys(nextDetailsMap).forEach(key => {
+    if (
+      (cacheKey && key === cacheKey) ||
+      (normalizedBookingId && key.startsWith(`${normalizedBookingId}|`))
+    ) {
+      delete nextDetailsMap[key];
+      didRemoveDetail = true;
+    }
+  });
+
+  if (!didRemoveDetail) {
+    return;
+  }
+
+  await writeJsonIfChanged(CACHED_BOOKING_DETAILS_KEY, nextDetailsMap);
 };
 
 export const updateCachedBookingStatus = async (

@@ -908,6 +908,12 @@ function SampleCollectionScreen({
   ]);
   const pendingChildTestsPayload = useMemo(() => {
     const bookingId = toNumberOrValue(selectedBooking?.id);
+    const appointmentId = toNumberOrValue(
+      selectedBooking?.appointmentId || selectedBooking?.appointment_id,
+    );
+    const sourceType = toStableValue(
+      selectedBooking?.sourceType || selectedBooking?.source_type,
+    ).toUpperCase();
     const bookingPatientId = getBookingPatientId(selectedPatient);
     const patientId = getPatientApiId(selectedPatient);
     const pendingGroupMap = new Map();
@@ -918,12 +924,10 @@ function SampleCollectionScreen({
       }
 
       item.tests.forEach(test => {
-        const isPendingChildTest =
-          !test.isProfileContext &&
-          Number(test.level || 0) > 0 &&
-          !selectedSpecimenTests[test.key];
+        const isPendingCollectableTest =
+          !test.isProfileContext && !selectedSpecimenTests[test.key];
 
-        if (!isPendingChildTest) {
+        if (!isPendingCollectableTest) {
           return;
         }
 
@@ -949,6 +953,12 @@ function SampleCollectionScreen({
 
         pendingGroupMap.set(groupKey, {
           booking_id: bookingId,
+          ...(sourceType === 'APPOINTMENT' && appointmentId
+            ? {
+                appointment_id: appointmentId,
+                source_type: sourceType,
+              }
+            : {}),
           booking_patient_id: bookingPatientId,
           patient_id: patientId,
           booking_test_id: test.rootBookingTestId || '',
@@ -965,7 +975,11 @@ function SampleCollectionScreen({
   }, [
     getParentBookedCode,
     getRootKeyFromTestKey,
+    selectedBooking?.appointmentId,
+    selectedBooking?.appointment_id,
     selectedBooking?.id,
+    selectedBooking?.sourceType,
+    selectedBooking?.source_type,
     selectedPatient,
     selectedSpecimenSummary,
     selectedSpecimenTests,

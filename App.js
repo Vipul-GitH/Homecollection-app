@@ -112,6 +112,7 @@ function App() {
           loadingOverlayTitle={loadingOverlayTitle}
           loadingOverlayMessage={loadingOverlayMessage}
           onLogout={() => actions.setShowLogoutModal(true)}
+          onSessionExpired={actions.performLogout}
           onBookingAction={actions.handleBookingAction}
           onBookingCompleted={actions.handleBookingCompletedNavigation}
           onOpenAddTest={actions.handleOpenAddTest}

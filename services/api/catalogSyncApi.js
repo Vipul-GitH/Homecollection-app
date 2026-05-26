@@ -3,6 +3,7 @@ import {secureFetch} from './secureFetch';
 import {shouldSkipCatalogSyncTable} from '../local/catalogSyncLocal';
 
 const logSyncApiDebug = () => {};
+const CATALOG_SYNC_REQUEST_TIMEOUT_MS = 25000;
 
 const getRowsFromResponse = responseData => {
   if (Array.isArray(responseData)) {
@@ -53,7 +54,7 @@ export const fetchCatalogSyncPageApi = async ({
     {
       method: 'GET',
       headers,
-      timeoutMs: 60000,
+      timeoutMs: CATALOG_SYNC_REQUEST_TIMEOUT_MS,
     },
   );
 

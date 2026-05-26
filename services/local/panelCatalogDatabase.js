@@ -110,6 +110,7 @@ export const getDatabasePanelCatalogTestsByCompanyResponse = async ({
   panelCompany,
   gcode,
   scode,
+  patientGender = '',
 }) => {
   if (
     !isCatalogDatabaseAvailable() ||
@@ -123,6 +124,7 @@ export const getDatabasePanelCatalogTestsByCompanyResponse = async ({
       JSON.stringify(panelCompany || {}),
       String(gcode || ''),
       String(scode || ''),
+      String(patientGender || ''),
     ),
   );
 };
@@ -131,6 +133,7 @@ export const searchDatabasePanelCatalogTestsByCompanyResponse = async ({
   panelCompany,
   query,
   limit = 80,
+  patientGender = '',
 }) => {
   if (
     !isCatalogDatabaseAvailable() ||
@@ -144,6 +147,7 @@ export const searchDatabasePanelCatalogTestsByCompanyResponse = async ({
       JSON.stringify(panelCompany || {}),
       String(query || ''),
       String(limit || 80),
+      String(patientGender || ''),
     ),
   );
 };

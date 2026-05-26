@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {Alert, AppState} from 'react-native';
+import GetLocation from 'react-native-get-location';
 import {
   addAssignedBookingPatientApi,
   cancelAssignedBookingPatientApi,
@@ -23,6 +24,7 @@ import {
   persistAssignedBookings,
   persistBookingDetail,
   persistCompletedBookings,
+  removeCachedBookingDetail,
   removeCachedAssignedBooking,
   queuePendingBookingAction,
   queuePendingPatientAction,
@@ -45,6 +47,132 @@ import {
   getLocalMatchedPanelCompaniesResponse,
   getLocalPanelCatalogByCompanyResponse,
 } from '../services/local/panelCatalogLocal';
+
+const formatStatusActionTime = (date = new Date()) => {
+  let hours = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const suffix = hours >= 12 ? 'pm' : 'am';
+  hours %= 12;
+  if (hours === 0) {
+    hours = 12;
+  }
+
+  return `${hours}:${minutes} ${suffix}`;
+};
+
+const formatStatusActionLocation = location => {
+  const latitude = Number(location?.latitude);
+  const longitude = Number(location?.longitude);
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return '';
+  }
+
+  return `${latitude}, ${longitude}`;
+};
+
+const STATUS_ACTION_LOCATION_WAIT_MS = 300;
+
+const getStatusActionFieldPrefix = action => {
+  const normalizedAction = String(action || '').trim().toLowerCase();
+
+  if (
+    normalizedAction !== 'start' &&
+    normalizedAction !== 'stop' &&
+    normalizedAction !== 'cancel' &&
+    normalizedAction !== 'cancelled' &&
+    normalizedAction !== 'complete' &&
+    normalizedAction !== 'completed'
+  ) {
+    return '';
+  }
+  return normalizedAction === 'cancel' ||
+    normalizedAction === 'cancelled' ||
+    normalizedAction === 'complete' ||
+    normalizedAction === 'completed'
+    ? 'complete'
+    : normalizedAction;
+};
+
+const buildStatusActionMetaPayload = action => {
+  const fieldPrefix = getStatusActionFieldPrefix(action);
+
+  if (!fieldPrefix) {
+    return {};
+  }
+
+  return {
+    [`${fieldPrefix}_time`]: formatStatusActionTime(),
+  };
+};
+
+const buildStatusActionLocationPayload = async action => {
+  const fieldPrefix = getStatusActionFieldPrefix(action);
+
+  if (!fieldPrefix) {
+    return {};
+  }
+
+  try {
+    const location = await GetLocation.getCurrentPosition({
+      enableHighAccuracy: true,
+    });
+    const locationText = formatStatusActionLocation(location);
+
+    if (locationText) {
+      return {
+        [`${fieldPrefix}_location`]: locationText,
+      };
+    }
+  } catch (error) {
+    warnDebug('Booking status location capture warning:', error);
+  }
+
+  return {};
+};
+
+const resolveStatusActionMetaPayload = async action => {
+  const startedAt = Date.now();
+  const payload = buildStatusActionMetaPayload(action);
+  const fieldPrefix = getStatusActionFieldPrefix(action);
+
+  if (!fieldPrefix) {
+    return payload;
+  }
+
+  try {
+    const locationPayload = await Promise.race([
+      buildStatusActionLocationPayload(action),
+      new Promise(resolve => {
+        setTimeout(() => resolve(null), STATUS_ACTION_LOCATION_WAIT_MS);
+      }),
+    ]);
+
+    console.log('[AssignedBooking][Location][Duration]', {
+      action,
+      durationMs: Date.now() - startedAt,
+      resolved: Boolean(locationPayload),
+      waitBudgetMs: STATUS_ACTION_LOCATION_WAIT_MS,
+    });
+
+    return locationPayload
+      ? {
+          ...payload,
+          ...locationPayload,
+        }
+      : payload;
+  } catch (error) {
+    warnDebug('Booking status meta payload resolution warning:', error);
+    console.log('[AssignedBooking][Location][Duration]', {
+      action,
+      durationMs: Date.now() - startedAt,
+      resolved: false,
+      waitBudgetMs: STATUS_ACTION_LOCATION_WAIT_MS,
+      error: error?.message || 'Unknown error',
+    });
+    return payload;
+  }
+};
 
 const toDisplayValue = value => {
   if (value === null || value === undefined) {
@@ -212,18 +340,34 @@ const getBookingDisplayCode = booking =>
   toDisplayValue(booking?.bookingCode || booking?.booking_code || booking?.id) ||
   'the active booking';
 
-const isReloginRequiredError = error =>
+const isReloginRequiredError = error => {
+  const message = String(error?.message || '')
+    .trim()
+    .toLowerCase();
+
+  return (
+    message.includes('token is invalidated') ||
+    message.includes('invalid authentication credentials') ||
+    message.includes('invalid or expired token') ||
+    message.includes('session has expired') ||
+    message.includes('please login again') ||
+    message.includes('please log in again') ||
+    message.includes('unauthorized')
+  );
+};
+
+const isAssignedBookingNotFoundError = error =>
   String(error?.message || '')
     .trim()
     .toLowerCase()
-    .includes('token is invalidated');
+    .includes('not found');
 
 const isTerminalBookingAction = action =>
   ['complete', 'completed', 'cancel', 'cancelled'].includes(
     String(action || '').trim().toLowerCase(),
   );
 
-const MAX_ASSIGNED_BOOKING_DETAIL_WARM_CACHE = 3;
+const MAX_ASSIGNED_BOOKING_DETAIL_WARM_CACHE = 1;
 
 const toHandoverTubeName = tube =>
   typeof tube === 'string'
@@ -311,12 +455,15 @@ const selectBookingsForWarmCache = bookings => {
   };
 
   sourceBookings.filter(isStartedBooking).forEach(appendBooking);
-  sourceBookings.forEach(appendBooking);
 
   return prioritizedBookings.slice(0, MAX_ASSIGNED_BOOKING_DETAIL_WARM_CACHE);
 };
 
-export const useAssignedBookings = ({accessToken, loggedInUser}) => {
+export const useAssignedBookings = ({
+  accessToken,
+  loggedInUser,
+  onSessionExpired,
+}) => {
   const [assignedAppointments, setAssignedAppointments] = useState([]);
   const [isLoadingAssignedAppointments, setIsLoadingAssignedAppointments] =
     useState(false);
@@ -329,6 +476,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     useState('');
   const [loadingAssignedBookingId, setLoadingAssignedBookingId] = useState('');
   const [bookingActionLoading, setBookingActionLoading] = useState('');
+  const [bookingActionProgressLabel, setBookingActionProgressLabel] = useState('');
   const [isAddingPatient, setIsAddingPatient] = useState(false);
   const [isUpdatingPatient, setIsUpdatingPatient] = useState(false);
   const [cancellingPatientId, setCancellingPatientId] = useState('');
@@ -338,6 +486,42 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
   const isPendingOfflineSyncRunningRef = useRef(false);
   const inFlightBookingActionKeysRef = useRef(new Set());
   const inFlightBookingDetailRequestsRef = useRef(new Map());
+  const isHandlingSessionExpiryRef = useRef(false);
+
+  const handleSessionExpired = useCallback(
+    error => {
+      if (!isReloginRequiredError(error)) {
+        return false;
+      }
+
+      if (isHandlingSessionExpiryRef.current) {
+        return true;
+      }
+
+      isHandlingSessionExpiryRef.current = true;
+      Alert.alert(
+        'Session Expired',
+        'Your session has expired. Please log in again.',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              Promise.resolve(onSessionExpired?.())
+                .catch(resetError => {
+                  warnDebug('Session reset after expiry failed:', resetError);
+                })
+                .finally(() => {
+                  isHandlingSessionExpiryRef.current = false;
+                });
+            },
+          },
+        ],
+        {cancelable: false},
+      );
+      return true;
+    },
+    [onSessionExpired],
+  );
 
   const getPanelCompanyCatalogCacheKey = useCallback(
     ({
@@ -347,6 +531,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       gcode = '',
       scode = '',
       query = '',
+      patientGender = '',
     }) =>
       [
         toDisplayValue(panelCompany?.panelCode || panelCompany?.code),
@@ -359,6 +544,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         toDisplayValue(gcode).toUpperCase(),
         toDisplayValue(scode).toUpperCase(),
         toDisplayValue(query).toLowerCase(),
+        toDisplayValue(patientGender).toLowerCase(),
       ].join('|'),
     [],
   );
@@ -563,6 +749,9 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
           );
         }
       } catch (error) {
+        if (handleSessionExpired(error)) {
+          return;
+        }
         await updatePendingBookingAction(pendingAction.id, {
           lastError: error?.message || 'Sync failed',
           lastTriedAt: new Date().toISOString(),
@@ -570,7 +759,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         });
       }
     }
-  }, [accessToken]);
+  }, [accessToken, handleSessionExpired]);
 
   const syncPendingPatientActions = useCallback(async () => {
     if (!accessToken) {
@@ -612,6 +801,9 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         await removePendingPatientAction(pendingAction.id);
         bookingIdsToRefresh.add(pendingAction.bookingId);
       } catch (error) {
+        if (handleSessionExpired(error)) {
+          return;
+        }
         await updatePendingPatientAction(pendingAction.id, {
           lastError: error?.message || 'Sync failed',
           lastTriedAt: new Date().toISOString(),
@@ -632,7 +824,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         warnDebug('Synced patient detail refresh skipped:', error);
       }
     }
-  }, [accessToken, persistUpdatedBookingDetail]);
+  }, [accessToken, handleSessionExpired, persistUpdatedBookingDetail]);
 
   const syncPendingOfflineWork = useCallback(async (options = {}) => {
     const {force = false} = options;
@@ -660,6 +852,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
 
   const warmAssignedBookingDetailsCache = useCallback(
     async bookings => {
+      const startedAt = Date.now();
       const bookingsToWarm = selectBookingsForWarmCache(bookings);
 
       if (!accessToken || !bookingsToWarm.length) {
@@ -750,13 +943,15 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       }
 
       setAssignedAppointmentsError('');
-      await syncPendingOfflineWork({force: true});
       const normalizedBookings = await fetchAssignedBookingsApi({
         accessToken,
         loggedInUser,
       });
       setAssignedAppointments(normalizedBookings);
       await persistAssignedBookings(normalizedBookings);
+      syncPendingOfflineWork({force: true}).catch(error => {
+        warnDebug('Assigned appointments background sync error:', error);
+      });
       warmAssignedBookingDetailsCache(normalizedBookings).catch(error => {
         warnDebug('Assigned booking detail background cache error:', error);
       });
@@ -767,6 +962,12 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       });
       warnDebug('Assigned appointments error:', error);
 
+      if (handleSessionExpired(error)) {
+        setAssignedAppointments([]);
+        setAssignedAppointmentsError('Your session has expired. Please log in again.');
+        return;
+      }
+
       if (hasCachedBookings) {
         setAssignedAppointments(cachedBookings);
         setAssignedAppointmentsError('');
@@ -776,22 +977,21 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         );
       } else {
         setAssignedAppointments([]);
-        const requiresRelogin = isReloginRequiredError(error);
-        const errorMessage = requiresRelogin
-          ? 'Your session has expired. Please log in again.'
-          : error?.message ||
-            'Unable to reach the assigned appointments API. Please check the server and network.';
-
-        setAssignedAppointmentsError(errorMessage);
-
-        if (requiresRelogin) {
-          Alert.alert('Session Expired', 'Your session has expired. Please log in again.');
-        }
+        setAssignedAppointmentsError(
+          error?.message ||
+            'Unable to reach the assigned appointments API. Please check the server and network.',
+        );
       }
     } finally {
       setIsLoadingAssignedAppointments(false);
     }
-  }, [accessToken, loggedInUser, syncPendingOfflineWork, warmAssignedBookingDetailsCache]);
+  }, [
+    accessToken,
+    handleSessionExpired,
+    loggedInUser,
+    syncPendingOfflineWork,
+    warmAssignedBookingDetailsCache,
+  ]);
 
   const fetchCompletedAppointments = useCallback(async () => {
     try {
@@ -808,6 +1008,12 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         name: error?.name,
       });
       warnDebug('Completed appointments error:', error);
+
+      if (handleSessionExpired(error)) {
+        setCompletedAppointments([]);
+        setCompletedAppointmentsError('Your session has expired. Please log in again.');
+        return;
+      }
 
       const cachedBookings = await getCachedCompletedBookings();
 
@@ -828,7 +1034,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     } finally {
       setIsLoadingCompletedAppointments(false);
     }
-  }, [accessToken]);
+  }, [accessToken, handleSessionExpired]);
 
   const openAssignedBooking = useCallback(
     async (booking, {onFreshBookingDetail} = {}) => {
@@ -866,6 +1072,11 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
               onFreshBookingDetail(bookingDetail);
             }
           } catch (error) {
+            if (isAssignedBookingNotFoundError(error)) {
+              removeCachedBookingDetail(booking).catch(cacheError => {
+                warnDebug('Assigned booking detail stale cache cleanup skipped:', cacheError);
+              });
+            }
             warnDebug('Assigned booking detail background refresh skipped:', error);
           } finally {
             inFlightBookingDetailRequestsRef.current.delete(bookingDetailRequestKey);
@@ -896,10 +1107,20 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         return bookingDetail;
       } catch (error) {
         warnDebug('Assigned booking detail error:', error);
+        if (handleSessionExpired(error)) {
+          return null;
+        }
+        const isNotFoundError = isAssignedBookingNotFoundError(error);
+
+        if (isNotFoundError) {
+          await removeCachedBookingDetail(booking).catch(cacheError => {
+            warnDebug('Assigned booking detail stale cache cleanup error:', cacheError);
+          });
+        }
 
         const cachedBookingDetail = await getCachedBookingDetail(booking);
 
-        if (cachedBookingDetail) {
+        if (cachedBookingDetail && !isNotFoundError) {
           showPlatformMessage(
             'Offline Mode',
             'Showing saved booking details while offline.',
@@ -920,7 +1141,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         );
       }
     },
-    [accessToken, syncPendingOfflineWork],
+    [accessToken, handleSessionExpired, syncPendingOfflineWork],
   );
 
   const submitBookingAction = useCallback(
@@ -950,7 +1171,15 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       }
 
       const actionKey = `${String(bookingId)}|${String(action || '').trim().toLowerCase()}`;
+      const isCompletionAction =
+        String(action || '').trim().toLowerCase() === 'completed';
       if (inFlightBookingActionKeysRef.current.has(actionKey)) {
+        return false;
+      }
+      if (
+        isCompletionAction &&
+        bookingActionLoading === 'completed'
+      ) {
         return false;
       }
 
@@ -971,17 +1200,31 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         }
       }
 
+      let nextStatusPayload = statusPayload;
+
       try {
         inFlightBookingActionKeysRef.current.add(actionKey);
         setBookingActionLoading(action);
         const {appointmentId, sourceType} = resolveBookingRoutingMeta(booking);
+        const statusActionMetaPayload = await resolveStatusActionMetaPayload(action);
+        nextStatusPayload = {
+          ...statusPayload,
+          ...statusActionMetaPayload,
+        };
         await updateAssignedBookingStatusApi({
           accessToken,
           bookingId,
           action,
           appointmentId,
           sourceType,
-          statusPayload,
+          statusPayload: nextStatusPayload,
+          bookingDetail: action === 'completed' ? booking : null,
+          onProgress:
+            action === 'completed'
+              ? ({message}) => {
+                  setBookingActionProgressLabel(String(message || '').trim());
+                }
+              : undefined,
         });
         await applyBookingStatusLocally(bookingId, action);
         onLocalBookingUpdate({
@@ -1005,6 +1248,9 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         showPlatformMessage('Success', successMessage);
         return true;
       } catch (error) {
+        if (handleSessionExpired(error)) {
+          return false;
+        }
         if (isLikelyOfflineError(error)) {
           const {appointmentId, sourceType} = resolveBookingRoutingMeta(booking);
           await queuePendingBookingAction({
@@ -1012,7 +1258,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
             action,
             appointmentId,
             sourceType,
-            statusPayload,
+            statusPayload: nextStatusPayload,
           });
           await applyBookingStatusLocally(bookingId, action);
           onLocalBookingUpdate({
@@ -1037,12 +1283,15 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       } finally {
         inFlightBookingActionKeysRef.current.delete(actionKey);
         setBookingActionLoading('');
+        setBookingActionProgressLabel('');
       }
     },
     [
       accessToken,
       applyBookingStatusLocally,
       assignedAppointments,
+      bookingActionLoading,
+      handleSessionExpired,
       persistLocalCompletedBooking,
     ],
   );
@@ -1084,6 +1333,9 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         showPlatformMessage('Success', 'Patient added successfully.');
         return updatedBookingDetail;
       } catch (error) {
+        if (handleSessionExpired(error)) {
+          return null;
+        }
         if (isLikelyOfflineError(error)) {
           const localPatientId = `offline-patient-${Date.now()}`;
           await queuePendingPatientAction({
@@ -1124,6 +1376,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     [
       accessToken,
       applyPatientMutationLocally,
+      handleSessionExpired,
       persistUpdatedBookingDetail,
     ],
   );
@@ -1189,6 +1442,9 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         showPlatformMessage('Success', 'Patient updated successfully.');
         return patchedBookingDetail;
       } catch (error) {
+        if (handleSessionExpired(error)) {
+          return null;
+        }
         if (isLikelyOfflineError(error)) {
           await queuePendingPatientAction({
             bookingId,
@@ -1232,6 +1488,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     [
       accessToken,
       applyPatientMutationLocally,
+      handleSessionExpired,
       persistUpdatedBookingDetail,
     ],
   );
@@ -1275,6 +1532,9 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         showPlatformMessage('Success', 'Patient cancelled successfully.');
         return updatedBookingDetail;
       } catch (error) {
+        if (handleSessionExpired(error)) {
+          return null;
+        }
         if (isLikelyOfflineError(error)) {
           const queuedAction = await queuePendingPatientAction({
             bookingId,
@@ -1324,6 +1584,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     [
       accessToken,
       applyPatientMutationLocally,
+      handleSessionExpired,
       persistUpdatedBookingDetail,
     ],
   );
@@ -1364,6 +1625,9 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         showPlatformMessage('Success', 'Address updated successfully.');
         return updatedBookingDetail;
       } catch (error) {
+        if (handleSessionExpired(error)) {
+          return null;
+        }
         Alert.alert(
           'Unable to Update Address',
           error?.message || 'Unable to update address right now.',
@@ -1371,7 +1635,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         return null;
       }
     },
-    [accessToken, persistUpdatedBookingDetail],
+    [accessToken, handleSessionExpired, persistUpdatedBookingDetail],
   );
 
   const addTestForPatient = useCallback(
@@ -1417,6 +1681,9 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         }
         return responseData;
       } catch (error) {
+        if (handleSessionExpired(error)) {
+          return null;
+        }
         Alert.alert(
           'Unable to Add Test',
           error?.message || 'Unable to fetch test catalog right now.',
@@ -1426,7 +1693,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         setAddingTestPatientId('');
       }
     },
-    [accessToken, getMatchedPanelCompanyCacheKey],
+    [accessToken, getMatchedPanelCompanyCacheKey, handleSessionExpired],
   );
 
   const fetchPanelCatalogForCompany = useCallback(
@@ -1445,6 +1712,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
       const normalizedCompCatId = toDisplayValue(
         compCatId || panelCompany?.compCatId,
       );
+      const patientGender = toDisplayValue(patient?.gender || patient?.Gender);
 
       if (!bookingId || !bookingPatientId) {
         Alert.alert(
@@ -1477,6 +1745,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         gcode,
         scode,
         query,
+        patientGender,
       });
       const cachedResponse = panelCompanyCatalogCacheRef.current.get(cacheKey);
       if (cachedResponse) {
@@ -1502,10 +1771,14 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
           gcode,
           scode,
           query,
+          patientGender,
         });
         panelCompanyCatalogCacheRef.current.set(cacheKey, responseData);
         return responseData;
       } catch (error) {
+        if (handleSessionExpired(error)) {
+          return null;
+        }
         Alert.alert(
           'Unable to Load Catalog',
           error?.message || 'Unable to fetch panel catalog right now.',
@@ -1515,7 +1788,7 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
         setAddingTestPatientId('');
       }
     },
-    [accessToken, getPanelCompanyCatalogCacheKey],
+    [accessToken, getPanelCompanyCatalogCacheKey, handleSessionExpired],
   );
 
   const clearAssignedState = useCallback(async () => {
@@ -1548,6 +1821,8 @@ export const useAssignedBookings = ({accessToken, loggedInUser}) => {
     completedAppointmentsError,
     loadingAssignedBookingId,
     bookingActionLoading,
+    bookingActionProgressLabel,
+    isBookingActionNavigationLocked: bookingActionLoading === 'completed',
     isAddingPatient,
     isUpdatingPatient,
     cancellingPatientId,

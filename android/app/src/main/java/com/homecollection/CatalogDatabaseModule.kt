@@ -18,7 +18,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
   override fun getName(): String = "CatalogDatabaseModule"
 
   private val assetName = "catalog_preload.db"
-  private val databaseVersion = "1"
+  private val databaseVersion = "2"
   private val seedSyncedAt = "2026-05-09 14:56:55"
   private val maxProfileTreeDepth = 8
   private val maxProfileChildrenPerNode = 150
@@ -139,7 +139,10 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         "Scode",
         "TestCode",
         "Testcode1",
+        "Test",
         "Description",
+        "Shortname",
+        "Description1",
         "Profile",
         "TestAs",
         "SpecimenID",
@@ -374,6 +377,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
 
     ensurePanelRatesDiscountPercentSchema(db)
     ensureAddressSyncKeySchema(db)
+    ensureTestsGenderFlagSchema(db)
     ensurePerformanceIndexes(db)
 
     hasEnsuredSyncSchema = true
@@ -403,6 +407,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     db.execSQL("CREATE INDEX IF NOT EXISTS idx_tests_testcode1 ON tests(testcode1)")
     db.execSQL("CREATE INDEX IF NOT EXISTS idx_tests_test_code ON tests(test_code)")
     db.execSQL("CREATE INDEX IF NOT EXISTS idx_tests_group_subgroup_test ON tests(gcode, scode, test_code)")
+    db.execSQL("CREATE INDEX IF NOT EXISTS idx_tests_gender_flag ON tests(gender_flag)")
     db.execSQL("CREATE INDEX IF NOT EXISTS idx_tests_specimen ON tests(specimen_id)")
     db.execSQL(
       "CREATE INDEX IF NOT EXISTS idx_test_profiles_parent ON test_profiles(gcode, scode, profile_code)",
@@ -462,6 +467,10 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       WHERE sync_key IS NOT NULL AND sync_key != ''
       """.trimIndent(),
     )
+  }
+
+  private fun ensureTestsGenderFlagSchema(db: SQLiteDatabase) {
+    ensureColumn(db, "tests", "gender_flag", "TEXT")
   }
 
   private fun maxUpdatedAtForTable(db: SQLiteDatabase, tableName: String): String {
@@ -525,6 +534,32 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     }
 
     return getInt(index)
+  }
+
+  private fun normalizePatientGenderFilter(value: String): String {
+    val normalizedValue = value.trim().lowercase()
+
+    return when {
+      normalizedValue.startsWith("m") -> "male"
+      normalizedValue.startsWith("f") -> "female"
+      else -> ""
+    }
+  }
+
+  private fun genderFilterWhere(columnName: String = "gender_flag"): String =
+    """
+    (
+      ? = ''
+      OR TRIM(IFNULL($columnName, '')) = ''
+      OR LOWER(TRIM($columnName)) IN ('1', 'both', 'all')
+      OR (? = 'male' AND LOWER(TRIM($columnName)) IN ('2', 'male', 'm'))
+      OR (? = 'female' AND LOWER(TRIM($columnName)) IN ('3', 'female', 'f'))
+    )
+    """.trimIndent()
+
+  private fun genderFilterArgs(patientGender: String): Array<String> {
+    val genderFilter = normalizePatientGenderFilter(patientGender)
+    return arrayOf(genderFilter, genderFilter, genderFilter)
   }
 
   @ReactMethod
@@ -1039,6 +1074,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     panelCompanyJson: String,
     gcode: String,
     scode: String,
+    patientGender: String,
     promise: Promise,
   ) {
     try {
@@ -1047,9 +1083,9 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       val normalizedCompCatId = resolvedPanel.optString("compCatId", "").trim()
       val centerId = resolvedPanel.optString("centerId", "").trim()
       val tests = if (centerId.isNotBlank()) {
-        buildRawTests(db, normalizedCompCatId, centerId, gcode, scode)
+        buildRawTests(db, normalizedCompCatId, centerId, gcode, scode, patientGender)
       } else {
-        buildTests(db, normalizedCompCatId, gcode, scode)
+        buildTests(db, normalizedCompCatId, gcode, scode, patientGender)
       }
 
       promise.resolve(
@@ -1072,6 +1108,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     panelCompanyJson: String,
     query: String,
     limitText: String,
+    patientGender: String,
     promise: Promise,
   ) {
     try {
@@ -1081,9 +1118,9 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       val centerId = resolvedPanel.optString("centerId", "").trim()
       val limit = limitText.toIntOrNull()?.coerceIn(1, 150) ?: 80
       val tests = if (centerId.isNotBlank()) {
-        searchRawTests(db, normalizedCompCatId, centerId, query, limit)
+        searchRawTests(db, normalizedCompCatId, centerId, query, limit, patientGender)
       } else {
-        searchProjectedTests(db, normalizedCompCatId, query, limit)
+        searchProjectedTests(db, normalizedCompCatId, query, limit, patientGender)
       }
 
       promise.resolve(
@@ -2440,7 +2477,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     ).use { subgroupCursor ->
       while (subgroupCursor.moveToNext()) {
         val scode = subgroupCursor.stringValue("scode")
-        val tests = buildTests(db, compCatId, gcode, scode)
+        val tests = buildTests(db, compCatId, gcode, scode, "")
 
         if (tests.length() > 0) {
           subgroups.put(
@@ -2523,7 +2560,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     ).use { subgroupCursor ->
       while (subgroupCursor.moveToNext()) {
         val scode = subgroupCursor.stringValue("scode")
-        val tests = buildRawTests(db, compCatId, centerId, gcode, scode)
+        val tests = buildRawTests(db, compCatId, centerId, gcode, scode, "")
 
         if (tests.length() > 0) {
           subgroups.put(
@@ -2588,8 +2625,10 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     compCatId: String,
     gcode: String,
     scode: String,
+    patientGender: String,
   ): JSONArray {
     val tests = JSONArray()
+    val genderArgs = genderFilterArgs(patientGender)
 
     db.rawQuery(
       """
@@ -2603,6 +2642,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         MAX(max_discount) AS max_discount,
         MAX(max_allowed_discount) AS max_allowed_discount,
         MIN(specimen_name) AS specimen_name,
+        MIN(gender_flag) AS gender_flag,
         COUNT(*) AS duplicate_count,
         GROUP_CONCAT(source_row_id) AS source_row_ids
       FROM (
@@ -2635,7 +2675,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           pr.mrp,
           (pr.mrp * IFNULL(pr.base_discount_percent, 0) / 100.0) AS max_discount,
           (pr.mrp * IFNULL(pr.max_allowed_discount_percent, 0) / 100.0) AS max_allowed_discount,
-          COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name
+          COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name,
+          COALESCE(NULLIF(t1.gender_flag, ''), NULLIF(t2.gender_flag, ''), '1') AS gender_flag
         FROM panel_rates pr
         LEFT JOIN tests t1
           ON t1.gcode = pr.gcode
@@ -2654,10 +2695,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       )
       WHERE booked_code IS NOT NULL
         AND TRIM(booked_code) != ''
+        AND ${genderFilterWhere("gender_flag")}
       GROUP BY dedupe_key
       ORDER BY description COLLATE NOCASE
       """.trimIndent(),
-      arrayOf(compCatId, gcode, scode),
+      arrayOf(compCatId, gcode, scode) + genderArgs,
     ).use { testCursor ->
       while (testCursor.moveToNext()) {
         val bookedCode = testCursor.stringValue("booked_code")
@@ -2675,6 +2717,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("max_discount", testCursor.doubleValue("max_discount"))
             .put("max_allowed_discount", testCursor.doubleValue("max_allowed_discount"))
             .put("specimen_name", testCursor.stringValue("specimen_name"))
+            .put("gender_flag", testCursor.stringValue("gender_flag"))
             .put("duplicate_count", testCursor.intValue("duplicate_count"))
             .put("source_row_ids", testCursor.stringValue("source_row_ids")),
         )
@@ -2690,8 +2733,10 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     centerId: String,
     gcode: String,
     scode: String,
+    patientGender: String,
   ): JSONArray {
     val tests = JSONArray()
+    val genderArgs = genderFilterArgs(patientGender)
 
     db.rawQuery(
       """
@@ -2705,6 +2750,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         MAX(max_discount) AS max_discount,
         MAX(max_allowed_discount) AS max_allowed_discount,
         MIN(specimen_name) AS specimen_name,
+        MIN(gender_flag) AS gender_flag,
         COUNT(*) AS duplicate_count,
         GROUP_CONCAT(source_row_id) AS source_row_ids
       FROM (
@@ -2742,7 +2788,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             ELSE CAST(IFNULL(NULLIF(pr.MaxDiscount, ''), '0') AS REAL)
           END AS max_discount,
           CAST(pr.MRP AS REAL) * CAST(IFNULL(NULLIF(pr.MaximumpercentageAllowed, ''), '0') AS REAL) / 100.0 AS max_allowed_discount,
-          COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name
+          COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name,
+          COALESCE(NULLIF(t1.gender_flag, ''), NULLIF(t2.gender_flag, ''), '1') AS gender_flag
         FROM panelrates pr
         LEFT JOIN tests t1
           ON UPPER(TRIM(t1.gcode)) = UPPER(TRIM(pr.GCode))
@@ -2762,10 +2809,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       )
       WHERE booked_code IS NOT NULL
         AND TRIM(booked_code) != ''
+        AND ${genderFilterWhere("gender_flag")}
       GROUP BY dedupe_key
       ORDER BY description COLLATE NOCASE
       """.trimIndent(),
-      arrayOf(compCatId, centerId, gcode.trim().uppercase(), scode.trim().uppercase()),
+      arrayOf(compCatId, centerId, gcode.trim().uppercase(), scode.trim().uppercase()) + genderArgs,
     ).use { testCursor ->
       while (testCursor.moveToNext()) {
         val bookedCode = testCursor.stringValue("booked_code")
@@ -2784,6 +2832,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("max_discount", testCursor.doubleValue("max_discount"))
             .put("max_allowed_discount", testCursor.doubleValue("max_allowed_discount"))
             .put("specimen_name", testCursor.stringValue("specimen_name"))
+            .put("gender_flag", testCursor.stringValue("gender_flag"))
             .put("duplicate_count", testCursor.intValue("duplicate_count"))
             .put("source_row_ids", testCursor.stringValue("source_row_ids")),
         )
@@ -2798,9 +2847,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     compCatId: String,
     query: String,
     limit: Int,
+    patientGender: String,
   ): JSONArray {
     val tests = JSONArray()
     val searchLike = "%${query.trim()}%"
+    val genderArgs = genderFilterArgs(patientGender)
 
     db.rawQuery(
       """
@@ -2818,6 +2869,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         MIN(scode) AS scode,
         MIN(group_name) AS group_name,
         MIN(subgroup_name) AS subgroup_name,
+        MIN(gender_flag) AS gender_flag,
         COUNT(*) AS duplicate_count,
         GROUP_CONCAT(source_row_id) AS source_row_ids
       FROM (
@@ -2854,7 +2906,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           pr.mrp,
           (pr.mrp * IFNULL(pr.base_discount_percent, 0) / 100.0) AS max_discount,
           (pr.mrp * IFNULL(pr.max_allowed_discount_percent, 0) / 100.0) AS max_allowed_discount,
-          COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name
+          COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name,
+          COALESCE(NULLIF(t1.gender_flag, ''), NULLIF(t2.gender_flag, ''), '1') AS gender_flag
         FROM panel_rates pr
         JOIN groups g ON g.gcode = pr.gcode
         JOIN subgroups sg ON sg.gcode = pr.gcode AND sg.scode = pr.scode
@@ -2880,11 +2933,14 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       )
       WHERE booked_code IS NOT NULL
         AND TRIM(booked_code) != ''
+        AND ${genderFilterWhere("gender_flag")}
       GROUP BY dedupe_key
       ORDER BY description COLLATE NOCASE
       LIMIT ?
       """.trimIndent(),
-      arrayOf(compCatId, searchLike, searchLike, searchLike, searchLike, searchLike, limit.toString()),
+      arrayOf(compCatId, searchLike, searchLike, searchLike, searchLike, searchLike) +
+        genderArgs +
+        arrayOf(limit.toString()),
     ).use { cursor ->
       while (cursor.moveToNext()) {
         val bookedCode = cursor.stringValue("booked_code")
@@ -2903,6 +2959,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("max_discount", cursor.doubleValue("max_discount"))
             .put("max_allowed_discount", cursor.doubleValue("max_allowed_discount"))
             .put("specimen_name", cursor.stringValue("specimen_name"))
+            .put("gender_flag", cursor.stringValue("gender_flag"))
             .put("duplicate_count", cursor.intValue("duplicate_count"))
             .put("source_row_ids", cursor.stringValue("source_row_ids"))
             .put("__groupName", cursor.stringValue("group_name"))
@@ -2920,9 +2977,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     centerId: String,
     query: String,
     limit: Int,
+    patientGender: String,
   ): JSONArray {
     val tests = JSONArray()
     val searchLike = "%${query.trim()}%"
+    val genderArgs = genderFilterArgs(patientGender)
 
     db.rawQuery(
       """
@@ -2940,6 +2999,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         MIN(scode) AS scode,
         MIN(group_name) AS group_name,
         MIN(subgroup_name) AS subgroup_name,
+        MIN(gender_flag) AS gender_flag,
         COUNT(*) AS duplicate_count,
         GROUP_CONCAT(source_row_id) AS source_row_ids
       FROM (
@@ -2980,7 +3040,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             ELSE CAST(IFNULL(NULLIF(pr.MaxDiscount, ''), '0') AS REAL)
           END AS max_discount,
           CAST(pr.MRP AS REAL) * CAST(IFNULL(NULLIF(pr.MaximumpercentageAllowed, ''), '0') AS REAL) / 100.0 AS max_allowed_discount,
-          COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name
+          COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name,
+          COALESCE(NULLIF(t1.gender_flag, ''), NULLIF(t2.gender_flag, ''), '1') AS gender_flag
         FROM panelrates pr
         JOIN groups g ON g.gcode = pr.GCode
         JOIN subgroups sg ON sg.gcode = pr.GCode AND sg.scode = pr.SCode
@@ -3007,11 +3068,14 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       )
       WHERE booked_code IS NOT NULL
         AND TRIM(booked_code) != ''
+        AND ${genderFilterWhere("gender_flag")}
       GROUP BY dedupe_key
       ORDER BY description COLLATE NOCASE
       LIMIT ?
       """.trimIndent(),
-      arrayOf(compCatId, centerId, searchLike, searchLike, searchLike, searchLike, searchLike, limit.toString()),
+      arrayOf(compCatId, centerId, searchLike, searchLike, searchLike, searchLike, searchLike) +
+        genderArgs +
+        arrayOf(limit.toString()),
     ).use { cursor ->
       while (cursor.moveToNext()) {
         val bookedCode = cursor.stringValue("booked_code")
@@ -3030,6 +3094,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("max_discount", cursor.doubleValue("max_discount"))
             .put("max_allowed_discount", cursor.doubleValue("max_allowed_discount"))
             .put("specimen_name", cursor.stringValue("specimen_name"))
+            .put("gender_flag", cursor.stringValue("gender_flag"))
             .put("duplicate_count", cursor.intValue("duplicate_count"))
             .put("source_row_ids", cursor.stringValue("source_row_ids"))
             .put("__groupName", cursor.stringValue("group_name"))
@@ -3402,6 +3467,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           "test_code" to rowString(row, "TestCode"),
           "testcode1" to rowString(row, "Testcode1"),
           "description" to rowString(row, "Description"),
+          "gender_flag" to rowString(row, "Test"),
           "profile" to rowInt(row, "Profile"),
           "specimen_id" to rowInt(row, "SpecimenID"),
         ),

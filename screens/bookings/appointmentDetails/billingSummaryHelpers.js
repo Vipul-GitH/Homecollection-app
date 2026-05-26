@@ -155,13 +155,19 @@ export const buildLocalBillingSummary = (
 
   const patientBillingRows = Array.from(patientSummaryMap.values())
     .map(entry => {
+      const hasEnteredAdditional = Object.prototype.hasOwnProperty.call(
+        safePatientAdditionalDiscountMap,
+        entry.patientId,
+      );
       const enteredValue = toCurrencyNumber(
         safePatientAdditionalDiscountMap[entry.patientId],
       );
       const backendAdditionalDiscount = toCurrencyNumber(
         patientSeedAdditionalDiscountMap[entry.patientId],
       );
-      const requestedAdditional = enteredValue;
+      const requestedAdditional = hasEnteredAdditional
+        ? enteredValue
+        : backendAdditionalDiscount;
       const maxAdditionalAllowed = Math.max(
         0,
         entry.maxTotalDiscount - entry.baseDiscount,
@@ -191,6 +197,7 @@ export const buildLocalBillingSummary = (
         enteredAdditional: normalizeFormText(
           safePatientAdditionalDiscountMap[entry.patientId],
         ),
+        hasEnteredAdditional,
         requestedAdditional,
         seededAdditionalDiscount: backendAdditionalDiscount,
         backendAdditionalDiscount,

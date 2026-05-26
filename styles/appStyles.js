@@ -4262,6 +4262,10 @@ const appStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#D8E1EF',
   },
+  patientDocumentRemovePreviewButton: {
+    flexShrink: 1,
+    minWidth: 0,
+  },
   patientDocumentRemoveText: {
     maxWidth: 180,
     fontSize: 13,
@@ -4996,6 +5000,24 @@ const appStyles = StyleSheet.create({
     height: 360,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  patientDocumentViewerImageState: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(244, 247, 255, 0.92)',
+    paddingHorizontal: 18,
+  },
+  patientDocumentViewerImageStateIcon: {
+    color: BRAND.coral,
+  },
+  patientDocumentViewerImageStateText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '800',
+    color: BRAND.textMuted,
+    textAlign: 'center',
   },
   patientDocumentViewerImage: {
     width: '100%',

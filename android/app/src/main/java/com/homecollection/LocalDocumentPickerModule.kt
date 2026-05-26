@@ -84,7 +84,7 @@ class LocalDocumentPickerModule(private val reactContext: ReactApplicationContex
       return
     }
 
-    val selectedUris = mutableListOf<Uri>()
+    val selectedUris = linkedSetOf<Uri>()
 
     data.data?.let { selectedUris.add(it) }
 

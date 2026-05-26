@@ -11,6 +11,19 @@ export const persistSession = async ({accessToken, loggedInUser}) => {
   ]);
 };
 
+export const getPersistedSession = async () => {
+  const values = await AsyncStorage.multiGet([
+    ACCESS_TOKEN_STORAGE_KEY,
+    LOGGED_IN_USER_STORAGE_KEY,
+  ]);
+  const sessionMap = Object.fromEntries(values);
+
+  return {
+    accessToken: sessionMap[ACCESS_TOKEN_STORAGE_KEY] || '',
+    loggedInUser: sessionMap[LOGGED_IN_USER_STORAGE_KEY] || '',
+  };
+};
+
 export const clearSession = async () => {
   await AsyncStorage.multiRemove([
     ACCESS_TOKEN_STORAGE_KEY,

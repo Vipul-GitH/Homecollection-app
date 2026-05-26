@@ -184,6 +184,10 @@ class LocalGeoCameraModule(private val reactContext: ReactApplicationContext) :
         sourceBitmap.copy(Bitmap.Config.ARGB_8888, true)
       }
 
+    if (stampLines.isEmpty()) {
+      return bitmap
+    }
+
     val canvas = Canvas(bitmap)
     val density = reactContext.resources.displayMetrics.density
     val padding = (12 * density).toInt()
@@ -199,14 +203,8 @@ class LocalGeoCameraModule(private val reactContext: ReactApplicationContext) :
       Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(178, 0, 0, 0)
       }
-    val safeLines =
-      if (stampLines.isNotEmpty()) {
-        stampLines
-      } else {
-        listOf(SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.US).format(Date()))
-      }
     val maxTextWidth = bitmap.width - padding * 2
-    val wrappedLines = safeLines.flatMap { line -> wrapLine(line, paint, maxTextWidth) }
+    val wrappedLines = stampLines.flatMap { line -> wrapLine(line, paint, maxTextWidth) }
     val bounds = Rect()
     paint.getTextBounds("Ag", 0, 2, bounds)
     val lineHeight = bounds.height() + lineGap

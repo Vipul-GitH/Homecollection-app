@@ -149,7 +149,10 @@ const SYNC_TABLE_SPECS = {
       'Scode',
       'TestCode',
       'Testcode1',
+      'Test',
       'Description',
+      'Shortname',
+      'Description1',
       'Profile',
       'TestAs',
       'SpecimenID',
@@ -531,6 +534,19 @@ const iterInsertBlocks = function* (sqlPath) {
   }
 };
 
+const collectInsertedTables = sqlPath => {
+  const tableNames = new Set();
+
+  for (const block of iterInsertBlocks(sqlPath)) {
+    const match = block.match(INSERT_RE);
+    if (match?.[1]) {
+      tableNames.add(match[1]);
+    }
+  }
+
+  return tableNames;
+};
+
 const rawSyncSchemaSql = () =>
   Object.entries(SYNC_TABLE_SPECS)
     .map(([tableName, spec]) => {
@@ -615,6 +631,7 @@ CREATE TABLE tests (
   test_code TEXT,
   testcode1 TEXT,
   description TEXT,
+  gender_flag TEXT,
   profile INTEGER,
   specimen_id INTEGER,
   PRIMARY KEY(gcode, scode, test_code)
@@ -677,6 +694,7 @@ CREATE INDEX idx_panel_rates_company_test
   ON panel_rates(comp_cat_id, gcode, scode, test_code);
 CREATE INDEX idx_tests_testcode1 ON tests(testcode1);
 CREATE INDEX idx_tests_test_code ON tests(test_code);
+CREATE INDEX idx_tests_gender_flag ON tests(gender_flag);
 CREATE INDEX idx_tests_specimen ON tests(specimen_id);
 CREATE INDEX idx_test_profiles_parent ON test_profiles(gcode, scode, profile_code);
 CREATE INDEX idx_test_profiles_parent_child ON test_profiles(gcode, scode, profile_code, child_testcode1);
@@ -720,16 +738,20 @@ const buildDatabase = ({input, extraInputs, output, version, sqlite3Path, seedTs
   const counts = {};
   const sqlInputs = [input, ...(Array.isArray(extraInputs) ? extraInputs : [])];
   const columnsByTable = new Map();
+  const sourceIndexByTable = new Map();
 
-  sqlInputs.forEach(sqlPath => {
+  sqlInputs.forEach((sqlPath, inputIndex) => {
     parseCreateTableColumns(sqlPath).forEach((columns, tableName) => {
       columnsByTable.set(tableName, columns);
+    });
+    collectInsertedTables(sqlPath).forEach(tableName => {
+      sourceIndexByTable.set(tableName, inputIndex);
     });
   });
 
   stream.write(schemaSql(version, seedTs));
 
-  for (const sqlInput of sqlInputs) {
+  for (const [inputIndex, sqlInput] of sqlInputs.entries()) {
     for (const block of iterInsertBlocks(sqlInput)) {
       const parsed = parseInsertBlock(block, columnsByTable);
       if (!parsed) {
@@ -737,6 +759,9 @@ const buildDatabase = ({input, extraInputs, output, version, sqlite3Path, seedTs
       }
 
       const {tableName, columns, rows} = parsed;
+      if (sourceIndexByTable.get(tableName) !== inputIndex) {
+        continue;
+      }
       const index = Object.fromEntries(columns.map((column, columnIndex) => [column, columnIndex]));
       counts[tableName] = (counts[tableName] || 0) + rows.length;
 
@@ -788,13 +813,14 @@ const buildDatabase = ({input, extraInputs, output, version, sqlite3Path, seedTs
           writeInsert(
             stream,
             'tests',
-            ['gcode', 'scode', 'test_code', 'testcode1', 'description', 'profile', 'specimen_id'],
+            ['gcode', 'scode', 'test_code', 'testcode1', 'description', 'gender_flag', 'profile', 'specimen_id'],
             [
               cleanText(row[index.Gcode]),
               cleanText(row[index.Scode]),
               cleanText(row[index.TestCode]),
               cleanText(row[index.Testcode1]),
               cleanText(row[index.Description]),
+              cleanText(row[index.Test]),
               toInt(row[index.Profile]),
               toInt(row[index.SpecimenID]),
             ],

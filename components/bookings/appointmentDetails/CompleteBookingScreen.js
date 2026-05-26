@@ -20,6 +20,7 @@ function CompleteBookingScreen({
   bookingActionLoading,
   patientOptions = [],
   isLinkedAppointmentSelected,
+  shouldShowLinkedAppointmentSection = true,
   onLinkedAppointmentChange,
   linkedAppointmentDate,
   setIsLinkedAppointmentCalendarVisible,
@@ -177,93 +178,97 @@ function CompleteBookingScreen({
             </Text>
           </View>
 
-          <View style={styles.cancelFormSection}>
-            {renderQuestionLabel('Linked Appointment')}
-            <View style={styles.cancelSegmentedRow}>
-              {['Yes', 'No'].map(value => {
-                const isSelected = linkedAppointmentValue === value;
+          {shouldShowLinkedAppointmentSection ? (
+            <>
+              <View style={styles.cancelFormSection}>
+                {renderQuestionLabel('Linked Appointment')}
+                <View style={styles.cancelSegmentedRow}>
+                  {['Yes', 'No'].map(value => {
+                    const isSelected = linkedAppointmentValue === value;
 
-                return (
-                  <TouchableOpacity
-                    key={value}
-                    activeOpacity={0.85}
-                    style={[
-                      styles.cancelSegmentButton,
-                      isSelected && styles.cancelSegmentButtonActive,
-                    ]}
-                    onPress={() => onLinkedAppointmentChange(value === 'Yes')}>
-                    <Text
-                      style={[
-                        styles.cancelSegmentButtonText,
-                        isSelected && styles.cancelSegmentButtonTextActive,
-                      ]}>
-                      {value}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-
-          {isLinkedAppointmentSelected ? (
-            <View style={styles.cancelFormSection}>
-              <View
-                style={[
-                  styles.addPatientFieldRow,
-                  isNarrowScreen && styles.addPatientFieldRowStacked,
-                ]}>
-                <View style={styles.addPatientFieldHalf}>
-                  <RequiredLabel styles={styles}>Date</RequiredLabel>
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    style={styles.cancelSelectButton}
-                    onPress={() => setIsLinkedAppointmentCalendarVisible(true)}>
-                    <Text
-                      style={[
-                        styles.cancelSelectButtonText,
-                        !linkedAppointmentDate &&
-                          styles.addPatientDatePickerPlaceholder,
-                      ]}>
-                      {linkedAppointmentDate || 'Select date'}
-                    </Text>
-                    <Ionicons
-                      name="calendar-outline"
-                      size={18}
-                      style={styles.cancelSelectButtonIcon}
-                    />
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.addPatientFieldHalf}>
-                  <RequiredLabel styles={styles}>Time Slot</RequiredLabel>
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    style={styles.cancelSelectButton}
-                    onPress={() =>
-                      setIsLinkedAppointmentTimeSlotSelectVisible(
-                        previous => !previous,
-                      )
-                    }>
-                    <Text
-                      style={[
-                        styles.cancelSelectButtonText,
-                        !linkedAppointmentTimeSlot &&
-                          styles.addPatientDatePickerPlaceholder,
-                      ]}>
-                      {linkedAppointmentTimeSlot || 'Select slot'}
-                    </Text>
-                    <Ionicons
-                      name={
-                        isLinkedAppointmentTimeSlotSelectVisible
-                          ? 'chevron-up'
-                          : 'chevron-down'
-                      }
-                      size={18}
-                      style={styles.cancelSelectButtonIcon}
-                    />
-                  </TouchableOpacity>
+                    return (
+                      <TouchableOpacity
+                        key={value}
+                        activeOpacity={0.85}
+                        style={[
+                          styles.cancelSegmentButton,
+                          isSelected && styles.cancelSegmentButtonActive,
+                        ]}
+                        onPress={() => onLinkedAppointmentChange(value === 'Yes')}>
+                        <Text
+                          style={[
+                            styles.cancelSegmentButtonText,
+                            isSelected && styles.cancelSegmentButtonTextActive,
+                          ]}>
+                          {value}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
               </View>
-            </View>
+
+              {isLinkedAppointmentSelected ? (
+                <View style={styles.cancelFormSection}>
+                  <View
+                    style={[
+                      styles.addPatientFieldRow,
+                      isNarrowScreen && styles.addPatientFieldRowStacked,
+                    ]}>
+                    <View style={styles.addPatientFieldHalf}>
+                      <RequiredLabel styles={styles}>Date</RequiredLabel>
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        style={styles.cancelSelectButton}
+                        onPress={() => setIsLinkedAppointmentCalendarVisible(true)}>
+                        <Text
+                          style={[
+                            styles.cancelSelectButtonText,
+                            !linkedAppointmentDate &&
+                              styles.addPatientDatePickerPlaceholder,
+                          ]}>
+                          {linkedAppointmentDate || 'Select date'}
+                        </Text>
+                        <Ionicons
+                          name="calendar-outline"
+                          size={18}
+                          style={styles.cancelSelectButtonIcon}
+                        />
+                      </TouchableOpacity>
+                    </View>
+                    <View style={styles.addPatientFieldHalf}>
+                      <RequiredLabel styles={styles}>Time Slot</RequiredLabel>
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        style={styles.cancelSelectButton}
+                        onPress={() =>
+                          setIsLinkedAppointmentTimeSlotSelectVisible(
+                            previous => !previous,
+                          )
+                        }>
+                        <Text
+                          style={[
+                            styles.cancelSelectButtonText,
+                            !linkedAppointmentTimeSlot &&
+                              styles.addPatientDatePickerPlaceholder,
+                          ]}>
+                          {linkedAppointmentTimeSlot || 'Select slot'}
+                        </Text>
+                        <Ionicons
+                          name={
+                            isLinkedAppointmentTimeSlotSelectVisible
+                              ? 'chevron-up'
+                              : 'chevron-down'
+                          }
+                          size={18}
+                          style={styles.cancelSelectButtonIcon}
+                        />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              ) : null}
+            </>
           ) : null}
 
           {hasSampleCompletionPatients ? (

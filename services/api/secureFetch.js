@@ -28,7 +28,7 @@ const buildSecureResponse = nativeResult => ({
 const resolveSecureTimeout = customTimeoutMs =>
   Number.isFinite(customTimeoutMs) && customTimeoutMs > 0
     ? Math.trunc(customTimeoutMs)
-    : 7000;
+    : 30000;
 
 export const secureFetch = async (url, options = {}) => {
   const {timeoutMs: customTimeoutMs, ...fetchOptions} = options;
