@@ -50,15 +50,7 @@ const parseJsonResponse = async response => {
 
 const getDurationMs = startedAt => Date.now() - startedAt;
 
-const logAppointmentDetailDebug = (label, value) => {
-  if (
-    label === '[Appointment Details API URL]' ||
-    label === '[Appointment Details API HTTP Status]' ||
-    label === '[Appointment Details API Response]'
-  ) {
-    console.log(label, value);
-  }
-};
+const logAppointmentDetailDebug = () => {};
 
 const isPatientBookingMappingError = message =>
   /patient\s+.+\s+is\s+not\s+mapped\s+to\s+booking\s+/i.test(
@@ -431,26 +423,6 @@ const postCompleteBookingStatus = async ({
     hasUploadableAttachments,
     payload,
   });
-  console.log('[Complete Booking API Payload]', {
-    url: apiUrl,
-    transport: hasUploadableAttachments ? 'multipart-fetch' : 'json-secure',
-    hasUploadableAttachments,
-    payload,
-  });
-  console.log(
-    '[Complete Booking API Payload JSON]',
-    JSON.stringify(
-      {
-        url: apiUrl,
-        transport: hasUploadableAttachments ? 'multipart-fetch' : 'json-secure',
-        hasUploadableAttachments,
-        payload,
-      },
-      null,
-      2,
-    ),
-  );
-
   const attachmentCounts = summarizeAttachmentCounts({
     bookingDetail,
     patientDocumentsMap,
@@ -482,11 +454,6 @@ const postCompleteBookingStatus = async ({
 
     const responseData = await parseJsonResponse(response, '[Booking Status]');
     logAppointmentDetailDebug('[Complete Booking API Response]', responseData);
-    console.log('[AssignedBookingAPI][Complete][Duration]', {
-      bookingId,
-      transport: 'json-secure',
-      durationMs: getDurationMs(startedAt),
-    });
     return {response, responseData};
   }
 
@@ -506,12 +473,6 @@ const postCompleteBookingStatus = async ({
     }),
   ];
   validateCompleteBookingAttachments(files);
-  console.log('[AssignedBookingAPI][Complete][Uploads]', {
-    bookingId,
-    fileCount: files.length,
-    attachmentCounts,
-  });
-
   const response = await secureMultipartFetch({
     url: apiUrl,
     method: 'POST',
@@ -532,13 +493,6 @@ const postCompleteBookingStatus = async ({
 
   const responseData = await parseJsonResponse(response, '[Booking Status]');
   logAppointmentDetailDebug('[Complete Booking API Response]', responseData);
-  console.log('[AssignedBookingAPI][Complete][Duration]', {
-    bookingId,
-    transport: 'multipart-secure',
-    durationMs: getDurationMs(startedAt),
-    fileCount: files.length,
-  });
-
   return {response, responseData};
 };
 
@@ -631,7 +585,6 @@ const buildAssignedBookingCancelPayload = statusPayload => {
 };
 
 export const fetchAssignedBookingsApi = async ({accessToken, loggedInUser}) => {
-  const startedAt = Date.now();
   const response = await secureFetch(MY_ASSIGNED_BOOKINGS_API_URL, {
     method: 'GET',
     headers: {
@@ -660,12 +613,6 @@ export const fetchAssignedBookingsApi = async ({accessToken, loggedInUser}) => {
   const normalizedBookings = extractAssignedBookings(responseData).map(
     normalizeAssignedBooking,
   );
-  console.log('[AssignedBookingAPI][List][Duration]', {
-    user: loggedInUser || '',
-    count: normalizedBookings.length,
-    durationMs: getDurationMs(startedAt),
-    status: response.status,
-  });
   return normalizedBookings;
 };
 
@@ -694,7 +641,6 @@ export const fetchAssignedBookingHistoryApi = async ({accessToken}) => {
 };
 
 export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
-  const startedAt = Date.now();
   const bookingId = booking?.id;
   const appointmentId = booking?.appointmentId || booking?.appointment_id;
   const sourceType = booking?.sourceType || booking?.source_type;
@@ -703,12 +649,6 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
     appointmentId,
     sourceType,
   );
-  console.log('[AssignedBookingAPI][Detail][Request]', {
-    bookingId,
-    appointmentId,
-    sourceType,
-    apiUrl,
-  });
 
   const response = await secureFetch(apiUrl, {
     method: 'GET',
@@ -724,15 +664,6 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
   logAppointmentDetailDebug('[Appointment Details API HTTP Status]', {
     status: response.status,
     ok: response.ok,
-  });
-  console.log('[AssignedBookingAPI][Detail][Response]', {
-    bookingId,
-    appointmentId,
-    sourceType,
-    apiUrl,
-    status: response.status,
-    ok: response.ok,
-    durationMs: getDurationMs(startedAt),
   });
   logAppointmentDetailDebug('[Appointment Details API Response]', responseData);
   const errorMessage = getApiErrorMessage(
@@ -792,13 +723,6 @@ export const updateAssignedBookingStatusApi = async ({
     ...statusPayloadFields,
     action: action === 'complete' ? 'completed' : action,
   };
-  console.log('[AssignedBookingAPI][Status][Request]', {
-    bookingId,
-    action,
-    appointmentId: normalizedAppointmentId,
-    sourceType: normalizedSourceType,
-    statusPayloadKeys: Object.keys(statusPayloadFields || {}),
-  });
 
   if (payload.action === 'completed') {
     onProgress?.({
@@ -930,12 +854,6 @@ export const updateAssignedBookingStatusApi = async ({
     if (errorMessage) {
       throw new Error(errorMessage);
     }
-
-    console.log('[AssignedBookingAPI][Status][Duration]', {
-      bookingId,
-      action: payload.action,
-      durationMs: getDurationMs(startedAt),
-    });
     return responseData;
   }
 
@@ -1003,15 +921,6 @@ export const updateAssignedBookingStatusApi = async ({
   });
 
   const responseData = await parseJsonResponse(response, '[Booking Status]');
-  console.log('[AssignedBookingAPI][Status][Response]', {
-    bookingId,
-    action: payload.action,
-    appointmentId: normalizedAppointmentId,
-    sourceType: normalizedSourceType,
-    status: response.status,
-    ok: response.ok,
-    durationMs: getDurationMs(startedAt),
-  });
   const errorMessage = getApiErrorMessage(
     response,
     responseData,

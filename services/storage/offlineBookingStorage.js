@@ -275,6 +275,29 @@ export const getPendingBookingActions = async () => {
   return Array.isArray(parsedValue) ? parsedValue : [];
 };
 
+const normalizePendingBookingActionIdentity = ({
+  bookingId,
+  action,
+  appointmentId,
+  sourceType,
+}) => {
+  const normalizedBookingId = String(bookingId || '').trim();
+  const normalizedAction = String(action || '').trim().toLowerCase();
+  const normalizedSourceType = String(sourceType || '')
+    .trim()
+    .toUpperCase();
+  const normalizedAppointmentId = String(appointmentId || '').trim();
+
+  return [
+    normalizedBookingId,
+    normalizedAction,
+    normalizedSourceType || 'BOOKING',
+    normalizedSourceType === 'APPOINTMENT' && normalizedAppointmentId
+      ? normalizedAppointmentId
+      : 'booking',
+  ].join('|');
+};
+
 export const queuePendingBookingAction = async ({
   bookingId,
   action,
@@ -286,9 +309,20 @@ export const queuePendingBookingAction = async ({
     .trim()
     .toUpperCase();
   const normalizedAppointmentId = String(appointmentId || '').trim();
+  const identity = normalizePendingBookingActionIdentity({
+    bookingId,
+    action,
+    appointmentId,
+    sourceType,
+  });
 
+  const pendingActions = await getPendingBookingActions();
+  const existingAction = pendingActions.find(
+    pendingAction =>
+      normalizePendingBookingActionIdentity(pendingAction) === identity,
+  );
   const queuedAction = {
-    id: `${bookingId}-${action}-${Date.now()}`,
+    id: existingAction?.id || `${bookingId}-${action}-${Date.now()}`,
     bookingId: String(bookingId),
     action,
     sourceType: normalizedSourceType || 'BOOKING',
@@ -302,15 +336,18 @@ export const queuePendingBookingAction = async ({
     ...(statusPayload && Object.keys(statusPayload).length
       ? {statusPayload}
       : {}),
-    queuedAt: new Date().toISOString(),
+    queuedAt: existingAction?.queuedAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   };
-
-  const pendingActions = await getPendingBookingActions();
-  pendingActions.push(queuedAction);
+  const nextPendingActions = existingAction
+    ? pendingActions.map(pendingAction =>
+        pendingAction.id === existingAction.id ? queuedAction : pendingAction,
+      )
+    : [...pendingActions, queuedAction];
 
   await AsyncStorage.setItem(
     PENDING_BOOKING_ACTIONS_KEY,
-    JSON.stringify(pendingActions),
+    JSON.stringify(nextPendingActions),
   );
 
   return queuedAction;
@@ -324,6 +361,30 @@ export const removePendingBookingAction = async actionId => {
   const pendingActions = await getPendingBookingActions();
   const nextPendingActions = pendingActions.filter(
     pendingAction => pendingAction.id !== actionId,
+  );
+
+  await AsyncStorage.setItem(
+    PENDING_BOOKING_ACTIONS_KEY,
+    JSON.stringify(nextPendingActions),
+  );
+};
+
+export const removeMatchingPendingBookingActions = async ({
+  bookingId,
+  action,
+  appointmentId,
+  sourceType,
+}) => {
+  const identity = normalizePendingBookingActionIdentity({
+    bookingId,
+    action,
+    appointmentId,
+    sourceType,
+  });
+  const pendingActions = await getPendingBookingActions();
+  const nextPendingActions = pendingActions.filter(
+    pendingAction =>
+      normalizePendingBookingActionIdentity(pendingAction) !== identity,
   );
 
   await AsyncStorage.setItem(

@@ -28,7 +28,7 @@ import {
   removeCachedAssignedBooking,
   queuePendingBookingAction,
   queuePendingPatientAction,
-  removePendingBookingAction,
+  removeMatchingPendingBookingActions,
   removePendingPatientAction,
   updatePendingBookingAction,
   updatePendingPatientAction,
@@ -47,6 +47,10 @@ import {
   getLocalMatchedPanelCompaniesResponse,
   getLocalPanelCatalogByCompanyResponse,
 } from '../services/local/panelCatalogLocal';
+import {
+  getLastKnownGeoCapture,
+  persistLastKnownGeoCapture,
+} from '../utils/location/lastKnownGeoCapture';
 
 const formatStatusActionTime = (date = new Date()) => {
   let hours = date.getHours();
@@ -71,7 +75,8 @@ const formatStatusActionLocation = location => {
   return `${latitude}, ${longitude}`;
 };
 
-const STATUS_ACTION_LOCATION_WAIT_MS = 300;
+const STATUS_ACTION_LOCATION_WAIT_MS = 3000;
+const FOREGROUND_LOCATION_REFRESH_COOLDOWN_MS = 15 * 60 * 1000;
 
 const getStatusActionFieldPrefix = action => {
   const normalizedAction = String(action || '').trim().toLowerCase();
@@ -120,6 +125,10 @@ const buildStatusActionLocationPayload = async action => {
     const locationText = formatStatusActionLocation(location);
 
     if (locationText) {
+      await persistLastKnownGeoCapture({
+        latitude: location.latitude,
+        longitude: location.longitude,
+      });
       return {
         [`${fieldPrefix}_location`]: locationText,
       };
@@ -129,6 +138,40 @@ const buildStatusActionLocationPayload = async action => {
   }
 
   return {};
+};
+
+const buildLastKnownStatusActionLocationPayload = async action => {
+  const fieldPrefix = getStatusActionFieldPrefix(action);
+
+  if (!fieldPrefix) {
+    return {};
+  }
+
+  try {
+    const lastKnownGeoCapture = await getLastKnownGeoCapture();
+    const locationText = formatStatusActionLocation(lastKnownGeoCapture);
+
+    if (locationText) {
+      return {
+        [`${fieldPrefix}_location`]: locationText,
+      };
+    }
+  } catch (error) {
+    warnDebug('Booking status last known location fallback warning:', error);
+  }
+
+  return {};
+};
+
+const refreshLastKnownLocationSnapshot = async () => {
+  const location = await GetLocation.getCurrentPosition({
+    enableHighAccuracy: true,
+  });
+
+  await persistLastKnownGeoCapture({
+    latitude: location?.latitude,
+    longitude: location?.longitude,
+  });
 };
 
 const resolveStatusActionMetaPayload = async action => {
@@ -148,12 +191,17 @@ const resolveStatusActionMetaPayload = async action => {
       }),
     ]);
 
-    console.log('[AssignedBooking][Location][Duration]', {
-      action,
-      durationMs: Date.now() - startedAt,
-      resolved: Boolean(locationPayload),
-      waitBudgetMs: STATUS_ACTION_LOCATION_WAIT_MS,
-    });
+    if (!locationPayload || !Object.keys(locationPayload).length) {
+      const fallbackLocationPayload =
+        await buildLastKnownStatusActionLocationPayload(action);
+
+      return fallbackLocationPayload && Object.keys(fallbackLocationPayload).length
+        ? {
+            ...payload,
+            ...fallbackLocationPayload,
+          }
+        : payload;
+    }
 
     return locationPayload
       ? {
@@ -163,13 +211,6 @@ const resolveStatusActionMetaPayload = async action => {
       : payload;
   } catch (error) {
     warnDebug('Booking status meta payload resolution warning:', error);
-    console.log('[AssignedBooking][Location][Duration]', {
-      action,
-      durationMs: Date.now() - startedAt,
-      resolved: false,
-      waitBudgetMs: STATUS_ACTION_LOCATION_WAIT_MS,
-      error: error?.message || 'Unknown error',
-    });
     return payload;
   }
 };
@@ -487,6 +528,8 @@ export const useAssignedBookings = ({
   const inFlightBookingActionKeysRef = useRef(new Set());
   const inFlightBookingDetailRequestsRef = useRef(new Map());
   const isHandlingSessionExpiryRef = useRef(false);
+  const lastForegroundLocationRefreshAtRef = useRef(0);
+  const isForegroundLocationRefreshRunningRef = useRef(false);
 
   const handleSessionExpired = useCallback(
     error => {
@@ -738,7 +781,12 @@ export const useAssignedBookings = ({
           statusPayload: pendingAction.statusPayload,
         });
 
-        await removePendingBookingAction(pendingAction.id);
+        await removeMatchingPendingBookingActions({
+          bookingId: pendingAction.bookingId,
+          action: pendingAction.action,
+          appointmentId: pendingAction.appointmentId,
+          sourceType: pendingAction.sourceType,
+        });
         if (isTerminalBookingAction(pendingAction.action)) {
           await removeCachedAssignedBooking(pendingAction.bookingId);
         } else {
@@ -850,6 +898,33 @@ export const useAssignedBookings = ({
     }
   }, [syncPendingBookingActions, syncPendingPatientActions]);
 
+  const refreshLastKnownLocationIfNeeded = useCallback(
+    async (reason = 'foreground') => {
+      if (!accessToken || isForegroundLocationRefreshRunningRef.current) {
+        return;
+      }
+
+      const now = Date.now();
+      if (
+        now - lastForegroundLocationRefreshAtRef.current <
+        FOREGROUND_LOCATION_REFRESH_COOLDOWN_MS
+      ) {
+        return;
+      }
+
+      isForegroundLocationRefreshRunningRef.current = true;
+      try {
+        await refreshLastKnownLocationSnapshot();
+        lastForegroundLocationRefreshAtRef.current = Date.now();
+      } catch (error) {
+        warnDebug(`Foreground location refresh skipped (${reason}):`, error);
+      } finally {
+        isForegroundLocationRefreshRunningRef.current = false;
+      }
+    },
+    [accessToken],
+  );
+
   const warmAssignedBookingDetailsCache = useCallback(
     async bookings => {
       const startedAt = Date.now();
@@ -894,8 +969,9 @@ export const useAssignedBookings = ({
     syncPendingOfflineWork().catch(error => {
       warnDebug('Pending offline sync error:', error);
     });
+    refreshLastKnownLocationIfNeeded('login').catch(() => {});
     return undefined;
-  }, [accessToken, syncPendingOfflineWork]);
+  }, [accessToken, refreshLastKnownLocationIfNeeded, syncPendingOfflineWork]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -912,6 +988,7 @@ export const useAssignedBookings = ({
     const appStateSubscription = AppState.addEventListener('change', nextState => {
       if (nextState === 'active') {
         syncPendingWork();
+        refreshLastKnownLocationIfNeeded('app-active').catch(() => {});
       }
     });
 
@@ -919,7 +996,7 @@ export const useAssignedBookings = ({
       clearInterval(intervalId);
       appStateSubscription?.remove?.();
     };
-  }, [accessToken, syncPendingOfflineWork]);
+  }, [accessToken, refreshLastKnownLocationIfNeeded, syncPendingOfflineWork]);
 
   useEffect(() => {
     if (accessToken) {
@@ -1843,3 +1920,4 @@ export const useAssignedBookings = ({
     clearAssignedState,
   };
 };
+
