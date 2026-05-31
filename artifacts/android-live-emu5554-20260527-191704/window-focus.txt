@@ -1,0 +1,32 @@
+      Window #2: WindowStateAnimator{e4dbed2 com.homecollection/com.homecollection.MainActivity}
+      Window #4: WindowStateAnimator{b6daea0 com.homecollection/com.homecollection.MainActivity}
+    numWindow=2 mCanAddInternalSystemWindow=false mAlertWindows={} mClientDead=false    mPackageName=com.homecollection
+  deepestLastOrientationSource=ActivityRecord{67520672 u0 com.homecollection/.MainActivity t44}
+  mCurrentFocus=Window{9f928cd u0 com.homecollection/com.homecollection.MainActivity}
+  mFocusedApp=ActivityRecord{67520672 u0 com.homecollection/.MainActivity t44}
+  mObscuringWindow=Window{aeab89 u0 com.homecollection/com.homecollection.MainActivity}
+      mPreferredTopFocusableRootTask=Task{c8ddc59 #44 type=standard A=10216:com.homecollection}
+      mLastFocusedRootTask=Task{c8ddc59 #44 type=standard A=10216:com.homecollection}
+      * Task{c8ddc59 #44 type=standard A=10216:com.homecollection U=0 visible=true visibleRequested=true mode=fullscreen translucent=false sz=1}
+        * ActivityRecord{67520672 u0 com.homecollection/.MainActivity t44}
+    mFocusedWindow=Window{9f928cd u0 com.homecollection/com.homecollection.MainActivity}
+    mTopFullscreenOpaqueWindowState=Window{aeab89 u0 com.homecollection/com.homecollection.MainActivity}
+    mSystemBarColorApps={ActivityRecord{67520672 u0 com.homecollection/.MainActivity t44}}
+    mNavBarColorWindowCandidate=Window{9f928cd u0 com.homecollection/com.homecollection.MainActivity}
+    mNavBarBackgroundWindowCandidate=Window{aeab89 u0 com.homecollection/com.homecollection.MainActivity}
+      Window{aeab89 u0 com.homecollection/com.homecollection.MainActivity}
+      Window{9f928cd u0 com.homecollection/com.homecollection.MainActivity}:
+      Window{aeab89 u0 com.homecollection/com.homecollection.MainActivity}:
+        mControlTarget=Window{9f928cd u0 com.homecollection/com.homecollection.MainActivity}
+        mControlTarget=Window{9f928cd u0 com.homecollection/com.homecollection.MainActivity}
+        mControlTarget=Window{aeab89 u0 com.homecollection/com.homecollection.MainActivity}
+  ActivityRecord{67520672 u0 com.homecollection/.MainActivity t44}
+  Window #7 Window{9f928cd u0 com.homecollection/com.homecollection.MainActivity}:
+    mOwnerUid=10216 showForAllUsers=false package=com.homecollection appop=NONE
+    WindowStateAnimator{b6daea0 com.homecollection/com.homecollection.MainActivity}:
+  Window #9 Window{aeab89 u0 com.homecollection/com.homecollection.MainActivity}:
+    mOwnerUid=10216 showForAllUsers=false package=com.homecollection appop=NONE
+    WindowStateAnimator{e4dbed2 com.homecollection/com.homecollection.MainActivity}:
+  imeLayeringTarget in display# 0 Window{aeab89 u0 com.homecollection/com.homecollection.MainActivity}
+  imeInputTarget in display# 0 Window{aeab89 u0 com.homecollection/com.homecollection.MainActivity}
+  imeControlTarget in display# 0 Window{aeab89 u0 com.homecollection/com.homecollection.MainActivity}

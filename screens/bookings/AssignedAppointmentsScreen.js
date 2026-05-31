@@ -161,6 +161,7 @@ function AssignedAppointmentsScreen({
   loadingText = 'Assigned appointments are loading...',
   emptyText = 'No assigned appointments are available at the moment.',
   showActiveCard = true,
+  cardTone = 'default',
 }) {
   const {activeBooking, queuedBookings} = useMemo(
     () => {
@@ -180,6 +181,7 @@ function AssignedAppointmentsScreen({
     [assignedAppointments, showActiveCard],
   );
   const hasAssignedAppointments = assignedAppointments.length > 0;
+  const isCompletedCardTone = cardTone === 'completed';
 
   return (
     <>
@@ -222,6 +224,7 @@ function AssignedAppointmentsScreen({
                 styles.assignedActiveCard,
                 hasAppointmentId(activeBooking) &&
                   styles.assignedActiveCardAppointment,
+                isCompletedCardTone && styles.assignedActiveCardCompleted,
               ]}
               onPress={() => onAssignedViewTests(activeBooking)}
               disabled={loadingAssignedBookingId === activeBooking.id}>
@@ -237,7 +240,7 @@ function AssignedAppointmentsScreen({
                 <View style={styles.assignedQueueCodeRow}>
                   <View style={styles.assignedAppointmentBadge}>
                     <Text style={styles.assignedAppointmentBadgeText}>
-                      Appointment
+                      Link/PP
                     </Text>
                   </View>
                 </View>
@@ -289,8 +292,12 @@ function AssignedAppointmentsScreen({
                 <View style={styles.assignedActiveButton}>
                   <Text style={styles.assignedActiveButtonText}>
                     {loadingAssignedBookingId === activeBooking.id
-                      ? 'LOADING...'
-                      : 'OPEN'}
+                      ? isCompletedCardTone
+                        ? 'VIEWING...'
+                        : 'LOADING...'
+                      : isCompletedCardTone
+                        ? 'View'
+                        : 'OPEN'}
                   </Text>
                 </View>
               </View>
@@ -307,14 +314,24 @@ function AssignedAppointmentsScreen({
             queuedBookings.map((booking, index) => {
               const tags = getBookingTags(booking);
               const dueText = getPaymentDueText(booking);
+              const statusTone = getStatusTone(booking.status);
 
               return (
-                <View
+                <TouchableOpacity
                   key={`assigned-${booking.id || 'na'}-${booking.bookingCode || 'na'}-${index}`}
+                  activeOpacity={0.88}
+                  onPress={() => onAssignedViewTests(booking)}
+                  disabled={loadingAssignedBookingId === booking.id}
                   style={[
                     styles.assignedQueueCard,
                     hasAppointmentId(booking) &&
                       styles.assignedQueueCardAppointment,
+                    isCompletedCardTone &&
+                      statusTone === 'completed' &&
+                      styles.assignedQueueCardCompleted,
+                    isCompletedCardTone &&
+                      statusTone === 'cancelled' &&
+                      styles.assignedQueueCardCancelled,
                   ]}>
                   <View style={styles.assignedQueueCardMain}>
                     <View style={styles.assignedQueueCardHeader}>
@@ -323,7 +340,7 @@ function AssignedAppointmentsScreen({
                           <View style={styles.assignedQueueCodeRow}>
                             <View style={styles.assignedAppointmentBadge}>
                               <Text style={styles.assignedAppointmentBadgeText}>
-                                Appointment
+                                Link/PP
                               </Text>
                             </View>
                           </View>
@@ -383,20 +400,20 @@ function AssignedAppointmentsScreen({
                     ) : null}
 
                     <View style={styles.assignedQueueActionRow}>
-                      <TouchableOpacity
-                        activeOpacity={0.85}
-                        style={styles.assignedQueueOpenButton}
-                        onPress={() => onAssignedViewTests(booking)}
-                        disabled={loadingAssignedBookingId === booking.id}>
+                      <View style={styles.assignedQueueOpenButton}>
                         <Text style={styles.assignedQueueOpenButtonText}>
                           {loadingAssignedBookingId === booking.id
-                            ? 'OPENING...'
-                            : 'OPEN'}
+                            ? isCompletedCardTone
+                              ? 'VIEWING...'
+                              : 'OPENING...'
+                            : isCompletedCardTone
+                              ? 'View'
+                              : 'OPEN'}
                         </Text>
-                      </TouchableOpacity>
+                      </View>
                     </View>
                   </View>
-                </View>
+                </TouchableOpacity>
               );
             })
           ) : (

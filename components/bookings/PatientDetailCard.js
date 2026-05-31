@@ -386,6 +386,37 @@ const getDocumentDisplayLabel = (document, fallbackLabel) => {
   );
 };
 
+const DOCUMENT_TYPE_LABELS = {
+  cghs_card: 'CGHS Card',
+  patient_document: 'Patient Document',
+  patient_photo: 'Patient Photo',
+  manual_slip: 'Manual Slip',
+  prescription: 'Prescription',
+  payment_proof: 'Payment Proof',
+};
+
+const getDocumentTypeLabel = (document, fallbackLabel = 'Document') => {
+  const normalizedType = toStableValue(
+    document?.documentType || document?.type || document?.document_type,
+  )
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+
+  if (DOCUMENT_TYPE_LABELS[normalizedType]) {
+    return DOCUMENT_TYPE_LABELS[normalizedType];
+  }
+
+  if (normalizedType) {
+    return normalizedType
+      .split('_')
+      .filter(Boolean)
+      .map(part => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+      .join(' ');
+  }
+
+  return fallbackLabel;
+};
+
 const normalizeDocumentIdentityValue = value => {
   const rawValue = toStableValue(value).toLowerCase();
 
@@ -471,7 +502,28 @@ const buildTypedPatientDocumentItems = (items, type, labelPrefix) =>
       return {
         id: `${type}-${uri}-${index}`,
         label: labelPrefix,
-        documentType: labelPrefix,
+        documentType: getDocumentTypeLabel(item, labelPrefix),
+        uri,
+      };
+    })
+    .filter(Boolean);
+
+const buildBackendPatientDocumentItems = items =>
+  (Array.isArray(items) ? items : [])
+    .map((item, index) => {
+      const uri = resolvePatientDocumentUrl(item);
+
+      if (!uri) {
+        return null;
+      }
+
+      const documentType = getDocumentTypeLabel(item);
+
+      return {
+        id: `backend-${documentType}-${uri}-${index}`,
+        label: documentType,
+        documentType,
+        rawDocumentType: toStableValue(item?.type || item?.document_type),
         uri,
       };
     })
@@ -645,25 +697,11 @@ function PatientDetailCard({
   const normalizedDocuments = useMemo(
     () =>
       dedupeDocumentsByIdentity([
+        ...buildBackendPatientDocumentItems(patient.patientDocuments),
         ...(Array.isArray(patient.documents) ? patient.documents : []),
         ...buildApiDocumentItems(
           patient.patientDocumentUrls || patient.patient_document_urls,
           'Patient Document',
-        ),
-        ...buildTypedPatientDocumentItems(
-          patient.patientDocuments,
-          'patient_photo',
-          'Patient Photo',
-        ),
-        ...buildTypedPatientDocumentItems(
-          patient.patientDocuments,
-          'cghs_card',
-          'CGHS Card',
-        ),
-        ...buildTypedPatientDocumentItems(
-          patient.patientDocuments,
-          'manual_slip',
-          'Manual Slip',
         ),
         ...buildApiDocumentItems(
           patient.prescriptionUrls || patient.prescription_urls,
@@ -714,13 +752,23 @@ function PatientDetailCard({
             return null;
           }
 
+          const hasBackendDocumentType = Boolean(
+            toStableValue(document?.type || document?.document_type),
+          );
+          const documentType = getDocumentTypeLabel(
+            document,
+            toStableValue(document?.documentType) || 'Document',
+          );
+
           return {
             ...document,
             id: String(
               document?.id || document?.uri || document || `document-${index}`,
             ),
-            label: getDocumentDisplayLabel(document, `Document ${index + 1}`),
-            documentType: toStableValue(document?.documentType) || 'Document',
+            label: hasBackendDocumentType
+              ? documentType
+              : getDocumentDisplayLabel(document, `Document ${index + 1}`),
+            documentType,
             imageSource,
           };
         })

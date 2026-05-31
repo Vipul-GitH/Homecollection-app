@@ -50,8 +50,6 @@ const parseJsonResponse = async response => {
 
 const getDurationMs = startedAt => Date.now() - startedAt;
 
-const logAppointmentDetailDebug = () => {};
-
 const isPatientBookingMappingError = message =>
   /patient\s+.+\s+is\s+not\s+mapped\s+to\s+booking\s+/i.test(
     String(message || ''),
@@ -417,12 +415,6 @@ const postCompleteBookingStatus = async ({
     patientCghsDocumentsMap,
   });
 
-  logAppointmentDetailDebug('[Complete Booking API Payload]', {
-    url: apiUrl,
-    transport: hasUploadableAttachments ? 'multipart-fetch' : 'json-secure',
-    hasUploadableAttachments,
-    payload,
-  });
   const attachmentCounts = summarizeAttachmentCounts({
     bookingDetail,
     patientDocumentsMap,
@@ -430,7 +422,6 @@ const postCompleteBookingStatus = async ({
     paymentProofs,
     patientCghsDocumentsMap,
   });
-
   if (!hasUploadableAttachments) {
     onProgress?.({
       stage: 'completing',
@@ -446,14 +437,7 @@ const postCompleteBookingStatus = async ({
       timeoutMs: STATUS_REQUEST_TIMEOUT_MS,
     });
 
-    logAppointmentDetailDebug('[Complete Booking API HTTP Status]', {
-      status: response.status,
-      ok: response.ok,
-      transport: 'json-secure',
-    });
-
     const responseData = await parseJsonResponse(response, '[Booking Status]');
-    logAppointmentDetailDebug('[Complete Booking API Response]', responseData);
     return {response, responseData};
   }
 
@@ -485,14 +469,7 @@ const postCompleteBookingStatus = async ({
     files,
     timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
   });
-  logAppointmentDetailDebug('[Complete Booking API HTTP Status]', {
-    status: response.status,
-    ok: response.ok,
-    transport: 'multipart-secure',
-  });
-
   const responseData = await parseJsonResponse(response, '[Booking Status]');
-  logAppointmentDetailDebug('[Complete Booking API Response]', responseData);
   return {response, responseData};
 };
 
@@ -525,6 +502,14 @@ const getApiErrorMessage = (response, responseData, fallbackMessage) => {
   }
 
   return '';
+};
+
+const createApiError = (response, message, responseData = null) => {
+  const error = new Error(message);
+  error.status = response?.status;
+  error.responseStatus = response?.status;
+  error.responseData = responseData;
+  return error;
 };
 
 const buildAssignedBookingCancelPayload = statusPayload => {
@@ -595,11 +580,6 @@ export const fetchAssignedBookingsApi = async ({accessToken, loggedInUser}) => {
   });
 
   const responseData = await parseJsonResponse(response, '[Assigned]');
-  logAppointmentDetailDebug('[My Assigned Appointments API Response]', {
-    status: response.status,
-    ok: response.ok,
-    body: responseData,
-  });
   const errorMessage = getApiErrorMessage(
     response,
     responseData,
@@ -660,12 +640,6 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
   });
 
   const responseData = await parseJsonResponse(response, '[Assigned Detail]');
-  logAppointmentDetailDebug('[Appointment Details API URL]', apiUrl);
-  logAppointmentDetailDebug('[Appointment Details API HTTP Status]', {
-    status: response.status,
-    ok: response.ok,
-  });
-  logAppointmentDetailDebug('[Appointment Details API Response]', responseData);
   const errorMessage = getApiErrorMessage(
     response,
     responseData,
@@ -729,12 +703,6 @@ export const updateAssignedBookingStatusApi = async ({
       stage: 'preparing',
       message: 'Preparing completion payload...',
     });
-    logAppointmentDetailDebug('[Complete Booking API Full Status Payload]', {
-      bookingId,
-      appointmentId: normalizedAppointmentId,
-      sourceType: normalizedSourceType,
-      statusPayload,
-    });
     const numericAppointmentId = Number(normalizedAppointmentId);
     payload.appointment_id =
       normalizedSourceType === 'APPOINTMENT' && normalizedAppointmentId
@@ -787,13 +755,8 @@ export const updateAssignedBookingStatusApi = async ({
         onProgress,
       }));
     } catch (error) {
-      logAppointmentDetailDebug('[Complete Booking API Error]', {
-        message: error?.message,
-        name: error?.name,
-      });
       throw error;
     }
-    logAppointmentDetailDebug('[Complete Booking API Response]', responseData);
     let errorMessage = getApiErrorMessage(
       response,
       responseData,
@@ -840,10 +803,6 @@ export const updateAssignedBookingStatusApi = async ({
         patientCghsDocumentsMap: resolvedPatientCghsDocumentsMap,
         onProgress,
       }));
-      logAppointmentDetailDebug(
-        '[Complete Booking API Retry Response]',
-        responseData,
-      );
       errorMessage = getApiErrorMessage(
         response,
         responseData,
@@ -852,12 +811,14 @@ export const updateAssignedBookingStatusApi = async ({
     }
 
     if (errorMessage) {
-      throw new Error(errorMessage);
+      throw createApiError(response, errorMessage, responseData);
     }
     return responseData;
   }
 
   if (payload.action === 'cancel' || payload.action === 'cancelled') {
+    let cancelRouteId = bookingId;
+
     if (normalizedSourceType === 'APPOINTMENT' && normalizedAppointmentId) {
       const numericAppointmentId = Number(normalizedAppointmentId);
       payload.appointment_id = Number.isFinite(numericAppointmentId)
@@ -865,7 +826,8 @@ export const updateAssignedBookingStatusApi = async ({
         : normalizedAppointmentId;
     }
     const cancelPayload = buildAssignedBookingCancelPayload(payload);
-    const response = await secureFetch(getAssignedBookingCancelApiUrl(bookingId), {
+    const cancelApiUrl = getAssignedBookingCancelApiUrl(cancelRouteId);
+    const response = await secureFetch(cancelApiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -883,7 +845,7 @@ export const updateAssignedBookingStatusApi = async ({
     );
 
     if (errorMessage) {
-      throw new Error(errorMessage);
+      throw createApiError(response, errorMessage, responseData);
     }
 
     return responseData;
@@ -928,7 +890,7 @@ export const updateAssignedBookingStatusApi = async ({
   );
 
   if (errorMessage) {
-    throw new Error(errorMessage);
+    throw createApiError(response, errorMessage, responseData);
   }
 
   return responseData;
@@ -939,11 +901,6 @@ export const saveAssignedBookingHandoverBatchApi = async ({
   payload,
 }) => {
   const url = getAssignedBookingBatchSaveApiUrl();
-
-  logAppointmentDetailDebug('[Handover Save API Payload]', {
-    url,
-    payload: payload || {},
-  });
 
   const response = await secureFetch(url, {
     method: 'POST',
@@ -1056,12 +1013,6 @@ export const fetchAssignedBookingHandoverHistoryApi = async ({
   });
 
   const responseData = await parseJsonResponse(response, '[Handover Batch History]');
-  logAppointmentDetailDebug('[Handover Done API URL]', url);
-  logAppointmentDetailDebug('[Handover Done API HTTP Status]', {
-    status: response.status,
-    ok: response.ok,
-  });
-  logAppointmentDetailDebug('[Handover Done API Response]', responseData);
   const errorMessage = getApiErrorMessage(
     response,
     responseData,
@@ -1297,9 +1248,20 @@ export const addAssignedBookingPatientApi = async ({
 export const updateAssignedBookingAddressApi = async ({
   accessToken,
   bookingId,
+  appointmentId,
+  sourceType,
   addressPayload,
 }) => {
-  const response = await secureFetch(getAssignedBookingAddressApiUrl(bookingId), {
+  const normalizedSourceType = String(sourceType || '')
+    .trim()
+    .toUpperCase();
+  const normalizedAppointmentId = String(appointmentId || '').trim();
+  const addressRouteId =
+    normalizedSourceType === 'APPOINTMENT' && normalizedAppointmentId
+      ? normalizedAppointmentId
+      : bookingId;
+
+  const response = await secureFetch(getAssignedBookingAddressApiUrl(addressRouteId), {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -1363,101 +1325,61 @@ export const updateAssignedBookingPatientApi = async ({
   patient,
 }) => {
   const url = getAssignedBookingPatientApiUrl(bookingId, patientId);
-  const formData = new FormData();
-
-  formData.append('title', String(patient?.title || ''));
-  formData.append('full_name', String(patient?.full_name || ''));
-  formData.append('gender', String(patient?.gender || ''));
-  formData.append('date_of_birth', String(patient?.date_of_birth || ''));
-  formData.append('age_years', String(patient?.age_years || ''));
-  formData.append(
-    'primary_mobile',
-    String(patient?.primary_mobile || patient?.contact_mobile || ''),
-  );
-  formData.append(
-    'contact_mobile',
-    String(patient?.contact_mobile || patient?.primary_mobile || ''),
-  );
-  formData.append(
-    'alternate_mobile',
-    String(patient?.alternate_mobile || ''),
-  );
-  formData.append('email', String(patient?.email || ''));
-  formData.append('labmate_pid', String(patient?.labmate_pid || ''));
-  formData.append('panel_company', String(patient?.panel_company || ''));
-  formData.append('card_no', String(patient?.card_no || ''));
-  formData.append('tag', String(patient?.tag || ''));
+  const fields = {
+    title: String(patient?.title || ''),
+    full_name: String(patient?.full_name || ''),
+    gender: String(patient?.gender || ''),
+    date_of_birth: String(patient?.date_of_birth || ''),
+    age_years: String(patient?.age_years || ''),
+    primary_mobile: String(patient?.primary_mobile || patient?.contact_mobile || ''),
+    contact_mobile: String(patient?.contact_mobile || patient?.primary_mobile || ''),
+    alternate_mobile: String(patient?.alternate_mobile || ''),
+    email: String(patient?.email || ''),
+    labmate_pid: String(patient?.labmate_pid || ''),
+    panel_company: String(patient?.panel_company || ''),
+    card_no: String(patient?.card_no || ''),
+    tag: String(patient?.tag || ''),
+  };
 
   const documents = Array.isArray(patient?.patient_documents)
     ? patient.patient_documents
     : [];
-  documents.forEach(document => {
-    if (!document?.uri) {
-      return;
-    }
-
-    formData.append('patient_documents', {
+  const files = documents
+    .filter(document => Boolean(document?.uri))
+    .map(document => ({
+      fieldName: 'patient_documents',
       uri: document.uri,
       name: document.name || `patient-document-${Date.now()}`,
       type: document.type || 'application/octet-stream',
-    });
-  });
+    }));
 
-  logAppointmentDetailDebug('[Edit Patient API Request]', {
-    url,
-    method: 'PUT',
-    transport: 'multipart',
-    bookingId,
-    patientId,
-    payload: {
-      title: String(patient?.title || ''),
-      full_name: String(patient?.full_name || ''),
-      gender: String(patient?.gender || ''),
-      date_of_birth: String(patient?.date_of_birth || ''),
-      age_years: String(patient?.age_years || ''),
-      primary_mobile: String(patient?.primary_mobile || patient?.contact_mobile || ''),
-      contact_mobile: String(patient?.contact_mobile || patient?.primary_mobile || ''),
-      alternate_mobile: String(patient?.alternate_mobile || ''),
-      email: String(patient?.email || ''),
-      labmate_pid: String(patient?.labmate_pid || ''),
-      panel_company: String(patient?.panel_company || ''),
-      card_no: String(patient?.card_no || ''),
-      tag: String(patient?.tag || ''),
-    },
-    patientDocumentCount: documents.filter(document => Boolean(document?.uri)).length,
-  });
-
-  // SecureApiModule currently accepts string bodies only, so multipart upload
-  // must use native fetch for this endpoint.
-  const response = await fetchWithTimeout(
-    url,
-    {
+  try {
+    const response = await secureMultipartFetch({
+      url,
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
-      body: formData,
-    },
-    UPLOAD_REQUEST_TIMEOUT_MS,
-  );
+      fields,
+      files,
+      timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
+    });
 
-  const responseData = await parseJsonResponse(response, '[Update Patient]');
-  logAppointmentDetailDebug('[Edit Patient API HTTP Status]', {
-    status: response.status,
-    ok: response.ok,
-  });
-  logAppointmentDetailDebug('[Edit Patient API Response]', responseData);
-  const errorMessage = getApiErrorMessage(
-    response,
-    responseData,
-    'Unable to update patient right now.',
-  );
+    const responseData = await parseJsonResponse(response, '[Update Patient]');
+    const errorMessage = getApiErrorMessage(
+      response,
+      responseData,
+      'Unable to update patient right now.',
+    );
 
-  if (errorMessage) {
-    throw new Error(errorMessage);
+    if (errorMessage) {
+      throw new Error(errorMessage);
+    }
+
+    return responseData;
+  } catch (error) {
+    throw error;
   }
-
-  return responseData;
 };
 
 export const fetchPanelTestCatalogApi = async ({accessToken}) => {

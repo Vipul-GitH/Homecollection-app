@@ -1,0 +1,4 @@
+serial=emulator-5554
+package=com.homecollection
+variant=debug
+started=20260527-182734

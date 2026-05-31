@@ -503,6 +503,7 @@ function HomeScreen({
             loadingText="Completed appointments are loading..."
             emptyText="No completed appointments are available yet."
             showActiveCard={false}
+            cardTone="completed"
           />
         );
       }

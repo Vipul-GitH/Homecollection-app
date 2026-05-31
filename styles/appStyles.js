@@ -1192,6 +1192,11 @@ const appStyles = StyleSheet.create({
     backgroundColor: BRAND.primary,
     borderColor: '#8FB6FF',
   },
+  assignedActiveCardCompleted: {
+    backgroundColor: '#D6F2DF',
+    borderColor: '#74C69D',
+    shadowColor: '#2F855A',
+  },
   assignedQueueSectionHeader: {
     paddingTop: 8,
     paddingHorizontal: 2,
@@ -1214,6 +1219,14 @@ const appStyles = StyleSheet.create({
   assignedQueueCardAppointment: {
     backgroundColor: '#F7FBFF',
     borderColor: '#D5E6FF',
+  },
+  assignedQueueCardCompleted: {
+    backgroundColor: '#D6F2DF',
+    borderColor: '#74C69D',
+  },
+  assignedQueueCardCancelled: {
+    backgroundColor: '#FEE2E2',
+    borderColor: '#EF4444',
   },
   assignedQueueCardMain: {
     flex: 1,

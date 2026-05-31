@@ -3485,11 +3485,16 @@ function AppointmentDetailsScreen({
     }
   }, [addressForm, onBookingScreenChange, onUpdateBookingAddress, showAppAlert]);
   const openEditAddressScreen = useCallback(() => {
+    if (isAppointmentSourceBooking) {
+      return;
+    }
+
     onBookingScreenChange?.('edit-address');
     loadAddressCities();
     loadAddressColonies(addressForm.city);
   }, [
     addressForm.city,
+    isAppointmentSourceBooking,
     loadAddressCities,
     loadAddressColonies,
     onBookingScreenChange,
@@ -5638,7 +5643,9 @@ function AppointmentDetailsScreen({
             latitude={latitude}
             longitude={longitude}
             locationUrl={locationUrl}
-            onEditAddress={openEditAddressScreen}
+            onEditAddress={
+              isAppointmentSourceBooking ? null : openEditAddressScreen
+            }
             isTerminalBooking={isTerminalBooking}
             isCompletedBooking={isCompletedBooking}
             isCancelledBooking={isCancelledBooking}

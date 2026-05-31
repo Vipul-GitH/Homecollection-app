@@ -29,6 +29,7 @@ import {
   queuePendingBookingAction,
   queuePendingPatientAction,
   removeMatchingPendingBookingActions,
+  removePendingBookingAction,
   removePendingPatientAction,
   updatePendingBookingAction,
   updatePendingPatientAction,
@@ -407,6 +408,12 @@ const isTerminalBookingAction = action =>
   ['complete', 'completed', 'cancel', 'cancelled'].includes(
     String(action || '').trim().toLowerCase(),
   );
+
+const isPermanentPendingBookingActionError = error => {
+  const status = Number(error?.status || error?.responseStatus || 0);
+
+  return status === 400 || status === 404 || status === 409;
+};
 
 const MAX_ASSIGNED_BOOKING_DETAIL_WARM_CACHE = 1;
 
@@ -799,6 +806,24 @@ export const useAssignedBookings = ({
       } catch (error) {
         if (handleSessionExpired(error)) {
           return;
+        }
+        if (isPermanentPendingBookingActionError(error)) {
+          await removePendingBookingAction(pendingAction.id);
+          if (Number(error?.status || error?.responseStatus || 0) === 404) {
+            await removeCachedAssignedBooking(pendingAction.bookingId);
+            await removeCachedBookingDetail({
+              id: pendingAction.bookingId,
+              appointmentId: pendingAction.appointmentId,
+              sourceType: pendingAction.sourceType,
+            });
+          }
+          warnDebug('Dropped permanent pending booking action:', {
+            bookingId: pendingAction.bookingId,
+            action: pendingAction.action,
+            status: error?.status || error?.responseStatus,
+            message: error?.message,
+          });
+          continue;
         }
         await updatePendingBookingAction(pendingAction.id, {
           lastError: error?.message || 'Sync failed',
@@ -1687,9 +1712,12 @@ export const useAssignedBookings = ({
       }
 
       try {
+        const {appointmentId, sourceType} = resolveBookingRoutingMeta(booking);
         await updateAssignedBookingAddressApi({
           accessToken,
           bookingId,
+          appointmentId,
+          sourceType,
           addressPayload,
         });
 

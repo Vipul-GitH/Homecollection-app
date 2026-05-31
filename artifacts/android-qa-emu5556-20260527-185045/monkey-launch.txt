@@ -1,0 +1,7 @@
+  bash arg: -p
+  bash arg: com.homecollection
+  bash arg: -c
+  bash arg: android.intent.category.LAUNCHER
+  bash arg: 1
+Events injected: 1
+## Network stats: elapsed time=519ms (0ms mobile, 0ms wifi, 519ms not connected)

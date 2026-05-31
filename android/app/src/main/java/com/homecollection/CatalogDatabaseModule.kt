@@ -276,6 +276,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
 
   @Synchronized
   private fun openDatabase(): SQLiteDatabase {
+    val existingDatabase = database
+    if (existingDatabase != null && existingDatabase.isOpen) {
+      return existingDatabase
+    }
+
     val targetFile = databaseFile()
     val currentVersion = readDatabaseVersion(targetFile)
 
@@ -283,11 +288,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       database?.close()
       database = null
       copyBundledDatabase(targetFile)
-    }
-
-    val existingDatabase = database
-    if (existingDatabase != null && existingDatabase.isOpen) {
-      return existingDatabase
     }
 
     return SQLiteDatabase.openDatabase(
@@ -2052,6 +2052,47 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       }
     }
 
+    if (compCatId.isNotBlank()) {
+      val fallbackWhereParts = mutableListOf("sync_key LIKE ?")
+      val fallbackArgs = mutableListOf("%|$compCatId|%")
+
+      if (centerId.isNotBlank()) {
+        fallbackWhereParts.add("CAST(center_id AS TEXT) = ?")
+        fallbackArgs.add(centerId)
+      }
+      if (atype.isNotBlank()) {
+        fallbackWhereParts.add("UPPER(TRIM(atype)) = ?")
+        fallbackArgs.add(atype.trim().uppercase())
+      }
+
+      db.rawQuery(
+        """
+        SELECT id, sync_key, center_id, atype, pname, comp_cat_id, cat_details, billing_charge_mode
+        FROM panel_companies
+        WHERE ${fallbackWhereParts.joinToString(" AND ")}
+        ORDER BY pname COLLATE NOCASE, comp_cat_id
+        LIMIT 1
+        """.trimIndent(),
+        fallbackArgs.toTypedArray(),
+      ).use { cursor ->
+        if (cursor.moveToFirst()) {
+          val syncKey = cursor.stringValue("sync_key")
+          val syncParts = syncKey.split("|")
+          return JSONObject()
+            .put("id", cursor.intValue("id"))
+            .put("syncKey", syncKey)
+            .put("centerId", cursor.stringValue("center_id"))
+            .put("atype", cursor.stringValue("atype"))
+            .put("name", cursor.stringValue("pname"))
+            .put("compCatId", cursor.stringValue("comp_cat_id"))
+            .put("details", cursor.stringValue("cat_details"))
+            .put("billingChargeMode", cursor.stringValue("billing_charge_mode"))
+            .put("panelCode", syncParts.getOrNull(2) ?: panelCode)
+            .put("panelAbarid", syncParts.getOrNull(3) ?: panelAbarid)
+        }
+      }
+    }
+
     return JSONObject()
       .put("compCatId", compCatId)
       .put("centerId", centerId)
@@ -2127,19 +2168,26 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
 
     if (selectedIds.isNotEmpty()) {
       val selectedItems = mutableMapOf<String, JSONObject>()
+      val codeMatchClauses = selectedIds.joinToString(" OR ") { "sync_key LIKE ?" }
+      val selectedWhereSql = listOf(
+        "CAST(comp_cat_id AS TEXT) IN (${selectedIds.joinToString(",") { "?" }})",
+        codeMatchClauses,
+      ).joinToString(" OR ")
+      val selectedArgs = selectedIds + selectedIds.map { "%|$it|%" }
 
       db.rawQuery(
         """
         SELECT id, sync_key, center_id, atype, pname, comp_cat_id, cat_details, billing_charge_mode
         FROM panel_companies
-        WHERE CAST(comp_cat_id AS TEXT) IN (${selectedIds.joinToString(",") { "?" }})
+        WHERE $selectedWhereSql
         ORDER BY pname COLLATE NOCASE, comp_cat_id
         """.trimIndent(),
-        selectedIds.toTypedArray(),
+        selectedArgs.toTypedArray(),
       ).use { cursor ->
         while (cursor.moveToNext()) {
           val item = buildPanelCompanyJson(cursor)
           selectedItems[item.optString("CompCatID", "").trim()] = item
+          selectedItems[item.optString("code", "").trim()] = item
         }
       }
 

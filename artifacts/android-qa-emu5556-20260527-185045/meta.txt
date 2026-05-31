@@ -1,0 +1,6 @@
+serial=emulator-5556
+package=com.homecollection
+variant=debug
+android=16
+wm=Physical size: 1080x2400
+started=20260527-185045

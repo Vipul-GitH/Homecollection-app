@@ -203,7 +203,6 @@ function PatientDocumentViewerModal({
                   size={18}
                   style={styles.patientDocumentViewerNavIcon}
                 />
-                <Text style={styles.patientDocumentViewerNavText}>Previous</Text>
               </TouchableOpacity>
               <View style={styles.patientDocumentViewerMeta}>
                 <Text style={styles.patientDocumentViewerType} numberOfLines={1}>
@@ -221,7 +220,6 @@ function PatientDocumentViewerModal({
                 activeOpacity={0.85}
                 style={styles.patientDocumentViewerNavButton}
                 onPress={() => onNavigate(1)}>
-                <Text style={styles.patientDocumentViewerNavText}>Next</Text>
                 <Ionicons
                   name="chevron-forward"
                   size={18}
