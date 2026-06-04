@@ -588,16 +588,32 @@ const getMergedPatientSelectedTests = (patient, selectedTests, panelCompany = nu
   );
   const baseBillingChargeMode = getBillingChargeMode(panelCompany);
 
-  (Array.isArray(patient?.tests) ? patient.tests : []).forEach(test => {
-    const dedupeKey = normalizeFormText(
-      test?.code || test?.booked_code,
-    ).toUpperCase();
+  (Array.isArray(patient?.tests) ? patient.tests : []).forEach((test, index) => {
+    const testCode = normalizeFormText(test?.code || test?.booked_code);
+    const testCompCatId = normalizeFormText(test?.compCatId || test?.comp_cat_id);
+    const dedupeKey = [
+      test?.bookingTestId ||
+        test?.booking_test_id ||
+        test?.bookingTestID ||
+        test?.booking_test ||
+        index,
+      testCompCatId || basePanelCompanyId,
+      testCode,
+    ]
+      .map(value => normalizeFormText(value).toUpperCase())
+      .join('|');
     if (!dedupeKey) {
       return;
     }
 
     mergedMap.set(dedupeKey, {
-      key: `seed|${test?.code || test?.booked_code || 'na'}|${
+      key: `seed|${
+        test?.bookingTestId ||
+        test?.booking_test_id ||
+        test?.bookingTestID ||
+        test?.booking_test ||
+        index
+      }|${test?.code || test?.booked_code || 'na'}|${
         test?.name || test?.test_name || 'na'
       }`,
       panelCompanyName:
@@ -609,8 +625,7 @@ const getMergedPatientSelectedTests = (patient, selectedTests, panelCompany = nu
       panelCompanySource: panelCompany?.chipSource || 'API',
       panelCompanyChipId: panelCompany?.chipId || panelCompany?.id || '',
       panelCompanyId:
-        normalizeFormText(test?.compCatId || test?.comp_cat_id) ||
-        basePanelCompanyId,
+        testCompCatId || basePanelCompanyId,
       centerId: baseCenterId,
       atype: baseAtype,
       panelCode: basePanelCode,
@@ -1016,6 +1031,7 @@ function AppointmentDetailsScreen({
     () => appointmentDetailState?.pendingPaymentPatientId || '',
   );
   const additionalDiscountLimitAlertKeyRef = useRef('');
+  const previousCompleteNetAmountRef = useRef(null);
   const [dobCalendarMonth, setDobCalendarMonth] = useState(() => new Date());
   const [patientForm, setPatientForm] = useState(INITIAL_PATIENT_FORM);
   const [patientCompletionDocumentsMap, setPatientCompletionDocumentsMap] =
@@ -2420,11 +2436,9 @@ function AppointmentDetailsScreen({
         bookingAmountFields,
         selectedBooking,
         patientSeedAdditionalDiscountTotal,
-        localBaseDiscount: localBillingSummary.baseDiscount,
       }),
     [
       bookingAmountFields,
-      localBillingSummary.baseDiscount,
       patientSeedAdditionalDiscountTotal,
       selectedBooking,
     ],
@@ -2660,6 +2674,52 @@ function AppointmentDetailsScreen({
         : nextPayments;
     });
   }, [completePaymentPatientOptions]);
+
+  useEffect(() => {
+    const previousNetAmount = previousCompleteNetAmountRef.current;
+    previousCompleteNetAmountRef.current = completeNetAmount;
+
+    if (
+      !isCompleteBookingScreenVisible ||
+      completePaymentPatientOptions.length !== 1
+    ) {
+      return;
+    }
+
+    setCompletePayments(previousPayments => {
+      if (previousPayments.length !== 1) {
+        return previousPayments;
+      }
+
+      const payment = previousPayments[0];
+      const currentAmount = toCurrencyNumber(payment?.amount);
+      const hasAmount = Boolean(normalizeFormText(payment?.amount));
+      const shouldSyncAmount =
+        !hasAmount ||
+        (previousNetAmount !== null &&
+          Math.abs(currentAmount - previousNetAmount) < 0.01);
+
+      if (!shouldSyncAmount) {
+        return previousPayments;
+      }
+
+      const nextAmount = completeNetAmount > 0 ? String(completeNetAmount) : '';
+      if (normalizeFormText(payment?.amount) === nextAmount) {
+        return previousPayments;
+      }
+
+      return [
+        {
+          ...payment,
+          amount: nextAmount,
+        },
+      ];
+    });
+  }, [
+    completeNetAmount,
+    completePaymentPatientOptions.length,
+    isCompleteBookingScreenVisible,
+  ]);
 
   const buildCompleteBookingPayload = useCallback(() => {
     const patientAdditionalDiscountMapForPayload =

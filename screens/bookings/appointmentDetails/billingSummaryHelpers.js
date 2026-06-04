@@ -311,7 +311,6 @@ export const getPreloadedAdditionalDiscount = ({
   bookingAmountFields,
   selectedBooking,
   patientSeedAdditionalDiscountTotal,
-  localBaseDiscount,
 }) => {
   const explicitPreloadedAdditionalDiscount = toCurrencyNumber(
     bookingAmountFields?.additionalDiscount ||
@@ -327,14 +326,8 @@ export const getPreloadedAdditionalDiscount = ({
       selectedBooking?.billingSummary?.ad_dis ||
       patientSeedAdditionalDiscountTotal,
   );
-  const derivedPreloadedAdditionalDiscount = Math.max(
-    0,
-    toCurrencyNumber(bookingAmountFields?.baseDiscount) - localBaseDiscount,
-  );
 
-  return explicitPreloadedAdditionalDiscount > 0
-    ? explicitPreloadedAdditionalDiscount
-    : derivedPreloadedAdditionalDiscount;
+  return explicitPreloadedAdditionalDiscount;
 };
 
 export const getCompleteBillingAmounts = ({
