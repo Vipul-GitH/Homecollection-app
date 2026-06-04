@@ -186,7 +186,7 @@ const getPrimaryApiPanelCompany = patient =>
   buildApiPanelCompaniesFromPatient(patient)[0] || null;
 
 const buildSeededPatientTests = (patient, panelCompany = null) =>
-  (Array.isArray(patient?.tests) ? patient.tests : []).map(test => {
+  (Array.isArray(patient?.tests) ? patient.tests : []).map((test, index) => {
     const resolvedPanelCompany = findApiPanelCompanyForTest(
       patient,
       test,
@@ -194,7 +194,13 @@ const buildSeededPatientTests = (patient, panelCompany = null) =>
     );
 
     return {
-      key: `seed|${test?.code || test?.booked_code || 'na'}|${
+      key: `seed|${
+        test?.bookingTestId ||
+        test?.booking_test_id ||
+        test?.bookingTestID ||
+        test?.booking_test ||
+        index
+      }|${test?.code || test?.booked_code || 'na'}|${
         test?.name || test?.test_name || 'na'
       }`,
       panelCompanyName:
@@ -1870,12 +1876,17 @@ export const useAppShellController = () => {
       const previousMap = previousState?.patientSelectedTestsMap || {};
       const previousTests =
         previousMap[patientId] || buildSeededPatientTests(patient);
+      const removeIndex = previousTests.findIndex(item => item.key === testKey);
+      const nextTests =
+        removeIndex >= 0
+          ? previousTests.filter((item, index) => index !== removeIndex)
+          : previousTests;
 
       return {
         ...previousState,
         patientSelectedTestsMap: {
           ...previousMap,
-          [patientId]: previousTests.filter(item => item.key !== testKey),
+          [patientId]: nextTests,
         },
       };
     });

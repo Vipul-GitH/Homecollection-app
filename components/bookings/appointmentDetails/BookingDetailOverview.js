@@ -32,15 +32,25 @@ function BookingDetailOverview({
   handleAddPatientPress,
   openCancelBookingModal,
   onBookingAction,
+  isAppointmentSource = false,
 }) {
   return (
-    <View style={styles.bookingDetailShell}>
+    <View
+      style={[
+        styles.bookingDetailShell,
+        isAppointmentSource && styles.bookingDetailShellAppointment,
+      ]}>
       <View style={styles.bookingDetailHero}>
         <View style={styles.bookingDetailHeroTopRow}>
           <View style={styles.bookingDetailHeroText}>
             <Text style={styles.bookingDetailHeroCode}>
               {selectedBooking.bookingCode || selectedBooking.id}
             </Text>
+            {isAppointmentSource ? (
+              <Text style={styles.bookingDetailHeroAppointmentMeta}>
+                Link/PP
+              </Text>
+            ) : null}
             <Text style={styles.bookingDetailHeroMeta}>
               {patientCount} Patient{patientCount > 1 ? 's' : ''} |{' '}
               {selectedBooking.timeSlot}

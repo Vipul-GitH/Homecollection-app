@@ -1,11 +1,10 @@
 import {NativeModules, Platform} from 'react-native';
-
-const LABMATE_HOST = 'https://labmate.bhasinpathlabs.com:2010';
+import {API_BASE_URL} from '../../constants/config/api';
 
 const shouldUseSecureAndroidClient = url =>
   Platform.OS === 'android' &&
   typeof url === 'string' &&
-  url.startsWith(LABMATE_HOST) &&
+  url.startsWith(API_BASE_URL) &&
   Boolean(NativeModules.SecureApiModule);
 
 const buildSecureResponse = nativeResult => ({

@@ -29,6 +29,36 @@ export const getDatabasePanelCompaniesResponse = async () => {
   return parseNativeJson(await CatalogDatabaseModule.getPanelCompanies());
 };
 
+export const getDatabasePanelCompaniesByAtypeResponse = async atype => {
+  if (!isCatalogDatabaseAvailable()) {
+    return null;
+  }
+
+  if (CatalogDatabaseModule.getPanelCompaniesByAtype) {
+    return parseNativeJson(
+      await CatalogDatabaseModule.getPanelCompaniesByAtype(String(atype || '')),
+    );
+  }
+
+  const response = parseNativeJson(await CatalogDatabaseModule.getPanelCompanies());
+  if (!response?.ok || !Array.isArray(response?.items)) {
+    return response;
+  }
+
+  const normalizedAtype = String(atype || '').trim().toUpperCase();
+  return {
+    ...response,
+    items: normalizedAtype
+      ? response.items.filter(
+          item =>
+            String(item?.Atype || item?.atype || '')
+              .trim()
+              .toUpperCase() === normalizedAtype,
+        )
+      : response.items,
+  };
+};
+
 export const getDatabaseMatchedPanelCompaniesForPatientResponse = async patient => {
   if (!isCatalogDatabaseAvailable()) {
     return null;
@@ -223,47 +253,4 @@ export const getDatabasePatientTagsResponse = async () => {
   }
 
   return parseNativeJson(await CatalogDatabaseModule.getPatientTags());
-};
-
-export const getDatabasePendingHandoverRowsResponse = async userKey => {
-  if (
-    !isCatalogDatabaseAvailable() ||
-    !CatalogDatabaseModule.getPendingHandoverRows
-  ) {
-    return null;
-  }
-
-  return parseNativeJson(
-    await CatalogDatabaseModule.getPendingHandoverRows(String(userKey || '')),
-  );
-};
-
-export const upsertDatabasePendingHandoverRowsResponse = async rows => {
-  if (
-    !isCatalogDatabaseAvailable() ||
-    !CatalogDatabaseModule.upsertPendingHandoverRows
-  ) {
-    return null;
-  }
-
-  return parseNativeJson(
-    await CatalogDatabaseModule.upsertPendingHandoverRows(
-      JSON.stringify(Array.isArray(rows) ? rows : []),
-    ),
-  );
-};
-
-export const deleteDatabasePendingHandoverRowsResponse = async rowKeys => {
-  if (
-    !isCatalogDatabaseAvailable() ||
-    !CatalogDatabaseModule.deletePendingHandoverRows
-  ) {
-    return null;
-  }
-
-  return parseNativeJson(
-    await CatalogDatabaseModule.deletePendingHandoverRows(
-      JSON.stringify(Array.isArray(rowKeys) ? rowKeys : []),
-    ),
-  );
 };

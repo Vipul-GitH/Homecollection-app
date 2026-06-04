@@ -188,32 +188,41 @@ export const getPatientMutationId = patient =>
 export const getUpdatePatientId = patient =>
   normalizeFormText(patient?.patientId || patient?.patient_id || patient?.id);
 
-export const normalizePanelCompanyItems = responseData => {
+export const normalizePanelCompanyItems = (responseData, options = {}) => {
   if (!Array.isArray(responseData?.items)) {
     return [];
   }
 
-  return responseData.items.map((item, index) => {
-    const syncKey = normalizeFormText(item?.sync_key || item?.syncKey);
-    const [syncCenterId = '', syncAtype = '', syncCode = '', syncAbarid = ''] =
-      syncKey.split('|');
+  const allowedAtype = normalizeFormText(options.allowedAtype || 'C').toUpperCase();
 
-    return {
-      id: `${normalizeFormText(item?.CompCatID) || 'na'}-${
-        normalizeFormText(item?.CenterID) || 'na'
-      }-${index}`,
-      name: normalizeFormText(item?.pname) || 'Unnamed Company',
-      details: normalizeFormText(item?.CatDetails),
-      compCatId: normalizeFormText(item?.CompCatID),
-      centerId: normalizeFormText(item?.CenterID) || syncCenterId,
-      atype: normalizeFormText(item?.Atype) || syncAtype,
-      panelCode: normalizeFormText(item?.code || item?.Code) || syncCode,
-      panelAbarid: normalizeFormText(item?.ABARID || item?.abarid) || syncAbarid,
-      syncKey,
-      billingChargeMode: normalizeFormText(item?.BillingChargeMode),
-      searchKey: normalizeFormText(item?.pname).toLowerCase(),
-    };
-  });
+  return responseData.items
+    .map((item, index) => {
+      const syncKey = normalizeFormText(item?.sync_key || item?.syncKey);
+      const [syncCenterId = '', syncAtype = '', syncCode = '', syncAbarid = ''] =
+        syncKey.split('|');
+      const atype = normalizeFormText(item?.Atype) || syncAtype;
+
+      return {
+        id: `${normalizeFormText(item?.CompCatID) || 'na'}-${
+          normalizeFormText(item?.CenterID) || 'na'
+        }-${index}`,
+        name: normalizeFormText(item?.pname) || 'Unnamed Company',
+        details: normalizeFormText(item?.CatDetails),
+        compCatId: normalizeFormText(item?.CompCatID),
+        centerId: normalizeFormText(item?.CenterID) || syncCenterId,
+        atype,
+        panelCode: normalizeFormText(item?.code || item?.Code) || syncCode,
+        panelAbarid: normalizeFormText(item?.ABARID || item?.abarid) || syncAbarid,
+        syncKey,
+        billingChargeMode: normalizeFormText(item?.BillingChargeMode),
+        searchKey: normalizeFormText(item?.pname).toLowerCase(),
+      };
+    })
+    .filter(
+      item =>
+        !allowedAtype ||
+        normalizeFormText(item?.atype).toUpperCase() === allowedAtype,
+    );
 };
 
 export const buildApiPanelCompaniesFromPatient = patient => {

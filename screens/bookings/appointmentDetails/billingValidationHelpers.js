@@ -48,6 +48,7 @@ export const getAppointmentDetailsBillingValidationError = ({
   doesPatientRequireIdentityDocuments,
   doesPatientNeedPaymentProof,
   normalizeReportDeliveryValues,
+  skipPatientDocumentRequirements = false,
 }) => {
   const safePatients = Array.isArray(patients) ? patients : [];
   const activePatients = safePatients.filter(
@@ -86,36 +87,42 @@ export const getAppointmentDetailsBillingValidationError = ({
     };
   }
 
-  const pendingManualSlipPatients = safePatients.filter(patient => {
-    if (isPatientTerminalForCompletion(patient)) {
-      return false;
+  if (!skipPatientDocumentRequirements) {
+    const pendingManualSlipPatients = safePatients.filter(patient => {
+      if (isPatientTerminalForCompletion(patient)) {
+        return false;
+      }
+
+      const patientId = getPatientMutationId(patient);
+      const testBookingStatus =
+        patientTestBookingStatusMap?.[patientId] || DEFAULT_TEST_BOOKING_STATUS;
+
+      if (!isManualHcSlipSelected(testBookingStatus)) {
+        return false;
+      }
+
+      const uploadedDocuments = patientId
+        ? patientManualSlipDocumentsMap?.[patientId] || []
+        : [];
+      return !uploadedDocuments.length;
+    });
+
+    if (pendingManualSlipPatients.length) {
+      return {
+        title: 'Manual Slip Required',
+        message: `Please upload manual HC slip for: ${pendingManualSlipPatients
+          .map(patient => patient?.name || 'Patient')
+          .join(', ')}.`,
+      };
     }
-
-    const patientId = getPatientMutationId(patient);
-    const testBookingStatus =
-      patientTestBookingStatusMap?.[patientId] || DEFAULT_TEST_BOOKING_STATUS;
-
-    if (!isManualHcSlipSelected(testBookingStatus)) {
-      return false;
-    }
-
-    const uploadedDocuments = patientId
-      ? patientManualSlipDocumentsMap?.[patientId] || []
-      : [];
-    return !uploadedDocuments.length;
-  });
-
-  if (pendingManualSlipPatients.length) {
-    return {
-      title: 'Manual Slip Required',
-      message: `Please upload manual HC slip for: ${pendingManualSlipPatients
-        .map(patient => patient?.name || 'Patient')
-        .join(', ')}.`,
-    };
   }
 
   const pendingIdentityDocumentsPatients = safePatients
     .filter(patient => {
+      if (skipPatientDocumentRequirements) {
+        return false;
+      }
+
       if (isPatientTerminalForCompletion(patient)) {
         return false;
       }
@@ -200,6 +207,10 @@ export const getAppointmentDetailsBillingValidationError = ({
   }
 
   const pendingProofPatients = safePatients.filter(patient => {
+    if (skipPatientDocumentRequirements) {
+      return false;
+    }
+
     if (isPatientTerminalForCompletion(patient)) {
       return false;
     }

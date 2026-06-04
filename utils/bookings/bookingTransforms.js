@@ -152,22 +152,33 @@ const formatAddressFloor = value => {
     return floor;
   }
 
-  return /^\d+$/.test(floor) ? `Floor-${floor}` : floor;
+  const displayFloor = floor.replace(/_/g, ' ');
+  return /^\d+$/.test(floor) ? `Floor-${floor}` : displayFloor;
 };
 
 const buildAddressParts = booking => {
+  const houseFlatNo = getAddressValue(
+    booking,
+    'address.house_flat_no',
+    'address.houseNumber',
+    'address.house_number',
+    'address.flat_no',
+    'address.flatNo',
+    'house_number',
+  );
+  const blockTowerNo = getAddressValue(
+    booking,
+    'address.block_tower_no',
+    'address.blockTowerNo',
+    'address.block_no',
+    'address.blockNo',
+    'address.tower_no',
+    'address.towerNo',
+  );
   const addressParts = [
-    getAddressValue(booking, 'address.address_type', 'address.addressType'),
-    getAddressValue(
-      booking,
-      'address.house_flat_no',
-      'address.houseNumber',
-      'address.house_number',
-      'address.flat_no',
-      'address.flatNo',
-      'house_number',
-    ),
+    houseFlatNo ? `House/Flat No - ${houseFlatNo}` : '',
     formatAddressFloor(getAddressValue(booking, 'address.floor', 'floor')),
+    blockTowerNo ? `Block/Tower No - ${blockTowerNo}` : '',
     getAddressValue(
       booking,
       'address.street_line',
@@ -510,6 +521,11 @@ export const normalizeAssignedBooking = (booking, index) => {
   const bookingStatusCode = toBookingStatusCode(
     booking?.booking_status ?? booking?.bookingStatus ?? booking?.status,
   );
+  const rawTagValue = booking?.tag ?? booking?.booking_tag ?? booking?.bookingTag;
+  const isTaggedBooking =
+    rawTagValue === true ||
+    Number(rawTagValue) === 1 ||
+    String(rawTagValue || '').trim() === '1';
   const sourceType = toDisplayString(
     booking?.source_type || booking?.sourceType,
   );
@@ -582,6 +598,8 @@ export const normalizeAssignedBooking = (booking, index) => {
     visitDate: preferredVisitDate || 'Date not available',
     routeName,
     bookingStatusCode,
+    tag: rawTagValue,
+    isTaggedBooking,
     status: getBookingStatusLabel(bookingStatusCode, booking?.status),
     timeSlot: preferredTimeSlot || 'Time not available',
     address: {
@@ -775,16 +793,7 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
               patient?.referBy ||
               patient?.doctor_name ||
               patient?.doctorName ||
-              patient?.referrer ||
-              booking?.referred_by ||
-              booking?.referredBy ||
-              booking?.refer_by ||
-              booking?.referBy ||
-              booking?.doctor_name ||
-              booking?.doctorName ||
-              booking?.referrer ||
-              fallbackBooking?.referred_by ||
-              fallbackBooking?.referredBy,
+              patient?.referrer,
           ) || 'N/A',
         internalReferencedBy:
           toDisplayString(
@@ -1031,6 +1040,16 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
           'house_number',
         ) || 'N/A',
       floor: getAddressValue(booking, 'address.floor', 'floor') || 'N/A',
+      blockTowerNo:
+        getAddressValue(
+          booking,
+          'address.block_tower_no',
+          'address.blockTowerNo',
+          'address.block_no',
+          'address.blockNo',
+          'address.tower_no',
+          'address.towerNo',
+        ) || 'N/A',
       streetLine:
         getAddressValue(
           booking,
@@ -1068,8 +1087,11 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
           'address.route_no',
           'address.routeNumber',
           'address.route_number',
+          'address.route_no_snapshot',
+          'address.routeNumberSnapshot',
           'route_no',
           'routeNumber',
+          'route_no_snapshot',
         ) || 'N/A',
       city:
         getAddressValue(

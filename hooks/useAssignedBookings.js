@@ -44,7 +44,6 @@ import {
 import {logDebug, warnDebug} from '../utils/app/logger';
 import {showPlatformMessage} from '../utils/ui/notifications';
 import {
-  upsertLocalPendingHandoverRowsResponse,
   getLocalMatchedPanelCompaniesResponse,
   getLocalPanelCatalogByCompanyResponse,
 } from '../services/local/panelCatalogLocal';
@@ -417,75 +416,6 @@ const isPermanentPendingBookingActionError = error => {
 
 const MAX_ASSIGNED_BOOKING_DETAIL_WARM_CACHE = 1;
 
-const toHandoverTubeName = tube =>
-  typeof tube === 'string'
-    ? toDisplayValue(tube)
-    : toDisplayValue(tube?.tubeName || tube?.name || tube?.specimenName);
-
-const getHandoverUserKey = loggedInUser => toDisplayValue(loggedInUser);
-
-const buildPendingHandoverRowsFromBooking = (bookingDetail, loggedInUser) => {
-  const bookingId = toDisplayValue(bookingDetail?.id);
-  if (!bookingId) {
-    return [];
-  }
-
-  const userKey = getHandoverUserKey(loggedInUser);
-  const appointmentId = toDisplayValue(
-    bookingDetail?.appointmentId || bookingDetail?.appointment_id,
-  );
-  const rowScopeId = appointmentId || 'booking';
-  const bookingCode = toDisplayValue(
-    bookingDetail?.bookingCode ||
-      bookingDetail?.booking_code ||
-      bookingDetail?.code ||
-      bookingDetail?.bookingNumber ||
-      bookingId,
-  );
-  const completedAt = new Date().toISOString();
-
-  return (Array.isArray(bookingDetail?.patients) ? bookingDetail.patients : []).flatMap(
-    patient => {
-      const bookingPatientId = toDisplayValue(
-        patient?.bookingPatientId || patient?.booking_patient_id || patient?.id,
-      );
-      const patientId = toDisplayValue(
-        patient?.patientId || patient?.patient_id || patient?.id,
-      );
-      const patientName = toDisplayValue(patient?.name || patient?.full_name);
-
-      if (!bookingPatientId) {
-        return [];
-      }
-
-      const tubeOccurrenceMap = new Map();
-
-      return (Array.isArray(patient?.tubes) ? patient.tubes : [])
-        .map(toHandoverTubeName)
-        .filter(Boolean)
-        .map(tubeName => {
-          const tubeKey = tubeName.toLowerCase();
-          const occurrenceNumber = (tubeOccurrenceMap.get(tubeKey) || 0) + 1;
-          tubeOccurrenceMap.set(tubeKey, occurrenceNumber);
-
-          return {
-            row_key: `${userKey || 'user'}|${bookingId}|${rowScopeId}|${bookingPatientId}|${tubeKey}|${occurrenceNumber}`,
-            user_key: userKey,
-            user_name: userKey,
-            booking_id: bookingId,
-            booking_code: bookingCode,
-            appointment_id: appointmentId,
-            patient_id: patientId,
-            booking_patient_id: bookingPatientId,
-            patient_name: patientName,
-            tube_name: tubeName,
-            completed_at: completedAt,
-          };
-        });
-    },
-  );
-};
-
 const selectBookingsForWarmCache = bookings => {
   const sourceBookings = Array.isArray(bookings) ? bookings : [];
   const prioritizedBookings = [];
@@ -667,18 +597,6 @@ export const useAssignedBookings = ({
         return;
       }
 
-      try {
-        const pendingHandoverRows = buildPendingHandoverRowsFromBooking(
-          bookingDetail,
-          loggedInUser,
-        );
-        if (pendingHandoverRows.length) {
-          await upsertLocalPendingHandoverRowsResponse(pendingHandoverRows);
-        }
-      } catch (error) {
-        warnDebug('Pending handover rows update error:', error);
-      }
-
       setCompletedAppointments(previousAppointments => {
         const nextAppointments = [
           bookingDetail,
@@ -700,7 +618,7 @@ export const useAssignedBookings = ({
         warnDebug('Completed booking detail cache update error:', error);
       }
     },
-    [loggedInUser],
+    [],
   );
 
   const persistUpdatedBookingDetail = useCallback(

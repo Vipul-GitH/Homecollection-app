@@ -87,6 +87,7 @@ import {
 } from './appointmentDetails/sampleTubeHelpers';
 import {warnDebug} from '../../utils/app/logger';
 import {
+  getLocalPanelCompaniesByAtypeResponse,
   getLocalPanelCompaniesResponse,
   getLocalPatientTagsResponse,
 } from '../../services/local/panelCatalogLocal';
@@ -816,6 +817,28 @@ const normalizeAddressField = value => {
 const firstAddressValue = (...values) =>
   values.find(value => normalizeAddressField(value)) || '';
 
+const getCompletedTubeNamesForPayload = sampleCollection => {
+  const sourceTubes = Array.isArray(sampleCollection?.selectedTubes)
+    ? sampleCollection.selectedTubes
+    : [];
+  const fallbackTubes = Array.isArray(sampleCollection?.tubeSelectionSummary)
+    ? sampleCollection.tubeSelectionSummary.filter(
+        tube => Number(tube?.selectedCount || 0) > 0,
+      )
+    : [];
+  const tubeNames = (sourceTubes.length ? sourceTubes : fallbackTubes)
+    .map(tube =>
+      normalizeFormText(
+        typeof tube === 'string'
+          ? tube
+          : tube?.tubeName || tube?.specimenName || tube?.name,
+      ),
+    )
+    .filter(Boolean);
+
+  return Array.from(new Set(tubeNames));
+};
+
 const buildAddressFormFromBooking = booking => ({
   address_id: firstAddressValue(
     booking?.address?.addressId,
@@ -840,7 +863,20 @@ const buildAddressFormFromBooking = booking => ({
   city: normalizeAddressField(booking?.address?.city),
   colony: normalizeAddressField(booking?.address?.colonyName),
   pincode: normalizeAddressField(booking?.address?.pincode),
-  route: normalizeAddressField(booking?.address?.routeNumber),
+  route: normalizeAddressField(
+    firstAddressValue(
+      booking?.address?.routeNumber,
+      booking?.address?.routeNo,
+      booking?.address?.route_no,
+      booking?.address?.route_no_snapshot,
+      booking?.address?.route_number,
+      booking?.address?.routeNumberSnapshot,
+      booking?.routeNumber,
+      booking?.routeNo,
+      booking?.route_no,
+      booking?.route_no_snapshot,
+    ),
+  ),
   is_manual_pincode: false,
   google_location: normalizeAddressField(booking?.address?.locationUrl),
   access_notes: normalizeAddressField(booking?.address?.accessNotes),
@@ -852,6 +888,7 @@ const buildAddressPayloadFromForm = form =>
     address_type: form.address_type,
     house_flat_no: form.house_flat_no,
     floor: form.floor,
+    block_tower_no: form.block_tower_no,
     street_line: form.street_sector,
     landmark: form.landmark,
     colony_name: form.colony,
@@ -987,9 +1024,13 @@ function AppointmentDetailsScreen({
     useState(() => appointmentDetailState?.patientManualSlipDocumentsMap || {});
   const [patientFormPanelCompanyItems, setPatientFormPanelCompanyItems] =
     useState([]);
+  const [patientFormReferredByItems, setPatientFormReferredByItems] = useState([]);
   const [patientTagOptions, setPatientTagOptions] = useState([]);
   const [isPatientFormPanelCompanyFocused, setIsPatientFormPanelCompanyFocused] =
     useState(false);
+  const [patientReferredByOverrideMap, setPatientReferredByOverrideMap] = useState(
+    () => appointmentDetailState?.patientReferredByOverrideMap || {},
+  );
   const [editingPatient, setEditingPatient] = useState(null);
   const [isPanelCompanyModalVisible, setIsPanelCompanyModalVisible] =
     useState(false);
@@ -1087,6 +1128,11 @@ function AppointmentDetailsScreen({
     () => appointmentDetailState?.patientCancellationMap || {},
     [appointmentDetailState?.patientCancellationMap],
   );
+  useEffect(() => {
+    setPatientReferredByOverrideMap(
+      appointmentDetailState?.patientReferredByOverrideMap || {},
+    );
+  }, [appointmentDetailState?.patientReferredByOverrideMap]);
   useEffect(() => {
     setPatientCompletionDocumentsMap(
       appointmentDetailState?.patientCompletionDocumentsMap || {},
@@ -1557,12 +1603,30 @@ function AppointmentDetailsScreen({
           ? patientCancellationMap[patientId]
           : null;
 
+        const referredByOverride =
+          patientId &&
+          Object.prototype.hasOwnProperty.call(
+            patientReferredByOverrideMap,
+            patientId,
+          )
+            ? normalizeFormText(patientReferredByOverrideMap[patientId])
+            : null;
+        const nextPatient =
+          referredByOverride !== null
+            ? {
+                ...patient,
+                referredBy: referredByOverride,
+                referred_by: referredByOverride,
+              }
+            : patient;
+
         if (!cancellationPayload) {
-          return patient;
+          return nextPatient;
         }
 
         return {
           ...patient,
+          ...nextPatient,
           bookingPatientStatusCode: 4,
           bookingPatientStatus: 'Cancelled',
           booking_patient_status: 4,
@@ -1571,7 +1635,7 @@ function AppointmentDetailsScreen({
           cancellationPayload,
         };
       }),
-    [patientCancellationMap, selectedBooking?.patients],
+    [patientCancellationMap, patientReferredByOverrideMap, selectedBooking?.patients],
   );
   const isAppointmentSourceBooking = useMemo(
     () =>
@@ -2066,9 +2130,7 @@ function AppointmentDetailsScreen({
   useEffect(() => {
     let isMounted = true;
     const shouldLoadPatientFormPanelCompanies =
-      isAddPatientModalVisible &&
-      (editingPatient || addPatientModalStep === 'form') &&
-      !patientFormPanelCompanyItems.length;
+      (!patientFormPanelCompanyItems.length || !patientFormReferredByItems.length);
 
     if (!shouldLoadPatientFormPanelCompanies) {
       return () => {
@@ -2078,11 +2140,20 @@ function AppointmentDetailsScreen({
 
     const loadPatientFormPanelCompanies = async () => {
       try {
-        const responseData = await getLocalPanelCompaniesResponse();
-        const items = normalizePanelCompanyItems(responseData);
+        const [panelResponseData, referredByResponseData] = await Promise.all([
+          getLocalPanelCompaniesByAtypeResponse('C'),
+          getLocalPanelCompaniesByAtypeResponse('D'),
+        ]);
+        const panelItems = normalizePanelCompanyItems(panelResponseData, {
+          allowedAtype: 'C',
+        });
+        const referredByItems = normalizePanelCompanyItems(referredByResponseData, {
+          allowedAtype: 'D',
+        });
 
         if (isMounted) {
-          setPatientFormPanelCompanyItems(items);
+          setPatientFormPanelCompanyItems(panelItems);
+          setPatientFormReferredByItems(referredByItems);
         }
       } catch (error) {
         warnDebug('Unable to load patient form panel companies:', error);
@@ -2099,6 +2170,7 @@ function AppointmentDetailsScreen({
     editingPatient,
     isAddPatientModalVisible,
     patientFormPanelCompanyItems.length,
+    patientFormReferredByItems.length,
   ]);
 
   useEffect(() => {
@@ -2613,6 +2685,7 @@ function AppointmentDetailsScreen({
           : Array.isArray(patient?.tests)
           ? patient.tests
           : [];
+        const patientPanelCompanies = getPatientPanelCompanies(patient);
         const panelMap = new Map();
 
         sourceTests.forEach(test => {
@@ -2644,11 +2717,43 @@ function AppointmentDetailsScreen({
                 effectiveTest?.panel_company ||
                 '',
           ) || 'Current Panel';
-          const compCatId = normalizeFormText(
+          const panelCompanyKey = panelCompany.toLowerCase();
+          const testPanelChipId = normalizeFormText(
+            effectiveTest?.panelCompanyChipId,
+          );
+          const directTestCompCatId = normalizeFormText(
             effectiveTest?.panelCompanyId ||
               effectiveTest?.compCatId ||
               effectiveTest?.comp_cat_id ||
               '',
+          );
+          const matchedPanelCompany = patientPanelCompanies.find(company => {
+            const companyCompCatId = normalizeFormText(company?.compCatId);
+            if (directTestCompCatId && companyCompCatId === directTestCompCatId) {
+              return true;
+            }
+
+            const companyName =
+              normalizeFormText(
+                company?.name || company?.panelCompany || company?.pname,
+              ).toLowerCase();
+            if (companyName && companyName === panelCompanyKey) {
+              return true;
+            }
+
+            if (!directTestCompCatId) {
+              const companyChipId = normalizeFormText(
+                company?.chipId || company?.id,
+              );
+              if (testPanelChipId && companyChipId === testPanelChipId) {
+                return true;
+              }
+            }
+
+            return false;
+          });
+          const compCatId = normalizeFormText(
+            directTestCompCatId || matchedPanelCompany?.compCatId || '',
           );
           const catDetails = normalizeFormText(
             effectiveTest?.cat_details ||
@@ -2734,6 +2839,7 @@ function AppointmentDetailsScreen({
           report_delivery_options: normalizeReportDeliveryValues(
             patientReportCourierMap[patientId],
           ),
+          referred_by: normalizeFormText(patient?.referredBy || patient?.referred_by),
           report_schedule: normalizeFormText(
             patientReportScheduleMap[patientId],
           ) || 'routine',
@@ -2868,6 +2974,8 @@ function AppointmentDetailsScreen({
           sampleCollectionEasyToughPatientIds.includes(optionId);
         const patientSampleCollection =
           patientSampleCollectionMap[patientId] || {};
+        const completedTubeNames =
+          getCompletedTubeNamesForPayload(patientSampleCollection);
         const additionalSample = (Array.isArray(
           patientSampleCollection?.selectedAdditionalTubes,
         )
@@ -2909,6 +3017,7 @@ function AppointmentDetailsScreen({
             patientTestBookingStatusMap[patientId] ||
               DEFAULT_TEST_BOOKING_STATUS,
           ),
+          referred_by: normalizeFormText(patient?.referredBy || patient?.referred_by),
           report_schedule:
             normalizeFormText(patientReportScheduleMap[patientId]) || 'routine',
           report_delivery: normalizeReportDeliveryValues(
@@ -2929,6 +3038,7 @@ function AppointmentDetailsScreen({
               ? normalizeFormText(samplePickCount)
               : '1',
           sample_collection_is: isPatientMarkedTough ? 'tough' : 'easy',
+          cmplt_tube: completedTubeNames,
           additional_sample: additionalSample,
           additional_discount_amount: toCurrencyNumber(
             billingRow?.effectiveAdditional,
@@ -3104,6 +3214,7 @@ function AppointmentDetailsScreen({
     completeAmountReceived,
     completePaymentMode,
     completePayments,
+    getPatientPanelCompanies,
     hasPendingSampleTubes,
     isAppointmentPatientStatusContext,
     isAppointmentSourceBooking,
@@ -3511,12 +3622,18 @@ function AppointmentDetailsScreen({
       return '';
     }
 
-    return /^\d+$/.test(floorValue) ? `Floor-${floorValue}` : floorValue;
+    return /^\d+$/.test(floorValue)
+      ? `Floor-${floorValue}`
+      : floorValue.replace(/_/g, ' ');
   }, [addressForm.floor, addressForm.floor_special]);
   const mergedSelectedBookingAddress = [
-    addressForm.house_flat_no,
+    addressForm.house_flat_no
+      ? `House/Flat No - ${addressForm.house_flat_no}`
+      : '',
     resolvedFloorAddressPart,
-    addressForm.block_tower_no,
+    addressForm.block_tower_no
+      ? `Block/Tower No - ${addressForm.block_tower_no}`
+      : '',
     addressForm.street_sector,
     addressForm.landmark,
     addressForm.colony,
@@ -3694,6 +3811,10 @@ function AppointmentDetailsScreen({
   };
 
   const handleEditPatientPress = patient => {
+    if (isAppointmentSourceBooking) {
+      return;
+    }
+
     if (!canUsePatientActions) {
       showBookingStartRequiredAlert();
       return;
@@ -4073,6 +4194,7 @@ function AppointmentDetailsScreen({
       doesPatientRequireIdentityDocuments,
       doesPatientNeedPaymentProof,
       normalizeReportDeliveryValues,
+      skipPatientDocumentRequirements: isAppointmentSourceBooking,
     });
 
     if (!validationError) {
@@ -4084,6 +4206,7 @@ function AppointmentDetailsScreen({
   }, [
     doesPatientNeedPaymentProof,
     doesPatientRequireIdentityDocuments,
+    isAppointmentSourceBooking,
     patientCghsDocumentsMap,
     patientCompletionDocumentsMap,
     patientManualSlipDocumentsMap,
@@ -4527,10 +4650,8 @@ function AppointmentDetailsScreen({
       return;
     }
 
-    const didComplete = await onBookingAction(
-      'completed',
-      buildCompleteBookingPayload(),
-    );
+    const completePayload = buildCompleteBookingPayload();
+    const didComplete = await onBookingAction('completed', completePayload);
 
     if (!didComplete) {
       return;
@@ -5331,6 +5452,34 @@ function AppointmentDetailsScreen({
     ],
   );
 
+  const handleUpdatePatientReferredBy = useCallback(
+    async ({patient, referredBy}) => {
+      const patientId = normalizeFormText(getPatientMutationId(patient));
+      if (!patientId) {
+        showAppAlert('Unable to Update', 'Patient id is missing.');
+        return false;
+      }
+
+      const nextReferredBy = normalizeFormText(referredBy);
+      setPatientReferredByOverrideMap(previousMap => ({
+        ...previousMap,
+        [patientId]: nextReferredBy,
+      }));
+      onAppointmentDetailStateChange?.(previousState => ({
+        ...(previousState || {}),
+        patientReferredByOverrideMap: {
+          ...((previousState || {}).patientReferredByOverrideMap || {}),
+          [patientId]: nextReferredBy,
+        },
+      }));
+      return true;
+    },
+    [
+      onAppointmentDetailStateChange,
+      showAppAlert,
+    ],
+  );
+
   const calendarDays = getCalendarDays(dobCalendarMonth);
   const cancelCalendarDays = getCalendarDays(cancelCalendarMonth);
   const linkedAppointmentCalendarDays = getCalendarDays(
@@ -5646,6 +5795,7 @@ function AppointmentDetailsScreen({
             onEditAddress={
               isAppointmentSourceBooking ? null : openEditAddressScreen
             }
+            isAppointmentSource={isAppointmentSourceBooking}
             isTerminalBooking={isTerminalBooking}
             isCompletedBooking={isCompletedBooking}
             isCancelledBooking={isCancelledBooking}
@@ -5686,6 +5836,9 @@ function AppointmentDetailsScreen({
             patientSampleCollectionMap={patientSampleCollectionMap}
             patientTestBookingStatusMap={patientTestBookingStatusMap}
             useBackendTestPrices={isAppointmentSourceBooking}
+            hidePatientEditAction={isAppointmentSourceBooking}
+            skipPatientDocumentRequirements={isAppointmentSourceBooking}
+            isAppointmentSourceBooking={isAppointmentSourceBooking}
             patientCghsEnabledMap={patientCghsEnabledMap}
             patientCghsIdMap={patientCghsIdMap}
             patientCghsDocumentsMap={patientCghsDocumentsMap}
@@ -5720,6 +5873,9 @@ function AppointmentDetailsScreen({
               handleRemoveSelectedTestWithSampleReset
             }
             handlePatientAddPanelCompany={handlePatientAddPanelCompany}
+            referredByOptions={patientFormReferredByItems}
+            onUpdatePatientReferredBy={handleUpdatePatientReferredBy}
+            updatingReferredByPatientId=""
           />
 
           <ReportDeliverySection

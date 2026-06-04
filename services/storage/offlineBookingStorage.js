@@ -646,19 +646,6 @@ export const getCachedAppointmentDetailDrafts = async () => {
   return parsedValue && typeof parsedValue === 'object' ? parsedValue : {};
 };
 
-export const getCachedHandoverState = async () => {
-  const value = await AsyncStorage.getItem(HANDOVER_STATE_KEY);
-  const parsedValue = safelyParseJson(value, {});
-  return parsedValue && typeof parsedValue === 'object' ? parsedValue : {};
-};
-
-export const persistCachedHandoverState = async handoverState => {
-  await writeJsonIfChanged(
-    HANDOVER_STATE_KEY,
-    handoverState && typeof handoverState === 'object' ? handoverState : {},
-  );
-};
-
 export const clearAppointmentDetailDraft = async bookingId => {
   const normalizedBookingId = String(bookingId || '').trim();
   if (!normalizedBookingId) {

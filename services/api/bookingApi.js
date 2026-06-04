@@ -3,6 +3,7 @@ import {
   MY_ASSIGNED_BOOKINGS_HISTORY_API_URL,
   PANEL_TEST_CATALOG_API_URL,
   getAssignedBookingBatchHistoryApiUrl,
+  getAssignedBookingBatchReadyApiUrl,
   getPanelCatalogByCompanyApiUrl,
   getAssignedBookingBatchSaveApiUrl,
   getAssignedBookingCancelApiUrl,
@@ -47,8 +48,6 @@ const parseJsonResponse = async response => {
     return null;
   }
 };
-
-const getDurationMs = startedAt => Date.now() - startedAt;
 
 const isPatientBookingMappingError = message =>
   /patient\s+.+\s+is\s+not\s+mapped\s+to\s+booking\s+/i.test(
@@ -165,68 +164,6 @@ const isUploadableDocument = document => {
 
 const hasDocumentsWithUri = documents =>
   (Array.isArray(documents) ? documents : []).some(isUploadableDocument);
-
-const countUploadableDocuments = documents =>
-  (Array.isArray(documents) ? documents : []).filter(isUploadableDocument).length;
-
-const buildUploadCountMap = documentsMap =>
-  Object.entries(documentsMap || {}).reduce((accumulator, [patientId, documents]) => {
-    const count = countUploadableDocuments(documents);
-    if (count) {
-      accumulator[patientId] = count;
-    }
-
-    return accumulator;
-  }, {});
-
-const buildSectionUploadCountMap = sectionMap =>
-  Object.entries(sectionMap || {}).reduce((accumulator, [patientId, sections]) => {
-    const sectionCounts = Object.entries(sections || {}).reduce(
-      (sectionAccumulator, [sectionKey, documents]) => {
-        const count = countUploadableDocuments(documents);
-        if (count) {
-          sectionAccumulator[sectionKey] = count;
-        }
-
-        return sectionAccumulator;
-      },
-      {},
-    );
-
-    if (Object.keys(sectionCounts).length) {
-      accumulator[patientId] = sectionCounts;
-    }
-
-    return accumulator;
-  }, {});
-
-const buildPaymentProofUploadCountMap = (bookingDetail, paymentProofs) =>
-  (Array.isArray(paymentProofs) ? paymentProofs : []).reduce(
-    (accumulator, paymentProof) => {
-      const patientId = getPaymentProofMasterPatientId(bookingDetail, paymentProof);
-      const count = countUploadableDocuments(paymentProof?.documents);
-
-      if (patientId && count) {
-        accumulator[patientId] = (accumulator[patientId] || 0) + count;
-      }
-
-      return accumulator;
-    },
-    {},
-  );
-
-const summarizeAttachmentCounts = ({
-  bookingDetail,
-  patientDocumentsMap,
-  manualSlipDocumentsMap,
-  paymentProofs,
-  patientCghsDocumentsMap,
-}) => ({
-  patientDocuments: buildUploadCountMap(patientDocumentsMap),
-  manualSlipDocuments: buildUploadCountMap(manualSlipDocumentsMap),
-  patientCghsDocuments: buildSectionUploadCountMap(patientCghsDocumentsMap),
-  paymentProofs: buildPaymentProofUploadCountMap(bookingDetail, paymentProofs),
-});
 
 const validateCompleteBookingAttachments = fileParts => {
   if (fileParts.length > COMPLETE_UPLOAD_MAX_FILES) {
@@ -406,7 +343,6 @@ const postCompleteBookingStatus = async ({
   patientCghsDocumentsMap,
   onProgress,
 }) => {
-  const startedAt = Date.now();
   const apiUrl = getAssignedBookingStatusApiUrl(bookingId);
   const hasUploadableAttachments = hasCompleteBookingAttachments({
     patientDocumentsMap,
@@ -415,13 +351,6 @@ const postCompleteBookingStatus = async ({
     patientCghsDocumentsMap,
   });
 
-  const attachmentCounts = summarizeAttachmentCounts({
-    bookingDetail,
-    patientDocumentsMap,
-    manualSlipDocumentsMap,
-    paymentProofs,
-    patientCghsDocumentsMap,
-  });
   if (!hasUploadableAttachments) {
     onProgress?.({
       stage: 'completing',
@@ -630,6 +559,7 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
     sourceType,
   );
 
+  console.log('[Appointment Details API URL]', apiUrl);
   const response = await secureFetch(apiUrl, {
     method: 'GET',
     headers: {
@@ -640,6 +570,11 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
   });
 
   const responseData = await parseJsonResponse(response, '[Assigned Detail]');
+  console.log('[Appointment Details API HTTP Status]', {
+    status: response.status,
+    ok: response.ok,
+  });
+  console.log('[Appointment Details API Response]', responseData);
   const errorMessage = getApiErrorMessage(
     response,
     responseData,
@@ -665,7 +600,6 @@ export const updateAssignedBookingStatusApi = async ({
   bookingDetail = null,
   onProgress,
 }) => {
-  const startedAt = Date.now();
   const normalizedSourceType = String(sourceType || '')
     .trim()
     .toUpperCase();
@@ -998,12 +932,61 @@ const normalizeHandoverHistoryItems = responseData => {
   }));
 };
 
+const extractHandoverReadyItems = responseData => {
+  const sourceItems =
+    responseData?.items ||
+    responseData?.data?.items ||
+    responseData?.data?.bookings ||
+    responseData?.data?.ready ||
+    responseData?.data?.pending ||
+    responseData?.data?.ready_items ||
+    responseData?.data?.readyItems ||
+    responseData?.data ||
+    responseData?.results ||
+    responseData?.bookings ||
+    responseData?.ready ||
+    responseData?.pending ||
+    responseData?.ready_items ||
+    responseData?.readyItems ||
+    responseData;
+
+  return Array.isArray(sourceItems) ? sourceItems : [];
+};
+
+export const fetchAssignedBookingHandoverReadyApi = async ({accessToken}) => {
+  const url = getAssignedBookingBatchReadyApiUrl();
+
+  const response = await secureFetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json',
+    },
+    timeoutMs: HANDOVER_HISTORY_REQUEST_TIMEOUT_MS,
+  });
+
+  const responseData = await parseJsonResponse(response, '[Handover Batch Ready]');
+  const errorMessage = getApiErrorMessage(
+    response,
+    responseData,
+    'Unable to load pending handover right now.',
+  );
+
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
+
+  const readyItems = extractHandoverReadyItems(responseData);
+  return readyItems;
+};
+
 export const fetchAssignedBookingHandoverHistoryApi = async ({
   accessToken,
   limit = 50,
   offset = 0,
 }) => {
   const url = getAssignedBookingBatchHistoryApiUrl({limit, offset});
+
   const response = await secureFetch(url, {
     method: 'GET',
     headers: {
@@ -1023,7 +1006,8 @@ export const fetchAssignedBookingHandoverHistoryApi = async ({
     throw new Error(errorMessage);
   }
 
-  return normalizeHandoverHistoryItems(responseData);
+  const historyItems = normalizeHandoverHistoryItems(responseData);
+  return historyItems;
 };
 
 const normalizeRiderSuggestion = rider => {
@@ -1164,6 +1148,9 @@ export const addAssignedBookingPatientApi = async ({
         ...(patient?.panel_company
           ? {panel_company: String(patient.panel_company)}
           : {}),
+        ...(patient?.referred_by
+          ? {referred_by: String(patient.referred_by)}
+          : {}),
         ...(patient?.card_no ? {card_no: String(patient.card_no)} : {}),
         ...(patient?.tag ? {tag: String(patient.tag)} : {}),
       }),
@@ -1202,6 +1189,7 @@ export const addAssignedBookingPatientApi = async ({
   formData.append('email', String(patient?.email || ''));
   formData.append('labmate_pid', String(patient?.labmate_pid || ''));
   formData.append('panel_company', String(patient?.panel_company || ''));
+  formData.append('referred_by', String(patient?.referred_by || ''));
   formData.append('card_no', String(patient?.card_no || ''));
   formData.append('tag', String(patient?.tag || ''));
 
@@ -1260,14 +1248,16 @@ export const updateAssignedBookingAddressApi = async ({
     normalizedSourceType === 'APPOINTMENT' && normalizedAppointmentId
       ? normalizedAppointmentId
       : bookingId;
+  const addressUrl = getAssignedBookingAddressApiUrl(addressRouteId);
+  const payload = addressPayload || {};
 
-  const response = await secureFetch(getAssignedBookingAddressApiUrl(addressRouteId), {
+  const response = await secureFetch(addressUrl, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${accessToken}`,
     },
-    body: JSON.stringify(addressPayload || {}),
+    body: JSON.stringify(payload),
     timeoutMs: DETAIL_GET_REQUEST_TIMEOUT_MS,
   });
 
@@ -1337,6 +1327,7 @@ export const updateAssignedBookingPatientApi = async ({
     email: String(patient?.email || ''),
     labmate_pid: String(patient?.labmate_pid || ''),
     panel_company: String(patient?.panel_company || ''),
+    referred_by: String(patient?.referred_by || ''),
     card_no: String(patient?.card_no || ''),
     tag: String(patient?.tag || ''),
   };
@@ -1344,6 +1335,32 @@ export const updateAssignedBookingPatientApi = async ({
   const documents = Array.isArray(patient?.patient_documents)
     ? patient.patient_documents
     : [];
+
+  if (!documents.length) {
+    const response = await secureFetch(url, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(fields),
+      timeoutMs: NORMAL_WRITE_REQUEST_TIMEOUT_MS,
+    });
+
+    const responseData = await parseJsonResponse(response, '[Update Patient]');
+    const errorMessage = getApiErrorMessage(
+      response,
+      responseData,
+      'Unable to update patient right now.',
+    );
+
+    if (errorMessage) {
+      throw new Error(errorMessage);
+    }
+
+    return responseData;
+  }
+
   const files = documents
     .filter(document => Boolean(document?.uri))
     .map(document => ({

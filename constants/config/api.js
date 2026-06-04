@@ -1,19 +1,20 @@
-export const LOGIN_API_URL =
-  'https://labmate.bhasinpathlabs.com:2010/api/v1/auth/login';
+export const API_BASE_URL = 'https://labmate.bhasinpathlabs.com:2015';
+
+export const LOGIN_API_URL = `${API_BASE_URL}/api/v1/auth/login`;
 
 export const MY_ASSIGNED_BOOKINGS_API_URL =
-  'https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned';
+  `${API_BASE_URL}/api/v1/bookings/my-assigned`;
 
 export const MY_ASSIGNED_BOOKINGS_HISTORY_API_URL =
-  'https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/history';
+  `${API_BASE_URL}/api/v1/bookings/my-assigned/history`;
 
 export const PANEL_TEST_CATALOG_API_URL =
-  'https://labmate.bhasinpathlabs.com:2010/hhome-collection/panel-companies';
+  `${API_BASE_URL}/hhome-collection/panel-companies`;
 
-export const CATALOG_SEED_TS = '2026-05-06 17:04:27';
+export const CATALOG_SEED_TS = '2026-06-02 14:35:00';
 
 export const CATALOG_SYNC_API_BASE_URL =
-  'https://labmate.bhasinpathlabs.com:2010/api/v1/sync';
+  `${API_BASE_URL}/api/v1/sync`;
 
 export const getCatalogSyncTableApiUrl = ({
   tableName,
@@ -36,7 +37,7 @@ export const getCatalogSyncTableApiUrl = ({
 };
 
 export const getPanelCatalogByCompanyApiUrl = compCatId =>
-  `https://labmate.bhasinpathlabs.com:2010/hhome-collection/panel-catalog?comp_cat_id=${encodeURIComponent(
+  `${API_BASE_URL}/hhome-collection/panel-catalog?comp_cat_id=${encodeURIComponent(
     String(compCatId || ''),
   )}`;
 
@@ -45,7 +46,7 @@ export const getAssignedBookingDetailApiUrl = (
   appointmentId,
   sourceType,
 ) => {
-  const baseUrl = `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/${bookingId}`;
+  const baseUrl = `${API_BASE_URL}/api/v1/bookings/my-assigned/${bookingId}`;
   const normalizedAppointmentId = String(appointmentId || '').trim();
   const normalizedSourceType = String(sourceType || '')
     .trim()
@@ -62,13 +63,16 @@ export const getAssignedBookingDetailApiUrl = (
 };
 
 export const getAssignedBookingStatusApiUrl = bookingId =>
-  `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/${bookingId}/status`;
+  `${API_BASE_URL}/api/v1/bookings/my-assigned/${bookingId}/status`;
 
 export const getAssignedBookingCancelApiUrl = bookingId =>
-  `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/${bookingId}/cancel`;
+  `${API_BASE_URL}/api/v1/bookings/my-assigned/${bookingId}/cancel`;
 
 export const getAssignedBookingBatchSaveApiUrl = () =>
-  'https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/batch/save';
+  `${API_BASE_URL}/api/v1/bookings/my-assigned/batch/save`;
+
+export const getAssignedBookingBatchReadyApiUrl = () =>
+  `${API_BASE_URL}/api/v1/bookings/my-assigned/batch/ready`;
 
 export const getAssignedBookingBatchHistoryApiUrl = ({
   limit = 50,
@@ -79,7 +83,7 @@ export const getAssignedBookingBatchHistoryApiUrl = ({
     offset: String(offset || 0),
   });
 
-  return `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/batch/history?${params.toString()}`;
+  return `${API_BASE_URL}/api/v1/bookings/my-assigned/batch/history?${params.toString()}`;
 };
 
 export const getRiderSuggestionsApiUrl = ({query, limit = 8}) => {
@@ -88,23 +92,23 @@ export const getRiderSuggestionsApiUrl = ({query, limit = 8}) => {
     limit: String(limit || 8),
   });
 
-  return `https://labmate.bhasinpathlabs.com:2010/api/v1/users/riders?${params.toString()}`;
+  return `${API_BASE_URL}/api/v1/users/riders?${params.toString()}`;
 };
 
 export const getAssignedBookingAddressApiUrl = bookingId =>
-  `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/${bookingId}/address`;
+  `${API_BASE_URL}/api/v1/bookings/my-assigned/${bookingId}/address`;
 
 export const getAssignedBookingPatientsApiUrl = bookingId =>
-  `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/${bookingId}/patients`;
+  `${API_BASE_URL}/api/v1/bookings/my-assigned/${bookingId}/patients`;
 
 export const getAssignedBookingPatientApiUrl = (bookingId, patientId) =>
-  `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/${bookingId}/patients/${patientId}`;
+  `${API_BASE_URL}/api/v1/bookings/my-assigned/${bookingId}/patients/${patientId}`;
 
 export const getAssignedBookingPatientCancelApiUrl = (
   bookingId,
   bookingPatientId,
 ) =>
-  `https://labmate.bhasinpathlabs.com:2010/api/v1/bookings/my-assigned/${bookingId}/patients/${bookingPatientId}/cancel`;
+  `${API_BASE_URL}/api/v1/bookings/my-assigned/${bookingId}/patients/${bookingPatientId}/cancel`;
 
 export const ACCESS_TOKEN_STORAGE_KEY = 'access_token';
 export const LOGGED_IN_USER_STORAGE_KEY = 'logged_in_user';

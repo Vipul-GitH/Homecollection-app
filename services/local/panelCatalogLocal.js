@@ -1,5 +1,4 @@
 import {
-  deleteDatabasePendingHandoverRowsResponse,
   getDatabasePanelCatalogByCompanyResponse,
   getDatabasePanelCatalogGroupsByCompanyResponse,
   getDatabasePanelCatalogSubgroupsByCompanyResponse,
@@ -7,10 +6,8 @@ import {
   searchDatabasePanelCatalogTestsByCompanyResponse,
   getDatabaseBookingTestPricesResponse,
   getDatabaseMatchedPanelCompaniesForPatientResponse,
-  getDatabasePendingHandoverRowsResponse,
-  getDatabasePanelCompaniesResponse,
+  getDatabasePanelCompaniesByAtypeResponse,
   getDatabasePatientTagsResponse,
-  upsertDatabasePendingHandoverRowsResponse,
 } from './panelCatalogDatabase';
 import {
   bookingTestPriceCache,
@@ -19,19 +16,13 @@ import {
 } from '../../utils/bookings/sampleTubeMappingCache';
 
 export const getLocalPanelCompaniesResponse = async () =>
-  getDatabasePanelCompaniesResponse();
+  getDatabasePanelCompaniesByAtypeResponse('C');
+
+export const getLocalPanelCompaniesByAtypeResponse = async atype =>
+  getDatabasePanelCompaniesByAtypeResponse(atype);
 
 export const getLocalPatientTagsResponse = async () =>
   getDatabasePatientTagsResponse();
-
-export const getLocalPendingHandoverRowsResponse = async userKey =>
-  getDatabasePendingHandoverRowsResponse(userKey);
-
-export const upsertLocalPendingHandoverRowsResponse = async rows =>
-  upsertDatabasePendingHandoverRowsResponse(rows);
-
-export const deleteLocalPendingHandoverRowsResponse = async rowKeys =>
-  deleteDatabasePendingHandoverRowsResponse(rowKeys);
 
 export const getLocalMatchedPanelCompaniesResponse = async patient =>
   getDatabaseMatchedPanelCompaniesForPatientResponse(patient);

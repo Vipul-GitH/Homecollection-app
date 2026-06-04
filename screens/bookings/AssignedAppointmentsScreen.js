@@ -315,6 +315,7 @@ function AssignedAppointmentsScreen({
               const tags = getBookingTags(booking);
               const dueText = getPaymentDueText(booking);
               const statusTone = getStatusTone(booking.status);
+              const isTaggedBooking = Boolean(booking?.isTaggedBooking);
 
               return (
                 <TouchableOpacity
@@ -324,6 +325,10 @@ function AssignedAppointmentsScreen({
                   disabled={loadingAssignedBookingId === booking.id}
                   style={[
                     styles.assignedQueueCard,
+                    isTaggedBooking &&
+                      !hasAppointmentId(booking) &&
+                      !isCompletedCardTone &&
+                      styles.assignedQueueCardTagged,
                     hasAppointmentId(booking) &&
                       styles.assignedQueueCardAppointment,
                     isCompletedCardTone &&

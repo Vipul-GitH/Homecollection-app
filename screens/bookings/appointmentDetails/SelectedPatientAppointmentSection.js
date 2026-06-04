@@ -54,7 +54,13 @@ function SelectedPatientAppointmentSection({
   onOpenSampleCollection,
   handleRemoveSelectedTestWithSampleReset,
   handlePatientAddPanelCompany,
+  referredByOptions = EMPTY_ARRAY,
+  onUpdatePatientReferredBy,
+  updatingReferredByPatientId = '',
   useBackendTestPrices = false,
+  hidePatientEditAction = false,
+  skipPatientDocumentRequirements = false,
+  isAppointmentSourceBooking = false,
 }) {
   const {patient = null, index = 0} = selectedPatientItem || EMPTY_OBJECT;
   const patientStatusCode = Number(patient?.bookingPatientStatusCode || 0);
@@ -174,7 +180,9 @@ function SelectedPatientAppointmentSection({
             : undefined
         }
         onEditPatient={
-          canUseThisPatientActions ? handleEditPatientPress : undefined
+          canUseThisPatientActions && !hidePatientEditAction
+            ? handleEditPatientPress
+            : undefined
         }
         testBookingStatusFromCce={getPatientCceTestBookingStatus(patient)}
         cghsEnabled={Boolean(patientId && patientCghsEnabledMap[patientId])}
@@ -203,9 +211,14 @@ function SelectedPatientAppointmentSection({
         }
         showAlert={showAppAlert}
         requiresPaymentProof={
-          !isManualHcSlipPatient && doesPatientNeedPaymentProof(patient)
+          !skipPatientDocumentRequirements &&
+          !isManualHcSlipPatient &&
+          doesPatientNeedPaymentProof(patient)
         }
-        requiresIdentityDocuments={doesPatientRequireIdentityDocuments(patient)}
+        requiresIdentityDocuments={
+          !skipPatientDocumentRequirements &&
+          doesPatientRequireIdentityDocuments(patient)
+        }
         sampleCollected={sampleCollected}
         onOpenSampleCollection={
           canUseThisPatientTestActions ? onOpenSampleCollection : undefined
@@ -223,6 +236,16 @@ function SelectedPatientAppointmentSection({
             ? 'Cancelling...'
             : 'Cancel Patient'
         }
+        referredByOptions={referredByOptions}
+        onUpdateReferredBy={
+          canUsePatientActions && !isThisPatientCancelled
+            ? onUpdatePatientReferredBy
+            : undefined
+        }
+        isReferredByUpdating={
+          String(updatingReferredByPatientId) === String(patientId)
+        }
+        isAppointmentSource={isAppointmentSourceBooking}
       >
         <PatientTestsAccordion
           styles={styles}

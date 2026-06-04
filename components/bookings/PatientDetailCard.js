@@ -1,4 +1,11 @@
-import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import React, {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -24,11 +31,11 @@ import {BRAND} from '../../styles/appStyles';
 import PatientDocumentsList from './patient/PatientDocumentsList';
 import PatientDocumentViewerModal from './patient/PatientDocumentViewerModal';
 import RequiredLabel from './appointmentDetails/RequiredLabel';
+import {API_BASE_URL} from '../../constants/config/api';
 
 const {LocalDocumentPickerModule, LocalGeoCameraModule} = NativeModules;
 const DOCUMENT_ZOOM_MIN = 1;
 const DOCUMENT_ZOOM_MAX = 3;
-const PATIENT_DOCUMENT_BASE_URL = 'https://labmate.bhasinpathlabs.com:2010/';
 const CGHS_DOCUMENT_SECTIONS = [
   {key: 'patientPhotos', label: 'Patient Photos (multi-select)'},
   {key: 'cghsCard', label: 'CGHS / CAPF Card (multi-select)'},
@@ -351,7 +358,7 @@ const resolvePatientDocumentUrl = value => {
   }
 
   return normalizeDocumentPreviewUri(
-    `${PATIENT_DOCUMENT_BASE_URL}${rawUrl.replace(/^\/+/, '')}`,
+    `${API_BASE_URL}/${rawUrl.replace(/^\/+/, '')}`,
   );
 };
 
@@ -559,6 +566,10 @@ function PatientDetailCard({
   showAlert,
   isCancelBookingDisabled,
   cancelBookingLabel = 'Cancel Patient',
+  referredByOptions = [],
+  onUpdateReferredBy,
+  isReferredByUpdating = false,
+  isAppointmentSource = false,
 }) {
   const {width, height} = useWindowDimensions();
   const isNarrowCard = width < 390;
@@ -643,6 +654,121 @@ function PatientDetailCard({
   );
   const patientBookingDueAmount = Number(patient.bookingDueAmount || 0);
   const patientBookingExtraAmount = Number(patient.bookingExtraAmount || 0);
+  const [isReferredByEditing, setIsReferredByEditing] = useState(false);
+  const [isReferredByFocused, setIsReferredByFocused] = useState(false);
+  const [referredByDraft, setReferredByDraft] = useState(
+    toStableValue(patient.referredBy),
+  );
+  const deferredReferredByDraft = useDeferredValue(referredByDraft);
+  const referredBySuggestions = useMemo(() => {
+    const searchText = deferredReferredByDraft.trim().toLowerCase();
+    if (!isReferredByEditing || !isReferredByFocused || !searchText) {
+      return [];
+    }
+
+    const searchTokens = searchText.split(/\s+/).filter(Boolean);
+    return (Array.isArray(referredByOptions) ? referredByOptions : [])
+      .map(option => {
+        const name = toStableValue(option?.name || option?.pname);
+        const details = toStableValue(option?.details);
+        const searchKey = toStableValue(
+          option?.searchKey || `${name} ${details} ${option?.compCatId || ''}`,
+        ).toLowerCase();
+        const isMatch = searchTokens.every(token => searchKey.includes(token));
+        const rank =
+          name.toLowerCase() === searchText
+            ? 0
+            : name.toLowerCase().startsWith(searchText)
+            ? 1
+            : searchKey.startsWith(searchText)
+            ? 2
+            : 3;
+
+        return isMatch ? {option, rank, name} : null;
+      })
+      .filter(Boolean)
+      .sort((left, right) => {
+        if (left.rank !== right.rank) {
+          return left.rank - right.rank;
+        }
+
+        return left.name.localeCompare(right.name, undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        });
+      })
+      .map(item => {
+        const option = item.option;
+        const optionName =
+          toStableValue(option?.name || option?.pname) ||
+          toStableValue(option?.panelCompany) ||
+          toStableValue(option?.CatDetails) ||
+          toStableValue(option?.searchKey)
+            .split(/\s+/)
+            .filter(Boolean)
+            .join(' ') ||
+          'Unnamed';
+        const optionDetails =
+          toStableValue(option?.details || option?.CatDetails) ||
+          toStableValue(option?.compCatId || option?.CompCatID) ||
+          'No details available';
+
+        return {
+          ...option,
+          displayName: optionName,
+          displayDetails: optionDetails,
+        };
+      })
+      .slice(0, 8);
+  }, [
+    deferredReferredByDraft,
+    isReferredByEditing,
+    isReferredByFocused,
+    referredByOptions,
+  ]);
+
+  useEffect(() => {
+    if (!isReferredByEditing) {
+      setReferredByDraft(toStableValue(patient.referredBy));
+    }
+  }, [isReferredByEditing, patient.referredBy]);
+
+  const startReferredByEdit = useCallback(() => {
+    setReferredByDraft(toStableValue(patient.referredBy));
+    setIsReferredByEditing(true);
+    setIsReferredByFocused(true);
+  }, [patient.referredBy]);
+
+  const cancelReferredByEdit = useCallback(() => {
+    setReferredByDraft(toStableValue(patient.referredBy));
+    setIsReferredByFocused(false);
+    setIsReferredByEditing(false);
+  }, [patient.referredBy]);
+
+  const saveReferredByEdit = useCallback(async () => {
+    if (!onUpdateReferredBy || isReferredByUpdating) {
+      return;
+    }
+
+    const didUpdate = await onUpdateReferredBy({
+      patient,
+      referredBy: referredByDraft,
+    });
+
+    if (didUpdate) {
+      setIsReferredByFocused(false);
+      setIsReferredByEditing(false);
+    }
+  }, [isReferredByUpdating, onUpdateReferredBy, patient, referredByDraft]);
+
+  const selectReferredBySuggestion = useCallback(option => {
+    setReferredByDraft(
+      toStableValue(
+        option?.displayName || option?.name || option?.pname || option?.panelCompany,
+      ),
+    );
+    setIsReferredByFocused(false);
+  }, []);
 
   const renderConditionalFieldLabel = useCallback(
     label =>
@@ -1405,7 +1531,11 @@ function PatientDetailCard({
 
   return (
     <>
-      <View style={styles.patientDetailCard}>
+      <View
+        style={[
+          styles.patientDetailCard,
+          isAppointmentSource && styles.patientDetailCardAppointment,
+        ]}>
         <View
           style={[
             styles.patientDetailTopRow,
@@ -1581,10 +1711,111 @@ function PatientDetailCard({
             styles.patientDetailMetaItemFull,
             isNarrowCard && styles.patientDetailMetaItemStacked,
           ]}>
-          <Text style={styles.patientDetailMetaLabel}>Referred By</Text>
-          <Text style={styles.patientDetailMetaValue}>
-            {patient.referredBy || 'N/A'}
-          </Text>
+          <View style={styles.patientDetailHeaderRow}>
+            <Text style={styles.patientDetailMetaLabel}>Referred By</Text>
+            {onUpdateReferredBy ? (
+              isReferredByEditing ? (
+                <View style={styles.patientDetailActionRow}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.patientInlineSaveButton}
+                    disabled={isReferredByUpdating}
+                    onPress={saveReferredByEdit}>
+                    {isReferredByUpdating ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <Ionicons
+                          name="checkmark-outline"
+                          size={16}
+                          style={styles.patientInlineSaveButtonIcon}
+                        />
+                        <Text style={styles.patientInlineSaveButtonText}>
+                          Save
+                        </Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.patientEditButton}
+                    disabled={isReferredByUpdating}
+                    onPress={cancelReferredByEdit}>
+                    <Ionicons
+                      name="close-outline"
+                      size={16}
+                      style={styles.patientEditButtonIcon}
+                    />
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.patientInlineEditButton}
+                  onPress={startReferredByEdit}>
+                  <Ionicons
+                    name="pencil-outline"
+                    size={16}
+                    style={styles.patientInlineEditButtonIcon}
+                  />
+                  <Text style={styles.patientInlineEditButtonText}>Edit</Text>
+                </TouchableOpacity>
+              )
+            ) : null}
+          </View>
+          {isReferredByEditing ? (
+            <>
+              <TextInput
+                value={referredByDraft}
+                onChangeText={value => {
+                  setReferredByDraft(value);
+                  setIsReferredByFocused(true);
+                }}
+                onFocus={() => setIsReferredByFocused(true)}
+                placeholder="Search referred by"
+                placeholderTextColor={BRAND.textMuted}
+                editable={!isReferredByUpdating}
+                style={[
+                  styles.addPatientInput,
+                  styles.patientInlineSearchInput,
+                ]}
+              />
+              {referredBySuggestions.length ? (
+                <View style={styles.panelCompanyListContent}>
+                  {referredBySuggestions.map((option, index) => {
+                    const optionName = toStableValue(option?.displayName) || 'Unnamed';
+                    const optionDetails =
+                      toStableValue(option?.displayDetails) || 'No details available';
+
+                    return (
+                      <TouchableOpacity
+                        key={`referred-by-${option?.id || optionName}-${index}`}
+                        activeOpacity={0.85}
+                        style={styles.referredBySuggestionItem}
+                        onPress={() => selectReferredBySuggestion(option)}>
+                        <View style={styles.referredBySuggestionTextWrap}>
+                          <Text
+                            style={styles.referredBySuggestionName}
+                            numberOfLines={1}>
+                            {optionName}
+                          </Text>
+                          <Text
+                            style={styles.referredBySuggestionMeta}
+                            numberOfLines={1}>
+                            {optionDetails}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              ) : null}
+            </>
+          ) : (
+            <Text style={styles.patientDetailMetaValue}>
+              {patient.referredBy || referredByDraft || 'N/A'}
+            </Text>
+          )}
         </View>
         <View
           style={[

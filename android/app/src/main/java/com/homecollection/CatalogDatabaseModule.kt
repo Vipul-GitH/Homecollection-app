@@ -325,32 +325,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       )
       """.trimIndent(),
     )
-    db.execSQL(
-      """
-      CREATE TABLE IF NOT EXISTS handover_pending (
-        row_key TEXT PRIMARY KEY,
-        user_key TEXT,
-        user_name TEXT,
-        booking_id TEXT NOT NULL,
-        booking_code TEXT,
-        appointment_id TEXT,
-        patient_id TEXT,
-        booking_patient_id TEXT NOT NULL,
-        patient_name TEXT,
-        tube_name TEXT NOT NULL,
-        completed_at TEXT
-      )
-      """.trimIndent(),
-    )
-    ensureColumn(db, "handover_pending", "user_key", "TEXT")
-    ensureColumn(db, "handover_pending", "user_name", "TEXT")
-    ensureColumn(db, "handover_pending", "appointment_id", "TEXT")
-    db.execSQL(
-      """
-      CREATE INDEX IF NOT EXISTS idx_handover_pending_booking
-      ON handover_pending(user_key, booking_id, appointment_id, booking_patient_id)
-      """.trimIndent(),
-    )
+    db.execSQL("DROP TABLE IF EXISTS handover_pending")
 
     syncTableSpecs.values.forEach { spec ->
       val columnSql = spec.columns.joinToString(", ") { column ->
@@ -564,9 +539,19 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
 
   @ReactMethod
   fun getPanelCompanies(promise: Promise) {
+    getPanelCompaniesByAtype("", promise)
+  }
+
+  @ReactMethod
+  fun getPanelCompaniesByAtype(atype: String, promise: Promise) {
     try {
       val db = openDatabase()
       val items = JSONArray()
+      val normalizedAtype = atype.trim().uppercase()
+      val whereSql =
+        if (normalizedAtype.isBlank()) "" else "WHERE UPPER(TRIM(IFNULL(atype, ''))) = ?"
+      val args =
+        if (normalizedAtype.isBlank()) emptyArray<String>() else arrayOf(normalizedAtype)
 
       db.rawQuery(
         """
@@ -580,9 +565,10 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           cat_details,
           billing_charge_mode
         FROM panel_companies
+        $whereSql
         ORDER BY pname COLLATE NOCASE, comp_cat_id
         """.trimIndent(),
-        emptyArray<String>(),
+        args,
       ).use { cursor ->
         while (cursor.moveToNext()) {
           items.put(
@@ -724,157 +710,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       promise.resolve(JSONObject().put("ok", true).put("items", items).toString())
     } catch (error: Exception) {
       promise.reject("PATIENT_TAGS_ERROR", error)
-    }
-  }
-
-  @ReactMethod
-  fun getPendingHandoverRows(userKey: String, promise: Promise) {
-    try {
-      val db = openDatabase()
-      val items = JSONArray()
-      val normalizedUserKey = userKey.trim()
-
-      db.rawQuery(
-        """
-        SELECT
-          row_key,
-          user_key,
-          user_name,
-          booking_id,
-          booking_code,
-          appointment_id,
-          patient_id,
-          booking_patient_id,
-          patient_name,
-          tube_name,
-          completed_at
-        FROM handover_pending
-        WHERE user_key = ?
-        ORDER BY
-          COALESCE(NULLIF(completed_at, ''), '0000-00-00 00:00:00') DESC,
-          CAST(booking_id AS INTEGER),
-          patient_name COLLATE NOCASE,
-          tube_name COLLATE NOCASE
-        """.trimIndent(),
-        arrayOf(normalizedUserKey),
-      ).use { cursor ->
-        while (cursor.moveToNext()) {
-          items.put(
-            JSONObject()
-              .put("row_key", cursor.stringValue("row_key"))
-              .put("user_key", cursor.stringValue("user_key"))
-              .put("user_name", cursor.stringValue("user_name"))
-              .put("booking_id", cursor.stringValue("booking_id"))
-              .put("booking_code", cursor.stringValue("booking_code"))
-              .put("appointment_id", cursor.stringValue("appointment_id"))
-              .put("patient_id", cursor.stringValue("patient_id"))
-              .put("booking_patient_id", cursor.stringValue("booking_patient_id"))
-              .put("patient_name", cursor.stringValue("patient_name"))
-              .put("tube_name", cursor.stringValue("tube_name"))
-              .put("completed_at", cursor.stringValue("completed_at")),
-          )
-        }
-      }
-
-      promise.resolve(JSONObject().put("ok", true).put("items", items).toString())
-    } catch (error: Exception) {
-      promise.reject("HANDOVER_PENDING_ERROR", error.message, error)
-    }
-  }
-
-  @ReactMethod
-  fun upsertPendingHandoverRows(rowsJson: String, promise: Promise) {
-    try {
-      val db = openDatabase()
-      val rows = JSONArray(rowsJson.ifBlank { "[]" })
-      var rowsChanged = 0
-
-      db.beginTransaction()
-      try {
-        for (index in 0 until rows.length()) {
-          val row = rows.optJSONObject(index) ?: continue
-          val rowKey = rowString(row, "row_key")
-          val userKey = rowString(row, "user_key")
-          val userName = rowString(row, "user_name")
-          val bookingId = rowString(row, "booking_id")
-          val appointmentId = rowString(row, "appointment_id")
-          val bookingPatientId = rowString(row, "booking_patient_id")
-          val tubeName = rowString(row, "tube_name")
-
-          if (
-            rowKey.isBlank() ||
-              userKey.isBlank() ||
-              bookingId.isBlank() ||
-              bookingPatientId.isBlank() ||
-              tubeName.isBlank()
-          ) {
-            continue
-          }
-
-          val values = ContentValues().apply {
-            put("row_key", rowKey)
-            put("user_key", userKey)
-            put("user_name", userName)
-            put("booking_id", bookingId)
-            put("booking_code", rowString(row, "booking_code"))
-            put("appointment_id", appointmentId)
-            put("patient_id", rowString(row, "patient_id"))
-            put("booking_patient_id", bookingPatientId)
-            put("patient_name", rowString(row, "patient_name"))
-            put("tube_name", tubeName)
-            put("completed_at", rowString(row, "completed_at"))
-          }
-
-          db.insertWithOnConflict(
-            "handover_pending",
-            null,
-            values,
-            SQLiteDatabase.CONFLICT_REPLACE,
-          )
-          rowsChanged += 1
-        }
-
-        db.setTransactionSuccessful()
-      } finally {
-        db.endTransaction()
-      }
-
-      promise.resolve(JSONObject().put("ok", true).put("rowsChanged", rowsChanged).toString())
-    } catch (error: Exception) {
-      promise.reject("HANDOVER_PENDING_UPSERT_ERROR", error.message, error)
-    }
-  }
-
-  @ReactMethod
-  fun deletePendingHandoverRows(rowKeysJson: String, promise: Promise) {
-    try {
-      val db = openDatabase()
-      val rowKeys = JSONArray(rowKeysJson.ifBlank { "[]" })
-      var rowsDeleted = 0
-
-      db.beginTransaction()
-      try {
-        for (index in 0 until rowKeys.length()) {
-          val rowKey = rowKeys.optString(index, "").trim()
-          if (rowKey.isBlank()) {
-            continue
-          }
-
-          rowsDeleted += db.delete(
-            "handover_pending",
-            "row_key = ?",
-            arrayOf(rowKey),
-          )
-        }
-
-        db.setTransactionSuccessful()
-      } finally {
-        db.endTransaction()
-      }
-
-      promise.resolve(JSONObject().put("ok", true).put("rowsDeleted", rowsDeleted).toString())
-    } catch (error: Exception) {
-      promise.reject("HANDOVER_PENDING_DELETE_ERROR", error.message, error)
     }
   }
 
@@ -2179,7 +2014,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         """
         SELECT id, sync_key, center_id, atype, pname, comp_cat_id, cat_details, billing_charge_mode
         FROM panel_companies
-        WHERE $selectedWhereSql
+        WHERE UPPER(TRIM(IFNULL(atype, ''))) = 'C'
+          AND ($selectedWhereSql)
         ORDER BY pname COLLATE NOCASE, comp_cat_id
         """.trimIndent(),
         selectedArgs.toTypedArray(),
@@ -2233,7 +2069,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       """
       SELECT id, sync_key, center_id, atype, pname, comp_cat_id, cat_details, billing_charge_mode
       FROM panel_companies
-      WHERE ${whereParts.joinToString(" OR ")}
+      WHERE UPPER(TRIM(IFNULL(atype, ''))) = 'C'
+        AND (${whereParts.joinToString(" OR ")})
       ORDER BY pname COLLATE NOCASE, comp_cat_id
       """.trimIndent(),
       args.toTypedArray(),
@@ -2310,7 +2147,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         db,
         normalizedCompCatId,
         normalizedCenterId,
-        normalizedAtype,
+        "C",
         "",
         "",
       )

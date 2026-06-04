@@ -43,7 +43,15 @@ function PaymentSummarySection({
   handleRemoveCompletePaymentProof,
   confirmCompleteBooking,
 }) {
-  const shouldShowPaymentsCollected = localBillingSummary.payingTestCount > 0;
+  const hasDueAmount =
+    Number(localBillingSummary.dueAmount || 0) > 0 ||
+    (Array.isArray(localBillingSummary.patientBillingRows)
+      ? localBillingSummary.patientBillingRows.some(
+          patientRow => Number(patientRow?.dueAmount || 0) > 0,
+        )
+      : false);
+  const shouldShowPaymentsCollected =
+    localBillingSummary.payingTestCount > 0 || hasDueAmount;
   const patientOptions = paymentPatientOptions;
   const paymentDifferenceAmount =
     extraPaymentAmount > 0.009 ? extraPaymentAmount : pendingPaymentAmount;

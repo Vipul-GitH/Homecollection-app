@@ -13,11 +13,8 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import {BRAND} from '../../styles/appStyles';
 import LoadingOverlay from '../../components/common/LoadingOverlay';
 import {
-  deleteLocalPendingHandoverRowsResponse,
-  getLocalPendingHandoverRowsResponse,
-} from '../../services/local/panelCatalogLocal';
-import {
   fetchAssignedBookingHandoverHistoryApi,
+  fetchAssignedBookingHandoverReadyApi,
   fetchRiderSuggestionsApi,
   saveAssignedBookingHandoverBatchApi,
 } from '../../services/api/bookingApi';
@@ -58,6 +55,43 @@ const toPayloadId = value => {
   }
 
   return stableValue;
+};
+
+const formatHandoverPayloadDateTime = value => {
+  const date = value instanceof Date ? value : new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return toStableValue(value);
+  }
+
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const getPart = type => parts.find(part => part.type === type)?.value || '';
+
+  return `${getPart('year')}-${getPart('month')}-${getPart('day')} ${getPart(
+    'hour',
+  )}:${getPart('minute')}`;
+};
+
+const toHandoverPayloadDestination = handoverTo => {
+  const normalizedValue = toStableValue(handoverTo).toLowerCase();
+
+  if (normalizedValue === 'rider') {
+    return 'Rider';
+  }
+
+  if (normalizedValue === 'lab') {
+    return 'Lab';
+  }
+
+  return toStableValue(handoverTo);
 };
 
 const buildTubeSelection = ({
@@ -133,22 +167,24 @@ const buildHandoverBatchPayload = ({
 
   const bookings = Array.from(bookingMap.values()).map(booking => ({
     booking_id: booking.booking_id,
-    ...(booking.appointment_id ? {appointment_id: booking.appointment_id} : {}),
-    booking_code: booking.booking_code,
-    patients: Array.from(booking.patientsMap.values()),
+    appointment_id: booking.appointment_id || null,
+    booking_code: booking.booking_code || null,
+    patients: Array.from(booking.patientsMap.values()).map(patient => ({
+      ...patient,
+      patient_name: patient.patient_name || null,
+    })),
   }));
+  const normalizedHandoverTo = toStableValue(handoverTo);
 
   return {
     batch: {
-      handover_to: toStableValue(handoverTo),
+      handover_to: toHandoverPayloadDestination(normalizedHandoverTo),
       rider_name:
-        toStableValue(handoverTo) === 'rider' ? toStableValue(riderName) : '',
-      handed_over_at: handedOverAt,
+        normalizedHandoverTo.toLowerCase() === 'rider'
+          ? toStableValue(riderName)
+          : '',
+      handed_over_at: formatHandoverPayloadDateTime(handedOverAt),
       booking_count: bookings.length,
-      patient_count: bookings.reduce(
-        (total, booking) => total + booking.patients.length,
-        0,
-      ),
       tube_count: selectedEntries.length,
     },
     bookings,
@@ -159,7 +195,7 @@ const formatHandoverDate = value => {
   const stableValue = toStableValue(value);
 
   if (!stableValue) {
-    return 'Time N/A';
+    return '';
   }
 
   const date = new Date(stableValue);
@@ -176,6 +212,182 @@ const formatHandoverDate = value => {
     hour: '2-digit',
     minute: '2-digit',
   });
+};
+
+const formatHandoverBookingLabel = ({bookingCode, bookingId, appointmentId}) => {
+  const bookingValue = toStableValue(bookingCode || bookingId);
+  const appointmentValue = toStableValue(appointmentId);
+  const bookingLabel = /^booking#/i.test(bookingValue)
+    ? bookingValue
+    : `Booking#${bookingValue || 'N/A'}`;
+
+  if (!appointmentValue) {
+    return bookingLabel;
+  }
+
+  return `${bookingLabel} / Appointment#${appointmentValue}`;
+};
+
+const getReadyItemPatients = item => {
+  if (Array.isArray(item?.patients)) {
+    return item.patients;
+  }
+
+  if (Array.isArray(item?.booking?.patients)) {
+    return item.booking.patients;
+  }
+
+  if (Array.isArray(item?.tubes) || Array.isArray(item?.tube_names)) {
+    return [item];
+  }
+
+  if (item?.patient && typeof item.patient === 'object') {
+    return [item.patient];
+  }
+
+  return [];
+};
+
+const getReadyPatientTubes = patient => {
+  if (Array.isArray(patient?.tubes)) {
+    return patient.tubes;
+  }
+
+  if (Array.isArray(patient?.tube_names)) {
+    return patient.tube_names;
+  }
+
+  if (Array.isArray(patient?.tubeNames)) {
+    return patient.tubeNames;
+  }
+
+  const completedTubes = patient?.cmplt_tube || patient?.completed_tubes;
+  if (Array.isArray(completedTubes)) {
+    return completedTubes;
+  }
+
+  return [];
+};
+
+const buildPendingHandoverRowsFromReadyItems = readyItems => {
+  const rows = [];
+
+  (Array.isArray(readyItems) ? readyItems : []).forEach((item, itemIndex) => {
+    const directTubeName = toStableValue(item?.tube_name || item?.tubeName);
+
+    if (directTubeName) {
+      const bookingId = toStableValue(item?.booking_id || item?.bookingId);
+      const appointmentId = toStableValue(
+        item?.appointment_id || item?.appointmentId,
+      );
+      const bookingPatientId = toStableValue(
+        item?.booking_patient_id ||
+          item?.bookingPatientId ||
+          item?.patient_id ||
+          item?.patientId,
+      );
+      const rowKey =
+        toStableValue(item?.row_key || item?.rowKey) ||
+        [
+          bookingId,
+          appointmentId || 'booking',
+          bookingPatientId,
+          directTubeName.toLowerCase(),
+          itemIndex,
+        ].join('|');
+
+      rows.push({
+        ...item,
+        row_key: rowKey,
+        booking_id: bookingId,
+        booking_code: toStableValue(
+          item?.booking_code || item?.bookingCode || bookingId,
+        ),
+        appointment_id: appointmentId,
+        booking_patient_id: bookingPatientId,
+        patient_id: toStableValue(item?.patient_id || item?.patientId),
+        patient_name: toStableValue(item?.patient_name || item?.patientName),
+        tube_name: directTubeName,
+        completed_at: toStableValue(
+          item?.completed_at || item?.completedAt || item?.created_at,
+        ),
+      });
+      return;
+    }
+
+    const bookingId = toStableValue(
+      item?.booking_id || item?.bookingId || item?.booking?.booking_id,
+    );
+    const appointmentId = toStableValue(
+      item?.appointment_id || item?.appointmentId || item?.booking?.appointment_id,
+    );
+    const bookingCode = toStableValue(
+      item?.booking_code ||
+        item?.bookingCode ||
+        item?.booking?.booking_code ||
+        bookingId,
+    );
+    const completedAt = toStableValue(
+      item?.completed_at ||
+        item?.completedAt ||
+        item?.booking?.completed_at ||
+        item?.created_at,
+    );
+
+    getReadyItemPatients(item).forEach((patient, patientIndex) => {
+      const bookingPatientId = toStableValue(
+        patient?.booking_patient_id ||
+          patient?.bookingPatientId ||
+          patient?.patient_id ||
+          patient?.patientId,
+      );
+      const patientId = toStableValue(
+        patient?.patient_id || patient?.patientId || bookingPatientId,
+      );
+      const patientName = toStableValue(
+        patient?.patient_name ||
+          patient?.patientName ||
+          patient?.full_name ||
+          patient?.fullName ||
+          patient?.name,
+      );
+
+      getReadyPatientTubes(patient).forEach((tube, tubeIndex) => {
+        const tubeName =
+          typeof tube === 'string'
+            ? toStableValue(tube)
+            : toStableValue(tube?.tube_name || tube?.tubeName || tube?.name);
+
+        if (!tubeName) {
+          return;
+        }
+
+        const rowKey =
+          toStableValue(tube?.row_key || tube?.rowKey) ||
+          [
+            bookingId,
+            appointmentId || 'booking',
+            bookingPatientId || patientIndex,
+            tubeName.toLowerCase(),
+            tubeIndex,
+          ].join('|');
+
+        rows.push({
+          row_key: rowKey,
+          booking_id: bookingId,
+          booking_code: bookingCode,
+          appointment_id: appointmentId,
+          patient_id: patientId,
+          booking_patient_id: bookingPatientId || patientId,
+          patient_name: patientName,
+          tube_name: tubeName,
+          completed_at: completedAt,
+        });
+      });
+    });
+  });
+
+  return rows;
 };
 
 const groupPendingHandoverRows = rows => {
@@ -208,9 +420,11 @@ const groupPendingHandoverRows = rows => {
         bookingId,
         appointmentId,
         bookingCode,
-        displayCode: appointmentId
-          ? `${bookingCode || bookingId} / Appointment ${appointmentId}`
-          : bookingCode,
+        displayCode: formatHandoverBookingLabel({
+          bookingCode,
+          bookingId,
+          appointmentId,
+        }),
         status: 'Completed',
         bookingStatusCode: 3,
         completedAt,
@@ -253,7 +467,6 @@ const groupPendingHandoverRows = rows => {
 export default function HandoverScreen({
   styles,
   accessToken = '',
-  loggedInUser = '',
   onSessionExpired,
 }) {
   const [activeHandoverTab, setActiveHandoverTab] = useState('pending');
@@ -274,10 +487,6 @@ export default function HandoverScreen({
     useState(false);
   const [handoverHistoryError, setHandoverHistoryError] = useState('');
   const initializedSelectionSignatureRef = useRef('');
-  const handoverUserKey = useMemo(
-    () => toStableValue(loggedInUser),
-    [loggedInUser],
-  );
 
   const handleSessionExpired = useCallback(
     error => {
@@ -314,7 +523,7 @@ export default function HandoverScreen({
   );
 
   const loadPendingHandoverRows = useCallback(async () => {
-    if (!handoverUserKey) {
+    if (!toStableValue(accessToken)) {
       setPendingHandoverRows([]);
       setIsLoadingPendingHandoverRows(false);
       return;
@@ -322,14 +531,22 @@ export default function HandoverScreen({
 
     try {
       setIsLoadingPendingHandoverRows(true);
-      const response = await getLocalPendingHandoverRowsResponse(handoverUserKey);
-      setPendingHandoverRows(Array.isArray(response?.items) ? response.items : []);
+      const readyItems = await fetchAssignedBookingHandoverReadyApi({
+        accessToken,
+      });
+      setPendingHandoverRows(
+        buildPendingHandoverRowsFromReadyItems(readyItems),
+      );
     } catch (error) {
+      if (handleSessionExpired(error)) {
+        setPendingHandoverRows([]);
+        return;
+      }
       setPendingHandoverRows([]);
     } finally {
       setIsLoadingPendingHandoverRows(false);
     }
-  }, [handoverUserKey]);
+  }, [accessToken, handleSessionExpired]);
 
   const loadHandoverHistory = useCallback(async () => {
     if (!toStableValue(accessToken)) {
@@ -485,7 +702,7 @@ export default function HandoverScreen({
       }
     : {
         title: 'Loading Pending Handover',
-        message: 'Preparing the pending handover tubes from local data...',
+        message: 'Fetching pending handover tubes...',
       };
 
   const handoverSelectionSignature = useMemo(
@@ -681,7 +898,6 @@ export default function HandoverScreen({
                 accessToken,
                 payload: handoverPayload,
               });
-              await deleteLocalPendingHandoverRowsResponse(selectedRowKeys);
               setPendingHandoverRows(previousRows =>
                 previousRows.filter(row => {
                   const rowKey = toStableValue(row?.row_key || row?.rowKey);
@@ -906,6 +1122,7 @@ export default function HandoverScreen({
         {handoverBookings.map(booking => {
           const isExpanded = Boolean(expandedBookings[booking.id]);
           const patients = Array.isArray(booking?.patients) ? booking.patients : [];
+          const completedAtLabel = formatHandoverDate(booking?.completedAt);
 
           return (
             <View key={`handover-${booking.id}`} style={styles.handoverBookingCard}>
@@ -918,7 +1135,8 @@ export default function HandoverScreen({
                     {booking?.displayCode || booking?.bookingCode || booking?.bookingId || 'Booking'}
                   </Text>
                   <Text style={styles.handoverBookingMeta}>
-                    {formatHandoverDate(booking?.completedAt)} | {patients.length}{' '}
+                    {completedAtLabel ? `${completedAtLabel} | ` : ''}
+                    {patients.length}{' '}
                     patient{patients.length === 1 ? '' : 's'}
                   </Text>
                 </View>
@@ -1098,6 +1316,7 @@ export default function HandoverScreen({
             toStableValue(item?.handoverTo).toLowerCase() === 'rider'
               ? 'Rider'
               : 'Lab';
+          const handedOverAtLabel = formatHandoverDate(item?.handedOverAt);
           const groupedBookings = Array.isArray(item?.bookings) && item.bookings.length
             ? item.bookings
             : (() => {
@@ -1128,11 +1347,18 @@ export default function HandoverScreen({
                   const {appointmentId, sourceType} = getHistoryScope(row);
 
                   if (appointmentId) {
-                    return `${bookingCode} / Appointment ${appointmentId}`;
+                    return formatHandoverBookingLabel({
+                      bookingCode,
+                      bookingId: row?.booking_id || row?.bookingId,
+                      appointmentId,
+                    });
                   }
 
                   return sourceType === 'BOOKING'
-                    ? `${bookingCode} / Booking`
+                    ? formatHandoverBookingLabel({
+                        bookingCode,
+                        bookingId: row?.booking_id || row?.bookingId,
+                      })
                     : bookingCode;
                 };
 
@@ -1259,8 +1485,9 @@ export default function HandoverScreen({
                     {item?.riderName ? ` - ${item.riderName}` : ''}
                   </Text>
                   <Text style={styles.handoverBookingMeta}>
-                    {batchId ? `batch-${batchId} | ` : ''}
-                    {formatHandoverDate(item?.handedOverAt)}
+                    {batchId ? `batch-${batchId}` : ''}
+                    {batchId && handedOverAtLabel ? ' | ' : ''}
+                    {handedOverAtLabel}
                   </Text>
                 </View>
                 <View style={styles.handoverHistoryCountRow}>
