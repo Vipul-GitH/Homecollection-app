@@ -1,4 +1,4 @@
-export const API_BASE_URL = 'https://labmate.bhasinpathlabs.com:2015';
+export const API_BASE_URL = 'https://labmate.bhasinpathlabs.com:2010';
 
 export const LOGIN_API_URL = `${API_BASE_URL}/api/v1/auth/login`;
 
@@ -103,6 +103,24 @@ export const getAssignedBookingPatientsApiUrl = bookingId =>
 
 export const getAssignedBookingPatientApiUrl = (bookingId, patientId) =>
   `${API_BASE_URL}/api/v1/bookings/my-assigned/${bookingId}/patients/${patientId}`;
+
+export const getAssignedBookingHistoryDetailApiUrl = ({
+  bookingId,
+  appointmentId,
+  sourceType,
+}) => {
+  const params = new URLSearchParams({
+    source_type: String(sourceType || 'BOOKING').trim().toUpperCase() || 'BOOKING',
+    booking_id: String(bookingId || ''),
+  });
+  const normalizedAppointmentId = String(appointmentId || '').trim();
+
+  if (params.get('source_type') === 'APPOINTMENT' && normalizedAppointmentId) {
+    params.set('appointment_id', normalizedAppointmentId);
+  }
+
+  return `${API_BASE_URL}/api/v1/bookings/my-assigned/history/detail?${params.toString()}`;
+};
 
 export const getAssignedBookingPatientCancelApiUrl = (
   bookingId,

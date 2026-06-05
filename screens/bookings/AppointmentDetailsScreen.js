@@ -4614,6 +4614,7 @@ function AppointmentDetailsScreen({
 
     if (
       hasNonManualPatients &&
+      localBillingSummary.payingTestCount > 0 &&
       !completePaymentPatientOptions.length &&
       completeNetAmount > 0.009 &&
       completeAmountReceived <= 0
@@ -5696,6 +5697,14 @@ function AppointmentDetailsScreen({
       return;
     }
 
+    if (!patientForm.dateOfBirth) {
+      showAppAlert(
+        'Missing Date of Birth',
+        'Please select the patient date of birth.',
+      );
+      return;
+    }
+
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       showAppAlert('Invalid Email', 'Please enter a valid email address.');
       return;
@@ -5732,6 +5741,133 @@ function AppointmentDetailsScreen({
       resetAddPatientForm();
     }
   };
+
+  const isCompletedHistoryDetail = Boolean(selectedBooking?.isCompletedHistoryDetail);
+  const completedHistoryFields = selectedBooking?.completedHistoryFields || {};
+  const completedHistoryPatients = Array.isArray(selectedBooking?.patients)
+    ? selectedBooking.patients
+    : [];
+  const renderCompletedHistoryValue = (label, value, iconName = 'information-circle-outline') => (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 10,
+        marginBottom: 14,
+      }}>
+      <View
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: 17,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: '#E7F5F8',
+        }}>
+        <Ionicons name={iconName} size={18} color="#0D4F5F" />
+      </View>
+      <View style={{flex: 1}}>
+        <Text style={{fontSize: 13, fontWeight: '800', color: '#64748B', marginBottom: 4}}>
+        {label}
+        </Text>
+        <Text style={{fontSize: 17, fontWeight: '900', color: '#0F172A', lineHeight: 22}}>
+          {value === null || value === undefined || value === '' ? '-' : String(value)}
+        </Text>
+      </View>
+    </View>
+  );
+  const renderCompletedHistoryList = value => {
+    const list = Array.isArray(value) ? value : [];
+    return list.length ? list.join(', ') : '-';
+  };
+
+  if (isCompletedHistoryDetail) {
+    return (
+      <View style={styles.detailScreenContainer}>
+        <View
+          style={[
+            styles.sectionCard,
+            {borderColor: '#B7E4EA', backgroundColor: '#F8FEFF'},
+          ]}>
+          <View style={{flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16}}>
+            <View
+              style={{
+                width: 42,
+                height: 42,
+                borderRadius: 21,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: '#0D4F5F',
+              }}>
+              <Ionicons name="checkmark-done-outline" size={22} color="#FFFFFF" />
+            </View>
+            <Text style={{fontSize: 22, fontWeight: '900', color: '#0D4F5F', flex: 1}}>
+            Completed Booking Detail
+            </Text>
+          </View>
+          {renderCompletedHistoryValue(
+            'Booking ID',
+            completedHistoryFields.booking_id || selectedBooking.id,
+            'receipt-outline',
+          )}
+          {renderCompletedHistoryValue(
+            'Appointment ID',
+            completedHistoryFields.appointment_id || selectedBooking.appointmentId,
+            'calendar-outline',
+          )}
+        </View>
+
+        {completedHistoryPatients.map((patient, index) => (
+          <View
+            key={`completed-history-patient-${patient.id || index}`}
+            style={[
+              styles.sectionCard,
+              {borderColor: '#D8E7FF', backgroundColor: '#FBFCFF'},
+            ]}>
+            <View style={{flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16}}>
+              <View
+                style={{
+                  width: 42,
+                  height: 42,
+                  borderRadius: 21,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: '#2563EB',
+                }}>
+                <Ionicons name="person-outline" size={22} color="#FFFFFF" />
+              </View>
+              <Text
+                style={{
+                  fontSize: 21,
+                  fontWeight: '900',
+                  color: '#1D4ED8',
+                  flex: 1,
+                }}>
+                Patient {index + 1}
+              </Text>
+            </View>
+            {renderCompletedHistoryValue('Patient Name', patient.name, 'person-circle-outline')}
+            {renderCompletedHistoryValue('APK TBS', patient.apkTbs, 'shield-checkmark-outline')}
+            {renderCompletedHistoryValue('Ref By', patient.refBy, 'medkit-outline')}
+            {renderCompletedHistoryValue('Report Delivery', patient.reportDelivery, 'document-text-outline')}
+            {renderCompletedHistoryValue('Report Schedule', patient.reportSchedule, 'time-outline')}
+            {renderCompletedHistoryValue('Payment Mode', patient.paymentMode, 'card-outline')}
+            {renderCompletedHistoryValue('Payment Amount', patient.paymentAmount, 'cash-outline')}
+            {renderCompletedHistoryValue(
+              'Completed Tests',
+              renderCompletedHistoryList(patient.completedTests),
+              'checkmark-circle-outline',
+            )}
+            {renderCompletedHistoryValue(
+              'Cancelled Tests',
+              renderCompletedHistoryList(patient.cancelledTests),
+              'close-circle-outline',
+            )}
+          </View>
+        ))}
+      </View>
+    );
+  }
 
   return (
     <>

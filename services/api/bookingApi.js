@@ -8,6 +8,7 @@ import {
   getAssignedBookingBatchSaveApiUrl,
   getAssignedBookingCancelApiUrl,
   getAssignedBookingDetailApiUrl,
+  getAssignedBookingHistoryDetailApiUrl,
   getAssignedBookingAddressApiUrl,
   getAssignedBookingPatientApiUrl,
   getAssignedBookingPatientCancelApiUrl,
@@ -39,6 +40,122 @@ const UPLOAD_REQUEST_TIMEOUT_MS = 45000;
 const HANDOVER_HISTORY_REQUEST_TIMEOUT_MS = 15000;
 const COMPLETE_UPLOAD_MAX_FILES = 12;
 const COMPLETE_UPLOAD_MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024;
+
+const toStableApiValue = value =>
+  value === null || value === undefined ? '' : String(value).trim();
+
+const normalizeHistoryDetailTests = (tests, statusLabel) =>
+  (Array.isArray(tests) ? tests : [])
+    .map((test, index) => {
+      const name = toStableApiValue(
+        test?.test_name || test?.testName || test?.name || test?.label || test,
+      );
+
+      if (!name) {
+        return null;
+      }
+
+      return {
+        id: `${statusLabel || 'test'}-${index}`,
+        name,
+        test_name: name,
+        testBookingStatus: statusLabel,
+        test_booking_status: statusLabel,
+      };
+    })
+    .filter(Boolean);
+
+const buildCompletedHistoryDetailForNormalizer = (detail, fallbackBooking) => {
+  const patients = (Array.isArray(detail?.patients) ? detail.patients : []).map(
+    (patient, index) => {
+      const completedTests = normalizeHistoryDetailTests(
+        patient?.completed_tests || patient?.completedTests,
+        'completed',
+      );
+      const cancelledTests = normalizeHistoryDetailTests(
+        patient?.cancelled_tests || patient?.cancelledTests,
+        'cancelled',
+      );
+      const patientName = toStableApiValue(
+        patient?.patient_name || patient?.patientName || patient?.name,
+      );
+
+      return {
+        id:
+          toStableApiValue(
+            patient?.booking_patient_id ||
+              patient?.bookingPatientId ||
+              patient?.patient_id ||
+              patient?.patientId,
+          ) || `completed-patient-${index}`,
+        full_name: patientName,
+        name: patientName,
+        booking_patient_status:
+          patient?.booking_patient_status ?? patient?.bookingPatientStatus,
+        status_code:
+          patient?.booking_patient_status ?? patient?.bookingPatientStatus,
+        apk_tbs: patient?.apk_tbs,
+        referred_by: patient?.ref_by || patient?.referred_by || patient?.referredBy,
+        report_delivery: patient?.report_delivery || patient?.reportDelivery,
+        report_schedule: patient?.report_schedule || patient?.reportSchedule,
+        booking_payment_mode:
+          patient?.payment_mode || patient?.paymentMode || patient?.booking_payment_mode,
+        payment_mode: patient?.payment_mode || patient?.paymentMode,
+        booking_due_amount: patient?.payment_amount ?? patient?.paymentAmount,
+        payment_amount: patient?.payment_amount ?? patient?.paymentAmount,
+        booking_extra_amount: 0,
+        tests: [...completedTests, ...cancelledTests],
+        completedTests,
+        completed_tests: completedTests,
+        cancelledTests,
+        cancelled_tests: cancelledTests,
+      };
+    },
+  );
+  const totalPaymentAmount = patients.reduce(
+    (total, patient) => total + Number(patient.booking_due_amount || 0),
+    0,
+  );
+  const firstPaymentMode =
+    patients.map(patient => toStableApiValue(patient.payment_mode)).find(Boolean) ||
+    '';
+  const sourceType = toStableApiValue(
+    detail?.source_type || detail?.sourceType || fallbackBooking?.sourceType,
+  ).toUpperCase();
+  const appointmentId = toStableApiValue(
+    detail?.appointment_id ||
+      detail?.appointmentId ||
+      fallbackBooking?.appointmentId ||
+      fallbackBooking?.appointment_id,
+  );
+  const bookingId =
+    toStableApiValue(detail?.booking_id || detail?.bookingId) ||
+    toStableApiValue(fallbackBooking?.id);
+
+  return {
+    ...fallbackBooking,
+    id: bookingId,
+    booking_id: bookingId,
+    source_type: sourceType || 'BOOKING',
+    appointment_id: appointmentId,
+    booking_status: detail?.booking_status ?? detail?.bookingStatus ?? 3,
+    status: 'Completed',
+    is_completed_history_detail: true,
+    completed_history_fields: {
+      source_type: detail?.source_type || detail?.sourceType || sourceType || 'BOOKING',
+      booking_id: detail?.booking_id || detail?.bookingId || bookingId,
+      appointment_id: detail?.appointment_id ?? detail?.appointmentId ?? null,
+      booking_status: detail?.booking_status ?? detail?.bookingStatus ?? 3,
+    },
+    patient_count: patients.length || fallbackBooking?.patientCount || 0,
+    patients,
+    billing_summary: {
+      amount_received: totalPaymentAmount,
+      payment_mode: firstPaymentMode,
+      total_amount: totalPaymentAmount,
+    },
+  };
+};
 
 const parseJsonResponse = async response => {
   try {
@@ -559,7 +676,6 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
     sourceType,
   );
 
-  console.log('[Appointment Details API URL]', apiUrl);
   const response = await secureFetch(apiUrl, {
     method: 'GET',
     headers: {
@@ -570,11 +686,6 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
   });
 
   const responseData = await parseJsonResponse(response, '[Assigned Detail]');
-  console.log('[Appointment Details API HTTP Status]', {
-    status: response.status,
-    ok: response.ok,
-  });
-  console.log('[Appointment Details API Response]', responseData);
   const errorMessage = getApiErrorMessage(
     response,
     responseData,
@@ -588,6 +699,44 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
   const bookingDetail =
     responseData?.data || responseData?.booking || responseData?.result || responseData;
   return normalizeAssignedBookingDetail(bookingDetail, booking);
+};
+
+export const fetchAssignedBookingHistoryDetailApi = async ({accessToken, booking}) => {
+  const bookingId = booking?.id || booking?.bookingId || booking?.booking_id;
+  const appointmentId = booking?.appointmentId || booking?.appointment_id;
+  const sourceType = booking?.sourceType || booking?.source_type || 'BOOKING';
+  const apiUrl = getAssignedBookingHistoryDetailApiUrl({
+    bookingId,
+    appointmentId,
+    sourceType,
+  });
+
+  const response = await secureFetch(apiUrl, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json',
+    },
+    timeoutMs: DETAIL_GET_REQUEST_TIMEOUT_MS,
+  });
+
+  const responseData = await parseJsonResponse(response, '[Completed Booking Detail]');
+  const errorMessage = getApiErrorMessage(
+    response,
+    responseData,
+    'Unable to load completed booking details at the moment.',
+  );
+
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
+
+  const completedDetail =
+    responseData?.data || responseData?.booking || responseData?.result || responseData;
+  return normalizeAssignedBookingDetail(
+    buildCompletedHistoryDetailForNormalizer(completedDetail, booking),
+    booking,
+  );
 };
 
 export const updateAssignedBookingStatusApi = async ({

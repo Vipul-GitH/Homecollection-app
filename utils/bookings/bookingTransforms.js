@@ -898,6 +898,22 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
             patient?.prescription_url ||
             patient?.prescriptionUrl,
         ),
+        apkTbs: toDisplayString(patient?.apk_tbs || patient?.apkTbs),
+        refBy: toDisplayString(patient?.ref_by || patient?.refBy),
+        reportDelivery: toDisplayString(
+          patient?.report_delivery || patient?.reportDelivery,
+        ),
+        reportSchedule: toDisplayString(
+          patient?.report_schedule || patient?.reportSchedule,
+        ),
+        paymentMode: toDisplayString(patient?.payment_mode || patient?.paymentMode),
+        paymentAmount: toNumberValue(patient?.payment_amount || patient?.paymentAmount),
+        completedTests: extractTestsList(
+          patient?.completed_tests || patient?.completedTests,
+        ),
+        cancelledTests: extractTestsList(
+          patient?.cancelled_tests || patient?.cancelledTests,
+        ),
       };
     },
   );
@@ -915,6 +931,11 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
       toDisplayString(
         booking?.id || booking?._id || booking?.booking_id || booking?.bookingId,
       ) || fallbackBooking?.id || 'assigned-detail',
+    isCompletedHistoryDetail: Boolean(
+      booking?.is_completed_history_detail || booking?.isCompletedHistoryDetail,
+    ),
+    completedHistoryFields:
+      booking?.completed_history_fields || booking?.completedHistoryFields || null,
     bookingCode:
       toDisplayString(
         booking?.bookingCode ||

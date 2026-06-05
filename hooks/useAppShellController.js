@@ -1508,6 +1508,7 @@ export const useAppShellController = () => {
       try {
         bookingDetail = await bookings.openAssignedBooking(booking, {
           onFreshBookingDetail: applyFreshBookingDetail,
+          useHistoryDetail: appointmentsViewMode === 'completed',
         });
       } finally {
         finishScreenTransition();

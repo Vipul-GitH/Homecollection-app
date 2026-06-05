@@ -5,6 +5,7 @@ import {
   addAssignedBookingPatientApi,
   cancelAssignedBookingPatientApi,
   fetchAssignedBookingDetailApi,
+  fetchAssignedBookingHistoryDetailApi,
   fetchAssignedBookingHistoryApi,
   fetchAssignedBookingsApi,
   fetchPanelCatalogByCompanyApi,
@@ -1057,7 +1058,7 @@ export const useAssignedBookings = ({
   }, [accessToken, handleSessionExpired]);
 
   const openAssignedBooking = useCallback(
-    async (booking, {onFreshBookingDetail} = {}) => {
+    async (booking, {onFreshBookingDetail, useHistoryDetail = false} = {}) => {
       const bookingId = booking?.id;
 
       if (!bookingId) {
@@ -1075,6 +1076,16 @@ export const useAssignedBookings = ({
         routingMeta.sourceType,
         routingMeta.appointmentId || 'booking',
       ].join('|');
+      const fetchBookingDetail = () =>
+        useHistoryDetail
+          ? fetchAssignedBookingHistoryDetailApi({
+              accessToken,
+              booking,
+            })
+          : fetchAssignedBookingDetailApi({
+              accessToken,
+              booking,
+            });
       const refreshBookingDetailInBackground = () => {
         if (inFlightBookingDetailRequestsRef.current.has(bookingDetailRequestKey)) {
           return;
@@ -1083,10 +1094,7 @@ export const useAssignedBookings = ({
         const refreshPromise = (async () => {
           try {
             await syncPendingOfflineWork({force: true});
-            const bookingDetail = await fetchAssignedBookingDetailApi({
-              accessToken,
-              booking,
-            });
+            const bookingDetail = await fetchBookingDetail();
             await persistBookingDetail(bookingDetail, booking);
             if (typeof onFreshBookingDetail === 'function') {
               onFreshBookingDetail(bookingDetail);
@@ -1110,7 +1118,9 @@ export const useAssignedBookings = ({
       };
 
       try {
-        const cachedBookingDetail = await getCachedBookingDetail(booking);
+        const cachedBookingDetail = useHistoryDetail
+          ? null
+          : await getCachedBookingDetail(booking);
 
         if (cachedBookingDetail) {
           refreshBookingDetailInBackground();
@@ -1119,10 +1129,7 @@ export const useAssignedBookings = ({
 
         setLoadingAssignedBookingId(normalizedBookingId);
         await syncPendingOfflineWork({force: true});
-        const bookingDetail = await fetchAssignedBookingDetailApi({
-          accessToken,
-          booking,
-        });
+        const bookingDetail = await fetchBookingDetail();
         await persistBookingDetail(bookingDetail, booking);
         return bookingDetail;
       } catch (error) {

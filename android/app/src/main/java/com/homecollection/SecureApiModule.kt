@@ -5,6 +5,10 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableNativeMap
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.provider.OpenableColumns
 import org.json.JSONObject
 import java.io.BufferedWriter
 import java.io.File
@@ -23,9 +27,17 @@ import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import kotlin.random.Random
+import kotlin.math.max
 
 class SecureApiModule(reactContext: ReactApplicationContext) :
   ReactContextBaseJavaModule(reactContext) {
+
+  companion object {
+    private const val UPLOAD_IMAGE_MAX_SIDE = 1024
+    private val UPLOAD_IMAGE_JPEG_QUALITIES = intArrayOf(60, 50, 42)
+    private const val UPLOAD_IMAGE_TARGET_BYTES = 2L * 1024L * 1024L
+    private const val UPLOAD_IMAGE_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1000L
+  }
 
   override fun getName(): String = "SecureApiModule"
 
@@ -72,7 +84,7 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
   private fun openUploadInputStream(uriString: String): InputStream {
     return when {
       uriString.startsWith("content://", ignoreCase = true) -> {
-        reactApplicationContext.contentResolver.openInputStream(android.net.Uri.parse(uriString))
+        reactApplicationContext.contentResolver.openInputStream(Uri.parse(uriString))
           ?: throw IllegalArgumentException("Unable to open content URI: $uriString")
       }
       uriString.startsWith("file://", ignoreCase = true) -> {
@@ -112,6 +124,213 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
       mkdirs()
     }
     return File(directory, "document-${url.hashCode()}.$extension")
+  }
+
+  private fun isImageUpload(mimeType: String, fileName: String, uriString: String): Boolean {
+    val normalizedMimeType = mimeType.lowercase()
+    if (normalizedMimeType.startsWith("image/")) {
+      return true
+    }
+
+    val source = "$fileName $uriString".lowercase()
+    return source.endsWith(".jpg") ||
+      source.endsWith(".jpeg") ||
+      source.endsWith(".png") ||
+      source.endsWith(".webp") ||
+      source.contains(".jpg?") ||
+      source.contains(".jpeg?") ||
+      source.contains(".png?") ||
+      source.contains(".webp?")
+  }
+
+  private fun cleanupOldCompressedUploads(directory: File) {
+    val cutoff = System.currentTimeMillis() - UPLOAD_IMAGE_CACHE_MAX_AGE_MS
+    try {
+      directory.listFiles()?.forEach { file ->
+        if (file.isFile && file.lastModified() < cutoff) {
+          file.delete()
+        }
+      }
+    } catch (_: Exception) {
+      // Cache cleanup should never block an upload.
+    }
+  }
+
+  private fun resolveUploadFileSize(uriString: String): Long {
+    return try {
+      when {
+        uriString.startsWith("content://", ignoreCase = true) -> {
+          var resolvedSize = 0L
+          reactApplicationContext.contentResolver.query(
+            Uri.parse(uriString),
+            arrayOf(OpenableColumns.SIZE),
+            null,
+            null,
+            null,
+          )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+              val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+              if (sizeIndex >= 0) {
+                resolvedSize = cursor.getLong(sizeIndex)
+              }
+            }
+          }
+          resolvedSize
+        }
+        uriString.startsWith("file://", ignoreCase = true) -> {
+          File(URI(uriString)).length()
+        }
+        else -> File(uriString).length()
+      }
+    } catch (_: Exception) {
+      0L
+    }
+  }
+
+  private fun calculateImageSampleSize(width: Int, height: Int): Int {
+    var sampleSize = 1
+    while (
+      width / sampleSize > UPLOAD_IMAGE_MAX_SIDE * 2 ||
+      height / sampleSize > UPLOAD_IMAGE_MAX_SIDE * 2
+    ) {
+      sampleSize *= 2
+    }
+    return sampleSize.coerceAtLeast(1)
+  }
+
+  private fun decodeUploadBitmap(uriString: String): Bitmap? {
+    val bounds = BitmapFactory.Options().apply {
+      inJustDecodeBounds = true
+    }
+    openUploadInputStream(uriString).use { inputStream ->
+      BitmapFactory.decodeStream(inputStream, null, bounds)
+    }
+
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+      return null
+    }
+
+    val decodeOptions = BitmapFactory.Options().apply {
+      inSampleSize = calculateImageSampleSize(bounds.outWidth, bounds.outHeight)
+      inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+
+    return openUploadInputStream(uriString).use { inputStream ->
+      BitmapFactory.decodeStream(inputStream, null, decodeOptions)
+    }
+  }
+
+  private fun scaleUploadBitmap(bitmap: Bitmap): Bitmap {
+    val largestSide = max(bitmap.width, bitmap.height)
+    if (largestSide <= UPLOAD_IMAGE_MAX_SIDE) {
+      return bitmap
+    }
+
+    val scale = UPLOAD_IMAGE_MAX_SIDE.toFloat() / largestSide.toFloat()
+    val width = max(1, (bitmap.width * scale).toInt())
+    val height = max(1, (bitmap.height * scale).toInt())
+    return Bitmap.createScaledBitmap(bitmap, width, height, true)
+  }
+
+  private fun compressedUploadFileName(fileName: String, index: Int): String {
+    val baseName = fileName
+      .substringBeforeLast('.', fileName)
+      .replace(Regex("[^A-Za-z0-9._-]"), "_")
+      .ifBlank { "upload-$index" }
+    return "$baseName-compressed.jpg"
+  }
+
+  private fun writeCompressedUploadAttempt(
+    bitmap: Bitmap,
+    directory: File,
+    outputName: String,
+    quality: Int,
+  ): File? {
+    val outputFile = File(
+      directory,
+      "${System.currentTimeMillis()}-${Random.nextInt(1000, 9999)}-q$quality-$outputName",
+    )
+
+    return try {
+      FileOutputStream(outputFile).use { outputStream ->
+        bitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)
+        outputStream.flush()
+      }
+
+      if (outputFile.length() > 0L) {
+        outputFile
+      } else {
+        outputFile.delete()
+        null
+      }
+    } catch (_: Exception) {
+      outputFile.delete()
+      null
+    }
+  }
+
+  private fun maybeCompressImageForUpload(
+    uriString: String,
+    fileName: String,
+    mimeType: String,
+    index: Int,
+  ): Pair<File, String>? {
+    if (!isImageUpload(mimeType, fileName, uriString)) {
+      return null
+    }
+
+    var decodedBitmap: Bitmap? = null
+    var scaledBitmap: Bitmap? = null
+
+    return try {
+      val originalSize = resolveUploadFileSize(uriString)
+      decodedBitmap = decodeUploadBitmap(uriString) ?: return null
+      scaledBitmap = scaleUploadBitmap(decodedBitmap)
+
+      val directory = File(reactApplicationContext.cacheDir, "compressed-uploads").apply {
+        mkdirs()
+      }
+      cleanupOldCompressedUploads(directory)
+
+      val outputName = compressedUploadFileName(fileName, index)
+      var bestFile: File? = null
+
+      for (quality in UPLOAD_IMAGE_JPEG_QUALITIES) {
+        val attemptFile = writeCompressedUploadAttempt(
+          scaledBitmap,
+          directory,
+          outputName,
+          quality,
+        ) ?: continue
+
+        val currentBest = bestFile
+        if (currentBest == null || attemptFile.length() < currentBest.length()) {
+          currentBest?.delete()
+          bestFile = attemptFile
+        } else {
+          attemptFile.delete()
+        }
+
+        if ((bestFile?.length() ?: Long.MAX_VALUE) <= UPLOAD_IMAGE_TARGET_BYTES) {
+          break
+        }
+      }
+
+      val resolvedBestFile = bestFile ?: return null
+      if (originalSize > 0L && resolvedBestFile.length() >= originalSize) {
+        resolvedBestFile.delete()
+        return null
+      }
+
+      Pair(resolvedBestFile, outputName)
+    } catch (_: Throwable) {
+      null
+    } finally {
+      if (scaledBitmap != null && scaledBitmap != decodedBitmap) {
+        scaledBitmap.recycle()
+      }
+      decodedBitmap?.recycle()
+    }
   }
 
   private fun writeMultipartTextPart(
@@ -313,13 +532,24 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
             continue
           }
 
+          val compressedImage = maybeCompressImageForUpload(
+            uriString,
+            fileName,
+            mimeType,
+            index,
+          )
+          val uploadUriString =
+            compressedImage?.first?.let { Uri.fromFile(it).toString() } ?: uriString
+          val uploadFileName = compressedImage?.second ?: fileName
+          val uploadMimeType = if (compressedImage != null) "image/jpeg" else mimeType
+
           writeMultipartFilePart(
             outputStream,
             boundary,
             fieldName,
-            fileName,
-            mimeType,
-            uriString,
+            uploadFileName,
+            uploadMimeType,
+            uploadUriString,
           )
         }
 
