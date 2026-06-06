@@ -432,6 +432,7 @@ const buildEmptyAppointmentDetailState = () => ({
   patientCghsDocumentsMap: {},
   patientCancellationMap: {},
   patientAdditionalDiscountMap: {},
+  patientReferredByOverrideMap: {},
   completePayments: [],
   isAdditionalDiscountEnabled: false,
   isLinkedAppointmentSelected: false,
@@ -692,6 +693,10 @@ const mergeAppointmentDetailStateWithDraft = (seedState, draftState) => {
       ...(seed.patientAdditionalDiscountMap || {}),
       ...(draft.patientAdditionalDiscountMap || {}),
     },
+    patientReferredByOverrideMap: {
+      ...(seed.patientReferredByOverrideMap || {}),
+      ...(draft.patientReferredByOverrideMap || {}),
+    },
     completePayments: Array.isArray(draft.completePayments)
       ? draft.completePayments
       : seed.completePayments,
@@ -777,6 +782,7 @@ const buildAppointmentDetailDraftForStorage = ({state, selectedBooking}) => {
         safeState.patientManualSlipDocumentsMap || {},
       patientCancellationMap: safeState.patientCancellationMap || {},
       patientAdditionalDiscountMap: safeState.patientAdditionalDiscountMap || {},
+      patientReferredByOverrideMap: safeState.patientReferredByOverrideMap || {},
       completePayments: safeState.completePayments || [],
       isAdditionalDiscountEnabled: safeState.isAdditionalDiscountEnabled,
       isLinkedAppointmentSelected: Boolean(safeState.isLinkedAppointmentSelected),

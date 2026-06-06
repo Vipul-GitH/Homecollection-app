@@ -147,6 +147,11 @@ const normalizePatientTagValues = value => {
 const serializePatientTags = tags =>
   normalizePatientTagValues(tags).join(', ');
 
+const preserveReferredByText = value => {
+  const text = value === null || value === undefined ? '' : String(value);
+  return text === 'N/A' ? '' : text;
+};
+
 const normalizeAppAlertArgs = (
   titleOrMessage,
   messageOrButtons,
@@ -1625,7 +1630,7 @@ function AppointmentDetailsScreen({
             patientReferredByOverrideMap,
             patientId,
           )
-            ? normalizeFormText(patientReferredByOverrideMap[patientId])
+            ? preserveReferredByText(patientReferredByOverrideMap[patientId])
             : null;
         const nextPatient =
           referredByOverride !== null
@@ -2899,7 +2904,9 @@ function AppointmentDetailsScreen({
           report_delivery_options: normalizeReportDeliveryValues(
             patientReportCourierMap[patientId],
           ),
-          referred_by: normalizeFormText(patient?.referredBy || patient?.referred_by),
+          referred_by: preserveReferredByText(
+            patient?.referredBy || patient?.referred_by,
+          ),
           report_schedule: normalizeFormText(
             patientReportScheduleMap[patientId],
           ) || 'routine',
@@ -3077,7 +3084,9 @@ function AppointmentDetailsScreen({
             patientTestBookingStatusMap[patientId] ||
               DEFAULT_TEST_BOOKING_STATUS,
           ),
-          referred_by: normalizeFormText(patient?.referredBy || patient?.referred_by),
+          referred_by: preserveReferredByText(
+            patient?.referredBy || patient?.referred_by,
+          ),
           report_schedule:
             normalizeFormText(patientReportScheduleMap[patientId]) || 'routine',
           report_delivery: normalizeReportDeliveryValues(
@@ -5521,7 +5530,7 @@ function AppointmentDetailsScreen({
         return false;
       }
 
-      const nextReferredBy = normalizeFormText(referredBy);
+      const nextReferredBy = preserveReferredByText(referredBy);
       setPatientReferredByOverrideMap(previousMap => ({
         ...previousMap,
         [patientId]: nextReferredBy,
@@ -5747,13 +5756,97 @@ function AppointmentDetailsScreen({
   const completedHistoryPatients = Array.isArray(selectedBooking?.patients)
     ? selectedBooking.patients
     : [];
-  const renderCompletedHistoryValue = (label, value, iconName = 'information-circle-outline') => (
+  const completedHistoryStatusCode = Number(
+    completedHistoryFields.booking_status || selectedBooking?.bookingStatusCode || 0,
+  );
+  const completedHistoryStatusLabel =
+    completedHistoryStatusCode === 4
+      ? 'Cancelled'
+      : completedHistoryStatusCode === 5
+      ? 'Partial Complete'
+      : completedHistoryStatusCode === 3
+      ? 'Completed'
+      : selectedBooking?.status || 'Completed';
+  const isCancelledHistory = completedHistoryStatusCode === 4;
+  const historyAccent = isCancelledHistory ? '#B91C1C' : '#0D4F5F';
+  const historyAccentSoft = isCancelledHistory ? '#FEE2E2' : '#DDF7F1';
+  const totalHistoryPayment = completedHistoryPatients.reduce(
+    (total, patient) => total + Number(patient?.paymentAmount || 0),
+    0,
+  );
+  const completedHistoryTestCount = completedHistoryPatients.reduce(
+    (total, patient) =>
+      total + (Array.isArray(patient?.completedTests) ? patient.completedTests.length : 0),
+    0,
+  );
+  const cancelledHistoryTestCount = completedHistoryPatients.reduce(
+    (total, patient) =>
+      total + (Array.isArray(patient?.cancelledTests) ? patient.cancelledTests.length : 0),
+    0,
+  );
+  const formatHistoryAmount = value => {
+    const numericValue = Number(value || 0);
+    return Number.isFinite(numericValue) ? `Rs. ${numericValue.toFixed(2)}` : '-';
+  };
+  const renderCompletedHistoryValue = (
+    label,
+    value,
+    iconName = 'information-circle-outline',
+    options = {},
+  ) => {
+    const shouldRenderNode = React.isValidElement(value);
+
+    return (
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'flex-start',
+          gap: 12,
+          marginBottom: options.compact ? 10 : 14,
+          paddingVertical: options.compact ? 2 : 4,
+        }}>
+        <View
+          style={{
+            width: options.compact ? 32 : 38,
+            height: options.compact ? 32 : 38,
+            borderRadius: options.compact ? 16 : 19,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: options.iconBg || '#EEF6FF',
+          }}>
+          <Ionicons name={iconName} size={18} color={options.iconColor || '#2563EB'} />
+        </View>
+        <View style={{flex: 1}}>
+          <Text style={{fontSize: 12, fontWeight: '900', color: '#64748B', marginBottom: 4}}>
+          {label}
+          </Text>
+          {shouldRenderNode ? (
+            value
+          ) : (
+            <Text
+              style={{
+                fontSize: options.valueSize || 16,
+                fontWeight: '900',
+                color: options.valueColor || '#0F172A',
+                lineHeight: 22,
+              }}>
+              {value === null || value === undefined || value === '' ? '-' : String(value)}
+            </Text>
+          )}
+        </View>
+      </View>
+    );
+  };
+  const renderCompletedHistoryMetric = (label, value, iconName, color) => (
     <View
       style={{
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: 10,
-        marginBottom: 14,
+        flex: 1,
+        minWidth: 148,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+        borderRadius: 14,
+        backgroundColor: '#FFFFFF',
+        padding: 14,
       }}>
       <View
         style={{
@@ -5762,58 +5855,157 @@ function AppointmentDetailsScreen({
           borderRadius: 17,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: '#E7F5F8',
+          backgroundColor: `${color}18`,
+          marginBottom: 10,
         }}>
-        <Ionicons name={iconName} size={18} color="#0D4F5F" />
+        <Ionicons name={iconName} size={18} color={color} />
       </View>
-      <View style={{flex: 1}}>
-        <Text style={{fontSize: 13, fontWeight: '800', color: '#64748B', marginBottom: 4}}>
+      <Text style={{fontSize: 20, fontWeight: '900', color: '#0F172A'}}>
+        {value}
+      </Text>
+      <Text style={{fontSize: 12, fontWeight: '800', color: '#64748B', marginTop: 2}}>
         {label}
-        </Text>
-        <Text style={{fontSize: 17, fontWeight: '900', color: '#0F172A', lineHeight: 22}}>
-          {value === null || value === undefined || value === '' ? '-' : String(value)}
-        </Text>
-      </View>
+      </Text>
     </View>
   );
-  const renderCompletedHistoryList = value => {
-    const list = Array.isArray(value) ? value : [];
-    return list.length ? list.join(', ') : '-';
+  const renderHistoryChips = (items, color) => {
+    const list = Array.isArray(items) ? items.filter(Boolean) : [];
+
+    if (!list.length) {
+      return (
+        <Text style={{fontSize: 15, fontWeight: '800', color: '#94A3B8'}}>
+          -
+        </Text>
+      );
+    }
+
+    return (
+      <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 8}}>
+        {list.map((item, index) => (
+          <View
+            key={`${item}-${index}`}
+            style={{
+              borderRadius: 999,
+              paddingHorizontal: 11,
+              paddingVertical: 7,
+              backgroundColor: `${color}16`,
+              borderWidth: 1,
+              borderColor: `${color}35`,
+            }}>
+            <Text style={{fontSize: 13, fontWeight: '900', color}}>
+              {item}
+            </Text>
+          </View>
+        ))}
+      </View>
+    );
   };
 
   if (isCompletedHistoryDetail) {
     return (
-      <View style={styles.detailScreenContainer}>
+      <View style={[styles.detailScreenContainer, {gap: 14}]}>
         <View
           style={[
             styles.sectionCard,
-            {borderColor: '#B7E4EA', backgroundColor: '#F8FEFF'},
+            {
+              backgroundColor: '#FFFFFF',
+              padding: 18,
+              overflow: 'hidden',
+              borderWidth: 1,
+              borderColor: '#E4ECF7',
+              shadowColor: '#8BA1C4',
+              shadowOffset: {width: 0, height: 4},
+              shadowOpacity: 0.05,
+              shadowRadius: 10,
+              elevation: 1,
+            },
           ]}>
-          <View style={{flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16}}>
+          <View
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 5,
+              backgroundColor: historyAccent,
+            }}
+          />
+          <View style={{flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16}}>
             <View
               style={{
-                width: 42,
-                height: 42,
-                borderRadius: 21,
+                width: 48,
+                height: 48,
+                borderRadius: 24,
                 alignItems: 'center',
                 justifyContent: 'center',
-                backgroundColor: '#0D4F5F',
+                backgroundColor: historyAccentSoft,
               }}>
-              <Ionicons name="checkmark-done-outline" size={22} color="#FFFFFF" />
+              <Ionicons
+                name={isCancelledHistory ? 'close-circle-outline' : 'checkmark-done-outline'}
+                size={24}
+                color={historyAccent}
+              />
             </View>
-            <Text style={{fontSize: 22, fontWeight: '900', color: '#0D4F5F', flex: 1}}>
-            Completed Booking Detail
-            </Text>
+            <View style={{flex: 1}}>
+              <Text style={{fontSize: 23, fontWeight: '900', color: '#0F172A'}}>
+                {completedHistoryStatusLabel} Booking
+              </Text>
+              <Text style={{fontSize: 13, fontWeight: '800', color: '#64748B', marginTop: 3}}>
+                History detail summary
+              </Text>
+            </View>
+            <View
+              style={{
+                borderRadius: 999,
+                paddingHorizontal: 12,
+                paddingVertical: 7,
+                backgroundColor: historyAccentSoft,
+              }}>
+              <Text style={{fontSize: 12, fontWeight: '900', color: historyAccent}}>
+                {completedHistoryStatusLabel}
+              </Text>
+            </View>
           </View>
+          <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16}}>
+            {renderCompletedHistoryMetric(
+              'Patients',
+              completedHistoryPatients.length,
+              'people-outline',
+              '#2563EB',
+            )}
+            {renderCompletedHistoryMetric(
+              'Collected',
+              formatHistoryAmount(totalHistoryPayment),
+              'cash-outline',
+              '#059669',
+            )}
+          </View>
+          <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 10}}>
+            {renderCompletedHistoryMetric(
+              'Completed Tests',
+              completedHistoryTestCount,
+              'checkmark-circle-outline',
+              '#16A34A',
+            )}
+            {renderCompletedHistoryMetric(
+              'Cancelled Tests',
+              cancelledHistoryTestCount,
+              'close-circle-outline',
+              '#DC2626',
+            )}
+          </View>
+          <View style={{height: 1, backgroundColor: '#E2E8F0', marginVertical: 16}} />
           {renderCompletedHistoryValue(
             'Booking ID',
             completedHistoryFields.booking_id || selectedBooking.id,
             'receipt-outline',
+            {compact: true, iconBg: '#F1F5F9', iconColor: '#475569'},
           )}
           {renderCompletedHistoryValue(
             'Appointment ID',
             completedHistoryFields.appointment_id || selectedBooking.appointmentId,
             'calendar-outline',
+            {compact: true, iconBg: '#F1F5F9', iconColor: '#475569'},
           )}
         </View>
 
@@ -5822,7 +6014,17 @@ function AppointmentDetailsScreen({
             key={`completed-history-patient-${patient.id || index}`}
             style={[
               styles.sectionCard,
-              {borderColor: '#D8E7FF', backgroundColor: '#FBFCFF'},
+              {
+                backgroundColor: '#FBFCFF',
+                padding: 18,
+                borderWidth: 1,
+                borderColor: '#E4ECF7',
+                shadowColor: '#8BA1C4',
+                shadowOffset: {width: 0, height: 4},
+                shadowOpacity: 0.05,
+                shadowRadius: 10,
+                elevation: 1,
+              },
             ]}>
             <View style={{flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16}}>
               <View
@@ -5836,32 +6038,67 @@ function AppointmentDetailsScreen({
                 }}>
                 <Ionicons name="person-outline" size={22} color="#FFFFFF" />
               </View>
-              <Text
-                style={{
-                  fontSize: 21,
-                  fontWeight: '900',
-                  color: '#1D4ED8',
-                  flex: 1,
-                }}>
-                Patient {index + 1}
-              </Text>
+              <View style={{flex: 1}}>
+                <Text
+                  style={{
+                    fontSize: 20,
+                    fontWeight: '900',
+                    color: '#1D4ED8',
+                  }}>
+                  {patient.name || `Patient ${index + 1}`}
+                </Text>
+                <Text style={{fontSize: 12, fontWeight: '800', color: '#64748B', marginTop: 3}}>
+                  Patient {index + 1}
+                </Text>
+              </View>
             </View>
-            {renderCompletedHistoryValue('Patient Name', patient.name, 'person-circle-outline')}
-            {renderCompletedHistoryValue('APK TBS', patient.apkTbs, 'shield-checkmark-outline')}
-            {renderCompletedHistoryValue('Ref By', patient.refBy, 'medkit-outline')}
-            {renderCompletedHistoryValue('Report Delivery', patient.reportDelivery, 'document-text-outline')}
-            {renderCompletedHistoryValue('Report Schedule', patient.reportSchedule, 'time-outline')}
-            {renderCompletedHistoryValue('Payment Mode', patient.paymentMode, 'card-outline')}
-            {renderCompletedHistoryValue('Payment Amount', patient.paymentAmount, 'cash-outline')}
+            <View
+              style={{
+                borderRadius: 14,
+                backgroundColor: '#FFFFFF',
+                borderWidth: 1,
+                borderColor: '#E2E8F0',
+                padding: 14,
+                marginBottom: 14,
+              }}>
+              {renderCompletedHistoryValue('APK TBS', patient.apkTbs, 'shield-checkmark-outline', {
+                iconBg: '#EEF2FF',
+                iconColor: '#4F46E5',
+              })}
+              {renderCompletedHistoryValue('Ref By', patient.refBy, 'medkit-outline', {
+                iconBg: '#FDF2F8',
+                iconColor: '#DB2777',
+              })}
+              {renderCompletedHistoryValue('Report Delivery', patient.reportDelivery, 'document-text-outline', {
+                iconBg: '#EFF6FF',
+                iconColor: '#2563EB',
+              })}
+              {renderCompletedHistoryValue('Report Schedule', patient.reportSchedule, 'time-outline', {
+                iconBg: '#FEF3C7',
+                iconColor: '#D97706',
+              })}
+              {renderCompletedHistoryValue('Payment Mode', patient.paymentMode, 'card-outline', {
+                iconBg: '#ECFDF5',
+                iconColor: '#059669',
+              })}
+              {renderCompletedHistoryValue(
+                'Payment Amount',
+                formatHistoryAmount(patient.paymentAmount),
+                'cash-outline',
+                {iconBg: '#ECFDF5', iconColor: '#059669', valueColor: '#047857'},
+              )}
+            </View>
             {renderCompletedHistoryValue(
               'Completed Tests',
-              renderCompletedHistoryList(patient.completedTests),
+              renderHistoryChips(patient.completedTests, '#16A34A'),
               'checkmark-circle-outline',
+              {iconBg: '#DCFCE7', iconColor: '#16A34A'},
             )}
             {renderCompletedHistoryValue(
               'Cancelled Tests',
-              renderCompletedHistoryList(patient.cancelledTests),
+              renderHistoryChips(patient.cancelledTests, '#DC2626'),
               'close-circle-outline',
+              {iconBg: '#FEE2E2', iconColor: '#DC2626'},
             )}
           </View>
         ))}

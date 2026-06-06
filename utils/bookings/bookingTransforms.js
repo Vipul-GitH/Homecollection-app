@@ -899,7 +899,12 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
             patient?.prescriptionUrl,
         ),
         apkTbs: toDisplayString(patient?.apk_tbs || patient?.apkTbs),
-        refBy: toDisplayString(patient?.ref_by || patient?.refBy),
+        refBy: toDisplayString(
+          patient?.ref_by ||
+            patient?.refBy ||
+            patient?.referred_by ||
+            patient?.referredBy,
+        ),
         reportDelivery: toDisplayString(
           patient?.report_delivery || patient?.reportDelivery,
         ),

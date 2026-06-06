@@ -682,28 +682,11 @@ export default function HandoverScreen({
     };
   }, [handoverBookings, selectedTubeKeys]);
 
-  const handoverLoadingOverlayVisible =
-    isSavingHandover ||
-    (activeHandoverTab === 'pending' &&
-      isLoadingPendingHandoverRows &&
-      !handoverBookings.length) ||
-    (activeHandoverTab === 'done' &&
-      isLoadingHandoverHistory &&
-      !handoverHistory.length);
-  const handoverLoadingOverlayCopy = isSavingHandover
-    ? {
-        title: 'Saving Handover',
-        message: 'Sending the selected tubes and finalizing this handover...',
-      }
-    : activeHandoverTab === 'done'
-    ? {
-        title: 'Loading Handover Done',
-        message: 'Fetching the completed handover history...',
-      }
-    : {
-        title: 'Loading Pending Handover',
-        message: 'Fetching pending handover tubes...',
-      };
+  const handoverLoadingOverlayVisible = isSavingHandover;
+  const handoverLoadingOverlayCopy = {
+    title: 'Saving Handover',
+    message: 'Sending the selected tubes and finalizing this handover...',
+  };
 
   const handoverSelectionSignature = useMemo(
     () =>
@@ -962,12 +945,7 @@ export default function HandoverScreen({
 
   const renderPendingContent = () => {
     if (isLoadingPendingHandoverRows && !handoverBookings.length) {
-      return (
-        <View style={styles.comingSoonCard}>
-          <ActivityIndicator color={BRAND.primaryStrong} size="small" />
-          <Text style={styles.comingSoonTitle}>Loading handover list...</Text>
-        </View>
-      );
+      return null;
     }
 
     if (!handoverBookings.length) {
@@ -1250,12 +1228,7 @@ export default function HandoverScreen({
 
   const renderDoneContent = () => {
     if (isLoadingHandoverHistory && !handoverHistory.length) {
-      return (
-        <View style={styles.comingSoonCard}>
-          <ActivityIndicator color={BRAND.primaryStrong} size="small" />
-          <Text style={styles.comingSoonTitle}>Loading handover history...</Text>
-        </View>
-      );
+      return null;
     }
 
     if (handoverHistoryError && !handoverHistory.length) {

@@ -65,6 +65,21 @@ const normalizeHistoryDetailTests = (tests, statusLabel) =>
     })
     .filter(Boolean);
 
+const getHistoryBookingStatusLabel = statusCode => {
+  const normalizedStatusCode = Number(statusCode);
+
+  if (normalizedStatusCode === 4) {
+    return 'Cancelled';
+  }
+  if (normalizedStatusCode === 5) {
+    return 'Partial Complete';
+  }
+  if (normalizedStatusCode === 3) {
+    return 'Completed';
+  }
+  return 'Completed';
+};
+
 const buildCompletedHistoryDetailForNormalizer = (detail, fallbackBooking) => {
   const patients = (Array.isArray(detail?.patients) ? detail.patients : []).map(
     (patient, index) => {
@@ -95,6 +110,7 @@ const buildCompletedHistoryDetailForNormalizer = (detail, fallbackBooking) => {
         status_code:
           patient?.booking_patient_status ?? patient?.bookingPatientStatus,
         apk_tbs: patient?.apk_tbs,
+        ref_by: patient?.ref_by || patient?.refBy || patient?.referred_by,
         referred_by: patient?.ref_by || patient?.referred_by || patient?.referredBy,
         report_delivery: patient?.report_delivery || patient?.reportDelivery,
         report_schedule: patient?.report_schedule || patient?.reportSchedule,
@@ -131,6 +147,7 @@ const buildCompletedHistoryDetailForNormalizer = (detail, fallbackBooking) => {
   const bookingId =
     toStableApiValue(detail?.booking_id || detail?.bookingId) ||
     toStableApiValue(fallbackBooking?.id);
+  const bookingStatus = detail?.booking_status ?? detail?.bookingStatus ?? 3;
 
   return {
     ...fallbackBooking,
@@ -138,14 +155,14 @@ const buildCompletedHistoryDetailForNormalizer = (detail, fallbackBooking) => {
     booking_id: bookingId,
     source_type: sourceType || 'BOOKING',
     appointment_id: appointmentId,
-    booking_status: detail?.booking_status ?? detail?.bookingStatus ?? 3,
-    status: 'Completed',
+    booking_status: bookingStatus,
+    status: getHistoryBookingStatusLabel(bookingStatus),
     is_completed_history_detail: true,
     completed_history_fields: {
       source_type: detail?.source_type || detail?.sourceType || sourceType || 'BOOKING',
       booking_id: detail?.booking_id || detail?.bookingId || bookingId,
-      appointment_id: detail?.appointment_id ?? detail?.appointmentId ?? null,
-      booking_status: detail?.booking_status ?? detail?.bookingStatus ?? 3,
+      appointment_id: detail?.appointment_id ?? detail?.appointmentId ?? appointmentId ?? null,
+      booking_status: bookingStatus,
     },
     patient_count: patients.length || fallbackBooking?.patientCount || 0,
     patients,

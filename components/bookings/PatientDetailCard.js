@@ -44,6 +44,11 @@ const CGHS_DOCUMENT_SECTIONS = [
 const toStableValue = value =>
   value === null || value === undefined ? '' : String(value).trim();
 
+const preserveReferredByText = value => {
+  const text = value === null || value === undefined ? '' : String(value);
+  return text === 'N/A' ? '' : text;
+};
+
 const normalizePatientTagValues = value => {
   if (Array.isArray(value)) {
     return value.map(tag => toStableValue(tag)).filter(Boolean);
@@ -657,7 +662,7 @@ function PatientDetailCard({
   const [isReferredByEditing, setIsReferredByEditing] = useState(false);
   const [isReferredByFocused, setIsReferredByFocused] = useState(false);
   const [referredByDraft, setReferredByDraft] = useState(
-    toStableValue(patient.referredBy),
+    preserveReferredByText(patient.referredBy),
   );
   const deferredReferredByDraft = useDeferredValue(referredByDraft);
   const referredBySuggestions = useMemo(() => {
@@ -729,18 +734,18 @@ function PatientDetailCard({
 
   useEffect(() => {
     if (!isReferredByEditing) {
-      setReferredByDraft(toStableValue(patient.referredBy));
+      setReferredByDraft(preserveReferredByText(patient.referredBy));
     }
   }, [isReferredByEditing, patient.referredBy]);
 
   const startReferredByEdit = useCallback(() => {
-    setReferredByDraft(toStableValue(patient.referredBy));
+    setReferredByDraft(preserveReferredByText(patient.referredBy));
     setIsReferredByEditing(true);
     setIsReferredByFocused(true);
   }, [patient.referredBy]);
 
   const cancelReferredByEdit = useCallback(() => {
-    setReferredByDraft(toStableValue(patient.referredBy));
+    setReferredByDraft(preserveReferredByText(patient.referredBy));
     setIsReferredByFocused(false);
     setIsReferredByEditing(false);
   }, [patient.referredBy]);
