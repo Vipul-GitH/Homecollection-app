@@ -29,8 +29,13 @@ const toCurrencyNumber = value => {
   return Number.isFinite(numericValue) ? numericValue : 0;
 };
 
-const getTestStandardDiscountPercent = test =>
-  toCurrencyNumber(
+const roundChargeAmount = value => {
+  const amount = toCurrencyNumber(value);
+  return amount > 0 ? Math.round(amount) : 0;
+};
+
+const getTestStandardDiscountPercent = test => {
+  const directPercent = toCurrencyNumber(
     test?.percentageonstandard ||
       test?.percentageOnStandard ||
       test?.percentage_on_standard ||
@@ -38,8 +43,18 @@ const getTestStandardDiscountPercent = test =>
       test?.percentagestandard ||
       test?.percentageStandard ||
       test?.percentage_standard ||
+      test?.base_discount_percent ||
+      test?.baseDiscountPercent ||
       test?.PercentageStandard,
   );
+  if (directPercent > 0) {
+    return directPercent;
+  }
+
+  const mrp = toCurrencyNumber(test?.mrp || test?.MRP || test?.amount);
+  const maxDiscount = toCurrencyNumber(test?.max_discount || test?.maxDiscount);
+  return mrp > 0 && maxDiscount > 0 ? (maxDiscount / mrp) * 100 : 0;
+};
 
 const getDiscountedTestPrice = test => {
   const mrp = toCurrencyNumber(test?.mrp || test?.MRP || test?.amount);
@@ -50,9 +65,11 @@ const getDiscountedTestPrice = test => {
     Math.max(0, getTestStandardDiscountPercent(test)),
   );
   if (discountPercent > 0 && baseMrp > 0) {
-    return Math.max(0, baseMrp - (baseMrp * discountPercent) / 100);
+    return roundChargeAmount(
+      Math.max(0, baseMrp - (baseMrp * discountPercent) / 100),
+    );
   }
-  return charge || baseMrp;
+  return roundChargeAmount(baseMrp || charge);
 };
 
 const getAppointmentDetailDraftKey = booking =>

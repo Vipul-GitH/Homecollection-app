@@ -218,12 +218,16 @@ const toCurrencyNumber = value => {
   const normalizedValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
   return Number.isFinite(normalizedValue) ? normalizedValue : 0;
 };
+const roundChargeAmount = value => {
+  const amount = toCurrencyNumber(value);
+  return amount > 0 ? Math.round(amount) : 0;
+};
 const hasCurrencyValue = value =>
   value !== null && value !== undefined && String(value).trim() !== '';
 const getRawCurrencyValue = (...values) =>
   values.find(value => hasCurrencyValue(value));
-const getTestStandardDiscountPercent = test =>
-  toCurrencyNumber(
+const getTestStandardDiscountPercent = test => {
+  const directPercent = toCurrencyNumber(
     test?.percentageonstandard ||
       test?.percentageOnStandard ||
       test?.percentage_on_standard ||
@@ -231,8 +235,18 @@ const getTestStandardDiscountPercent = test =>
       test?.percentagestandard ||
       test?.percentageStandard ||
       test?.percentage_standard ||
+      test?.base_discount_percent ||
+      test?.baseDiscountPercent ||
       test?.PercentageStandard,
   );
+  if (directPercent > 0) {
+    return directPercent;
+  }
+
+  const mrp = toCurrencyNumber(test?.mrp || test?.MRP || test?.amount);
+  const maxDiscount = toCurrencyNumber(test?.max_discount || test?.maxDiscount);
+  return mrp > 0 && maxDiscount > 0 ? (maxDiscount / mrp) * 100 : 0;
+};
 const getDiscountedTestPrice = test => {
   const mrp = toCurrencyNumber(test?.mrp || test?.MRP || test?.amount);
   const charge = toCurrencyNumber(test?.charge || test?.Charge);
@@ -242,9 +256,11 @@ const getDiscountedTestPrice = test => {
     Math.max(0, getTestStandardDiscountPercent(test)),
   );
   if (standardDiscount > 0 && baseMrp > 0) {
-    return Math.max(0, baseMrp - (baseMrp * standardDiscount) / 100);
+    return roundChargeAmount(
+      Math.max(0, baseMrp - (baseMrp * standardDiscount) / 100),
+    );
   }
-  return charge || baseMrp;
+  return roundChargeAmount(baseMrp || charge);
 };
 
 const getBackendPriceTestCode = test =>
@@ -284,6 +300,16 @@ const getAppointmentBackendPricedTest = (patient, test, useBackendPrice) => {
       test?.charge,
     ),
     amount: getRawCurrencyValue(backendTest?.amount, test?.amount),
+    percentageonstandard: getRawCurrencyValue(
+      backendTest?.percentageonstandard,
+      backendTest?.percentageOnStandard,
+      backendTest?.percentage_on_standard,
+      backendTest?.base_discount_percent,
+      test?.percentageonstandard,
+      test?.percentageOnStandard,
+      test?.percentage_on_standard,
+      test?.base_discount_percent,
+    ),
     max_discount: getRawCurrencyValue(
       backendTest?.max_discount,
       backendTest?.maxDiscount,
@@ -307,13 +333,24 @@ const getAppointmentBackendPricedTest = (patient, test, useBackendPrice) => {
   };
 };
 
-const getActualTestPrice = (test, useBackendPrice = false) => {
-  if (useBackendPrice && hasCurrencyValue(test?.charge)) {
-    return toCurrencyNumber(test.charge);
+const getActualTestPrice = test => {
+  const billingMode = getBillingChargeMode(test);
+  const mrp = toCurrencyNumber(
+    getRawCurrencyValue(
+      test?.mrp,
+      test?.MRP,
+      test?.amount,
+      test?.charge,
+      test?.Charge,
+    ),
+  );
+
+  if (billingMode.includes('F')) {
+    return 0;
   }
 
-  if (useBackendPrice && hasCurrencyValue(test?.Charge)) {
-    return toCurrencyNumber(test.Charge);
+  if (billingMode.includes('C')) {
+    return roundChargeAmount(mrp);
   }
 
   return getDiscountedTestPrice(test);
@@ -2792,33 +2829,29 @@ function AppointmentDetailsScreen({
               effectiveTest?.comp_cat_id ||
               '',
           );
-          const matchedPanelCompany = patientPanelCompanies.find(company => {
-            const companyCompCatId = normalizeFormText(company?.compCatId);
-            if (directTestCompCatId && companyCompCatId === directTestCompCatId) {
-              return true;
-            }
-
+          const matchedPanelCompanyByName = patientPanelCompanies.find(company => {
             const companyName =
               normalizeFormText(
                 company?.name || company?.panelCompany || company?.pname,
               ).toLowerCase();
-            if (companyName && companyName === panelCompanyKey) {
-              return true;
-            }
-
-            if (!directTestCompCatId) {
-              const companyChipId = normalizeFormText(
-                company?.chipId || company?.id,
-              );
-              if (testPanelChipId && companyChipId === testPanelChipId) {
-                return true;
-              }
-            }
-
-            return false;
+            return companyName && companyName === panelCompanyKey;
           });
+
+          const matchedPanelCompanyByChip = patientPanelCompanies.find(company => {
+            const companyChipId = normalizeFormText(company?.chipId || company?.id);
+            return testPanelChipId && companyChipId === testPanelChipId;
+          });
+
+          const matchedPanelCompanyByCompCatId = patientPanelCompanies.find(company => {
+            const companyCompCatId = normalizeFormText(company?.compCatId);
+            return directTestCompCatId && companyCompCatId === directTestCompCatId;
+          });
+          const matchedPanelCompany =
+            matchedPanelCompanyByName ||
+            matchedPanelCompanyByChip ||
+            matchedPanelCompanyByCompCatId;
           const compCatId = normalizeFormText(
-            directTestCompCatId || matchedPanelCompany?.compCatId || '',
+            matchedPanelCompany?.compCatId || directTestCompCatId || '',
           );
           const catDetails = normalizeFormText(
             effectiveTest?.cat_details ||

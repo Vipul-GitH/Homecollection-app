@@ -1147,6 +1147,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           ) AS description,
           pr.charge AS charge,
           pr.mrp AS mrp,
+          pr.base_discount_percent AS percentageonstandard,
           (pr.mrp * IFNULL(pr.base_discount_percent, 0) / 100.0) AS max_discount,
           (pr.mrp * IFNULL(pr.max_allowed_discount_percent, 0) / 100.0) AS max_allowed_discount
         FROM panel_rates pr
@@ -1171,6 +1172,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("description", cursor.stringValue("description"))
             .put("charge", cursor.doubleValue("charge"))
             .put("mrp", cursor.doubleValue("mrp"))
+            .put("percentageonstandard", cursor.doubleValue("percentageonstandard"))
             .put("max_discount", cursor.doubleValue("max_discount"))
             .put("max_allowed_discount", cursor.doubleValue("max_allowed_discount"))
         }
@@ -2524,6 +2526,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         MAX(profile) AS profile,
         MAX(charge) AS charge,
         MAX(mrp) AS mrp,
+        MAX(percentageonstandard) AS percentageonstandard,
         MAX(max_discount) AS max_discount,
         MAX(max_allowed_discount) AS max_allowed_discount,
         MIN(specimen_name) AS specimen_name,
@@ -2558,6 +2561,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           COALESCE(t1.profile, t2.profile, 0) AS profile,
           pr.charge,
           pr.mrp,
+          pr.base_discount_percent AS percentageonstandard,
           (pr.mrp * IFNULL(pr.base_discount_percent, 0) / 100.0) AS max_discount,
           (pr.mrp * IFNULL(pr.max_allowed_discount_percent, 0) / 100.0) AS max_allowed_discount,
           COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name,
@@ -2599,6 +2603,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("has_children", false)
             .put("charge", testCursor.doubleValue("charge"))
             .put("mrp", testCursor.doubleValue("mrp"))
+            .put("percentageonstandard", testCursor.doubleValue("percentageonstandard"))
             .put("max_discount", testCursor.doubleValue("max_discount"))
             .put("max_allowed_discount", testCursor.doubleValue("max_allowed_discount"))
             .put("specimen_name", testCursor.stringValue("specimen_name"))
@@ -2632,6 +2637,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         MAX(profile) AS profile,
         MAX(charge) AS charge,
         MAX(mrp) AS mrp,
+        MAX(percentageonstandard) AS percentageonstandard,
         MAX(max_discount) AS max_discount,
         MAX(max_allowed_discount) AS max_allowed_discount,
         MIN(specimen_name) AS specimen_name,
@@ -2789,6 +2795,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           COALESCE(t1.profile, t2.profile, 0) AS profile,
           pr.charge,
           pr.mrp,
+          pr.base_discount_percent AS percentageonstandard,
           (pr.mrp * IFNULL(pr.base_discount_percent, 0) / 100.0) AS max_discount,
           (pr.mrp * IFNULL(pr.max_allowed_discount_percent, 0) / 100.0) AS max_allowed_discount,
           COALESCE(NULLIF(ts1.sp_name, ''), NULLIF(ts2.sp_name, '')) AS specimen_name,
@@ -2841,6 +2848,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("has_children", false)
             .put("charge", cursor.doubleValue("charge"))
             .put("mrp", cursor.doubleValue("mrp"))
+            .put("percentageonstandard", cursor.doubleValue("percentageonstandard"))
             .put("max_discount", cursor.doubleValue("max_discount"))
             .put("max_allowed_discount", cursor.doubleValue("max_allowed_discount"))
             .put("specimen_name", cursor.stringValue("specimen_name"))
@@ -2919,6 +2927,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           COALESCE(t1.profile, t2.profile, 0) AS profile,
           CAST(pr.Charge AS REAL) AS charge,
           CAST(pr.MRP AS REAL) AS mrp,
+          CAST(IFNULL(NULLIF(pr.percentageonstandard, ''), '0') AS REAL) AS percentageonstandard,
           CASE
             WHEN NULLIF(pr.percentageonstandard, '') IS NOT NULL
               THEN CAST(pr.MRP AS REAL) * CAST(pr.percentageonstandard AS REAL) / 100.0
@@ -2976,6 +2985,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("has_children", false)
             .put("charge", cursor.doubleValue("charge"))
             .put("mrp", cursor.doubleValue("mrp"))
+            .put("percentageonstandard", cursor.doubleValue("percentageonstandard"))
             .put("max_discount", cursor.doubleValue("max_discount"))
             .put("max_allowed_discount", cursor.doubleValue("max_allowed_discount"))
             .put("specimen_name", cursor.stringValue("specimen_name"))

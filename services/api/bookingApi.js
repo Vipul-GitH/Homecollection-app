@@ -357,7 +357,7 @@ const buildUploadDocumentPart = (fieldName, document) => {
     return null;
   }
 
-  return {
+  const uploadPart = {
     fieldName,
     uri: document.uri,
     name: document.name || `${fieldName}-${Date.now()}`,
@@ -366,6 +366,16 @@ const buildUploadDocumentPart = (fieldName, document) => {
       document?.fileSize ?? document?.size ?? document?.sizeBytes ?? 0,
     ),
   };
+
+  if (document?.geoStampText) {
+    uploadPart.geoStampText = document.geoStampText;
+  }
+
+  if (document?.isGeoTaggedPatientPhoto) {
+    uploadPart.isGeoTaggedPatientPhoto = true;
+  }
+
+  return uploadPart;
 };
 
 const buildDocumentPartList = (fieldName, documents) =>
@@ -1337,53 +1347,42 @@ export const addAssignedBookingPatientApi = async ({
     return responseData;
   }
 
-  const formData = new FormData();
-
-  formData.append('title', String(patient?.title || ''));
-  formData.append('full_name', String(patient?.full_name || ''));
-  formData.append('gender', String(patient?.gender || ''));
-  formData.append('date_of_birth', String(patient?.date_of_birth || ''));
-  formData.append('age_years', String(patient?.age_years || ''));
-  formData.append(
-    'contact_mobile',
-    String(patient?.contact_mobile || patient?.primary_mobile || ''),
-  );
-  formData.append(
-    'alternate_mobile',
-    String(patient?.alternate_mobile || ''),
-  );
-  formData.append('email', String(patient?.email || ''));
-  formData.append('labmate_pid', String(patient?.labmate_pid || ''));
-  formData.append('panel_company', String(patient?.panel_company || ''));
-  formData.append('referred_by', String(patient?.referred_by || ''));
-  formData.append('card_no', String(patient?.card_no || ''));
-  formData.append('tag', String(patient?.tag || ''));
-
-  documents.forEach(document => {
-    if (!document?.uri) {
-      return;
-    }
-
-    formData.append('patient_documents', {
+  const fields = {
+    title: String(patient?.title || ''),
+    full_name: String(patient?.full_name || ''),
+    gender: String(patient?.gender || ''),
+    date_of_birth: String(patient?.date_of_birth || ''),
+    age_years: String(patient?.age_years || ''),
+    contact_mobile: String(
+      patient?.contact_mobile || patient?.primary_mobile || '',
+    ),
+    alternate_mobile: String(patient?.alternate_mobile || ''),
+    email: String(patient?.email || ''),
+    labmate_pid: String(patient?.labmate_pid || ''),
+    panel_company: String(patient?.panel_company || ''),
+    referred_by: String(patient?.referred_by || ''),
+    card_no: String(patient?.card_no || ''),
+    tag: String(patient?.tag || ''),
+  };
+  const files = documents
+    .filter(document => Boolean(document?.uri))
+    .map(document => ({
+      fieldName: 'patient_documents',
       uri: document.uri,
       name: document.name || `patient-document-${Date.now()}`,
       type: document.type || 'application/octet-stream',
-    });
-  });
+    }));
 
-  // SecureApiModule currently accepts string bodies only, so multipart upload
-  // must use native fetch for this endpoint.
-  const response = await fetchWithTimeout(
-    getAssignedBookingPatientsApiUrl(bookingId),
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: formData,
+  const response = await secureMultipartFetch({
+    url: getAssignedBookingPatientsApiUrl(bookingId),
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
     },
-    UPLOAD_REQUEST_TIMEOUT_MS,
-  );
+    fields,
+    files,
+    timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
+  });
 
   const responseData = await parseJsonResponse(response, '[Add Patient]');
   const errorMessage = getApiErrorMessage(

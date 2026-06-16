@@ -89,15 +89,28 @@ const getChargeModeLabel = company => {
 
 const getTestPrice = test =>
   (() => {
-    const resolvedCharge = Number(test?.charge || 0) || 0;
-    if (resolvedCharge > 0) {
-      return resolvedCharge;
+    const mrp = Number(test?.mrp || test?.amount || 0) || 0;
+    const charge = Number(test?.charge || 0) || 0;
+    const baseMrp = mrp || charge;
+    const billingMode = toStableValue(
+      test?.selected_charge_mode ||
+        test?.selectedChargeMode ||
+        test?.billingChargeMode ||
+        test?.chargeMode ||
+        test?.charge_mode ||
+        test?.selectedChargeModes ||
+        test?.selected_charge_modes,
+    ).toUpperCase();
+
+    if (billingMode.includes('F')) {
+      return 0;
     }
 
-    const mrp = Number(test?.mrp || test?.amount || 0) || 0;
-    const charge = resolvedCharge;
-    const baseMrp = mrp || charge;
-    const discountPercent =
+    if (billingMode.includes('C')) {
+      return Math.round(mrp || baseMrp);
+    }
+
+    const directDiscountPercent =
       Number(
         test?.percentageonstandard ||
           test?.percentageOnStandard ||
@@ -106,14 +119,25 @@ const getTestPrice = test =>
           test?.percentagestandard ||
           test?.percentageStandard ||
           test?.percentage_standard ||
+          test?.base_discount_percent ||
+          test?.baseDiscountPercent ||
           0,
       ) || 0;
+    const maxDiscount = Number(test?.max_discount || test?.maxDiscount || 0) || 0;
+    const discountPercent =
+      directDiscountPercent > 0
+        ? directDiscountPercent
+        : baseMrp > 0 && maxDiscount > 0
+        ? (maxDiscount / baseMrp) * 100
+        : 0;
 
     if (discountPercent > 0 && baseMrp > 0) {
-      return Math.max(0, baseMrp - (baseMrp * discountPercent) / 100);
+      return Math.round(
+        Math.max(0, baseMrp - (baseMrp * discountPercent) / 100),
+      );
     }
 
-    return charge || baseMrp;
+    return Math.round(baseMrp || charge);
   })();
 
 const TEST_BOOKING_STATUS_OPTIONS = [

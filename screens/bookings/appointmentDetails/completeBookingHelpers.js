@@ -20,7 +20,7 @@ export const normalizeUploadDocument = (
 
   const type = file.type || getMimeTypeFromFileName(file.name);
 
-  return {
+  const normalizedDocument = {
     uri: file.uri,
     name: getUploadFileName({
       preferredName: documentName,
@@ -31,6 +31,20 @@ export const normalizeUploadDocument = (
     }),
     type,
   };
+
+  if (file.geoStampText) {
+    normalizedDocument.geoStampText = file.geoStampText;
+  }
+
+  if (file.isGeoTaggedPatientPhoto) {
+    normalizedDocument.isGeoTaggedPatientPhoto = true;
+  }
+
+  if (file.imageSource?.uri) {
+    normalizedDocument.imageSource = {uri: file.imageSource.uri};
+  }
+
+  return normalizedDocument;
 };
 
 export const normalizeUploadDocuments = (pickedFiles, fileNamePrefix, documentName = '') =>

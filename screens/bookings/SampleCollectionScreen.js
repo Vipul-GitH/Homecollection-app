@@ -182,6 +182,7 @@ const ADDITIONAL_TUBE_OPTIONS = [
   'ACD',
   'Stool',
   'Pus',
+  'Swab',
 ];
 
 const ADDITIONAL_TUBE_META = {
@@ -196,6 +197,7 @@ const ADDITIONAL_TUBE_META = {
   ACD: {icon: 'beaker-outline', tone: '#EA580C'},
   Stool: {icon: 'cube-outline', tone: '#92400E'},
   Pus: {icon: 'bandage-outline', tone: '#BE123C'},
+  Swab: {icon: 'eyedrop-outline', tone: '#0F766E'},
 };
 
 const normalizeDraftKey = value => toStableValue(value).toUpperCase();

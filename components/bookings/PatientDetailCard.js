@@ -64,9 +64,13 @@ const toPriceNumber = value => {
   const numericValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
   return Number.isFinite(numericValue) ? numericValue : 0;
 };
+const roundChargeAmount = value => {
+  const amount = toPriceNumber(value);
+  return amount > 0 ? Math.round(amount) : 0;
+};
 
-const getStandardDiscountPercent = test =>
-  toPriceNumber(
+const getStandardDiscountPercent = test => {
+  const directPercent = toPriceNumber(
     test?.percentageonstandard ||
       test?.percentageOnStandard ||
       test?.percentage_on_standard ||
@@ -74,8 +78,18 @@ const getStandardDiscountPercent = test =>
       test?.percentagestandard ||
       test?.percentageStandard ||
       test?.percentage_standard ||
+      test?.base_discount_percent ||
+      test?.baseDiscountPercent ||
       test?.PercentageStandard,
   );
+  if (directPercent > 0) {
+    return directPercent;
+  }
+
+  const mrp = toPriceNumber(test?.mrp || test?.MRP || test?.amount);
+  const maxDiscount = toPriceNumber(test?.max_discount || test?.maxDiscount);
+  return mrp > 0 && maxDiscount > 0 ? (maxDiscount / mrp) * 100 : 0;
+};
 
 const getDisplayTestPrice = test => {
   const mrp = toPriceNumber(test?.mrp || test?.MRP || test?.amount);
@@ -91,15 +105,21 @@ const getDisplayTestPrice = test => {
       test?.selected_charge_modes,
   ).toUpperCase();
 
-  if (billingMode.includes('C') || billingMode.includes('F')) {
-    return mrp || baseMrp;
+  if (billingMode.includes('F')) {
+    return 0;
+  }
+
+  if (billingMode.includes('C')) {
+    return roundChargeAmount(mrp || baseMrp);
   }
 
   const discountPercent = Math.min(100, Math.max(0, getStandardDiscountPercent(test)));
   if (discountPercent > 0 && baseMrp > 0) {
-    return Math.max(0, baseMrp - (baseMrp * discountPercent) / 100);
+    return roundChargeAmount(
+      Math.max(0, baseMrp - (baseMrp * discountPercent) / 100),
+    );
   }
-  return charge || baseMrp;
+  return roundChargeAmount(baseMrp || charge);
 };
 
 const getTestDedupeKey = test =>
@@ -1359,6 +1379,11 @@ function PatientDetailCard({
               fallbackPrefix: fileNamePrefix,
             }),
             type: capturedPhoto.type || 'image/jpeg',
+            ...(capturedPhoto.previewUri
+              ? {imageSource: {uri: capturedPhoto.previewUri}}
+              : {}),
+            geoStampText: stampText,
+            isGeoTaggedPatientPhoto: requireLocationMeta,
           },
         ]);
       } catch (error) {

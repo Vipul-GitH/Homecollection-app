@@ -7,6 +7,10 @@ import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableNativeMap
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
 import android.net.Uri
 import android.provider.OpenableColumns
 import org.json.JSONObject
@@ -269,11 +273,104 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
     }
   }
 
+  private fun wrapUploadStampLine(line: String, paint: Paint, maxWidth: Int): List<String> {
+    if (paint.measureText(line) <= maxWidth) {
+      return listOf(line)
+    }
+
+    val wrappedLines = mutableListOf<String>()
+    val words = line.split(Regex("\\s+")).filter { it.isNotBlank() }
+    var currentLine = ""
+
+    words.forEach { word ->
+      val nextLine = if (currentLine.isBlank()) word else "$currentLine $word"
+      if (paint.measureText(nextLine) <= maxWidth) {
+        currentLine = nextLine
+        return@forEach
+      }
+
+      if (currentLine.isNotBlank()) {
+        wrappedLines.add(currentLine)
+      }
+
+      currentLine =
+        if (paint.measureText(word) <= maxWidth) {
+          word
+        } else {
+          word.take(32)
+        }
+    }
+
+    if (currentLine.isNotBlank()) {
+      wrappedLines.add(currentLine)
+    }
+
+    return wrappedLines.ifEmpty { listOf(line) }
+  }
+
+  private fun stampUploadBitmap(bitmap: Bitmap, stampText: String): Bitmap {
+    val stampLines = stampText
+      .split("\n")
+      .map { it.trim() }
+      .filter { it.isNotBlank() }
+
+    if (stampLines.isEmpty()) {
+      return bitmap
+    }
+
+    val stampedBitmap =
+      if (bitmap.isMutable) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888, true)
+    val canvas = Canvas(stampedBitmap)
+    val density = reactApplicationContext.resources.displayMetrics.density
+    val padding = (10 * density).toInt().coerceAtLeast(8)
+    val textSize = max(13f * density, stampedBitmap.width * 0.034f)
+    val lineGap = (4 * density).toInt().coerceAtLeast(3)
+    val paint =
+      Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        this.textSize = textSize
+        typeface = android.graphics.Typeface.create(
+          android.graphics.Typeface.DEFAULT,
+          android.graphics.Typeface.BOLD,
+        )
+      }
+    val backgroundPaint =
+      Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(190, 0, 0, 0)
+      }
+    val maxTextWidth = stampedBitmap.width - padding * 2
+    val wrappedLines = stampLines.flatMap { line ->
+      wrapUploadStampLine(line, paint, maxTextWidth)
+    }
+    val bounds = Rect()
+    paint.getTextBounds("Ag", 0, 2, bounds)
+    val lineHeight = bounds.height() + lineGap
+    val blockHeight = padding * 2 + lineHeight * wrappedLines.size
+    val top = (stampedBitmap.height - blockHeight).coerceAtLeast(0)
+
+    canvas.drawRect(
+      0f,
+      top.toFloat(),
+      stampedBitmap.width.toFloat(),
+      stampedBitmap.height.toFloat(),
+      backgroundPaint,
+    )
+
+    var y = top + padding + bounds.height()
+    wrappedLines.forEach { line ->
+      canvas.drawText(line, padding.toFloat(), y.toFloat(), paint)
+      y += lineHeight
+    }
+
+    return stampedBitmap
+  }
+
   private fun maybeCompressImageForUpload(
     uriString: String,
     fileName: String,
     mimeType: String,
     index: Int,
+    uploadStampText: String,
   ): Pair<File, String>? {
     if (!isImageUpload(mimeType, fileName, uriString)) {
       return null
@@ -281,11 +378,13 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
 
     var decodedBitmap: Bitmap? = null
     var scaledBitmap: Bitmap? = null
+    var uploadBitmap: Bitmap? = null
 
     return try {
       val originalSize = resolveUploadFileSize(uriString)
       decodedBitmap = decodeUploadBitmap(uriString) ?: return null
       scaledBitmap = scaleUploadBitmap(decodedBitmap)
+      uploadBitmap = stampUploadBitmap(scaledBitmap, uploadStampText)
 
       val directory = File(reactApplicationContext.cacheDir, "compressed-uploads").apply {
         mkdirs()
@@ -297,7 +396,7 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
 
       for (quality in UPLOAD_IMAGE_JPEG_QUALITIES) {
         val attemptFile = writeCompressedUploadAttempt(
-          scaledBitmap,
+          uploadBitmap,
           directory,
           outputName,
           quality,
@@ -326,6 +425,9 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
     } catch (_: Throwable) {
       null
     } finally {
+      if (uploadBitmap != null && uploadBitmap != scaledBitmap && uploadBitmap != decodedBitmap) {
+        uploadBitmap.recycle()
+      }
       if (scaledBitmap != null && scaledBitmap != decodedBitmap) {
         scaledBitmap.recycle()
       }
@@ -527,6 +629,7 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
           val uriString = file.optString("uri", "").trim()
           val fileName = file.optString("name", "upload-$index")
           val mimeType = file.optString("type", "application/octet-stream")
+          val uploadStampText = file.optString("geoStampText", "")
 
           if (fieldName.isBlank() || uriString.isBlank()) {
             continue
@@ -537,6 +640,7 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
             fileName,
             mimeType,
             index,
+            uploadStampText,
           )
           val uploadUriString =
             compressedImage?.first?.let { Uri.fromFile(it).toString() } ?: uriString

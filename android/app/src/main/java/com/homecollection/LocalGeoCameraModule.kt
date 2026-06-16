@@ -1,6 +1,7 @@
 package com.homecollection
 
 import android.app.Activity
+import android.content.ClipData
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -81,8 +82,14 @@ class LocalGeoCameraModule(private val reactContext: ReactApplicationContext) :
           .filter { it.isNotBlank() }
 
       cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoUri)
+      cameraIntent.clipData = ClipData.newUri(
+        reactContext.contentResolver,
+        "captured-photo",
+        photoUri,
+      )
       cameraIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
       cameraIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      grantCameraUriPermissions(cameraIntent, photoUri)
       activity.startActivityForResult(cameraIntent, CAMERA_REQUEST_CODE)
     } catch (error: Exception) {
       clearPendingState()
@@ -117,6 +124,15 @@ class LocalGeoCameraModule(private val reactContext: ReactApplicationContext) :
     }
 
     try {
+      if (stampLines.isEmpty()) {
+        val result = WritableNativeMap()
+        result.putString("uri", Uri.fromFile(sourceFile).toString())
+        result.putString("name", sourceFile.name)
+        result.putString("type", "image/jpeg")
+        promise.resolve(result)
+        return
+      }
+
       val sourceBitmap =
         reactContext.contentResolver.openInputStream(sourceUri).use { inputStream ->
           BitmapFactory.decodeStream(inputStream)
@@ -133,11 +149,12 @@ class LocalGeoCameraModule(private val reactContext: ReactApplicationContext) :
         stampedBitmap.recycle()
       }
       sourceBitmap.recycle()
-      sourceFile.delete()
 
       val result = WritableNativeMap()
-      result.putString("uri", Uri.fromFile(outputFile).toString())
-      result.putString("name", outputFile.name)
+      result.putString("uri", Uri.fromFile(sourceFile).toString())
+      result.putString("previewUri", Uri.fromFile(outputFile).toString())
+      result.putString("name", sourceFile.name)
+      result.putString("previewName", outputFile.name)
       result.putString("type", "image/jpeg")
       promise.resolve(result)
     } catch (error: Exception) {
@@ -158,6 +175,21 @@ class LocalGeoCameraModule(private val reactContext: ReactApplicationContext) :
       directory.mkdirs()
     }
     return File.createTempFile("patient-photo-source-", ".jpg", directory)
+  }
+
+  private fun grantCameraUriPermissions(intent: Intent, uri: Uri) {
+    try {
+      val permissionFlags =
+        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION
+      val cameraActivities = reactContext.packageManager.queryIntentActivities(intent, 0)
+
+      cameraActivities.forEach { resolveInfo ->
+        val packageName = resolveInfo.activityInfo?.packageName ?: return@forEach
+        reactContext.grantUriPermission(packageName, uri, permissionFlags)
+      }
+    } catch (_: Exception) {
+      // Intent flags still carry the grant on devices that do not allow explicit grants.
+    }
   }
 
   private fun createStampedOutputFile(): File {

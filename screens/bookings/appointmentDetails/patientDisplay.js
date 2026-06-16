@@ -5,6 +5,10 @@ const toPriceNumber = value => {
   const numericValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
   return Number.isFinite(numericValue) ? numericValue : 0;
 };
+const roundChargeAmount = value => {
+  const amount = toPriceNumber(value);
+  return amount > 0 ? Math.round(amount) : 0;
+};
 
 const hasPriceValue = value =>
   value !== null && value !== undefined && String(value).trim() !== '';
@@ -51,6 +55,15 @@ const mergeAppointmentBackendPrice = (patient, test, useBackendPrice) => {
       ? backendTest.Charge
       : test?.charge,
     amount: hasPriceValue(backendTest?.amount) ? backendTest.amount : test?.amount,
+    percentageonstandard: hasPriceValue(backendTest?.percentageonstandard)
+      ? backendTest.percentageonstandard
+      : hasPriceValue(backendTest?.percentageOnStandard)
+      ? backendTest.percentageOnStandard
+      : hasPriceValue(backendTest?.percentage_on_standard)
+      ? backendTest.percentage_on_standard
+      : hasPriceValue(backendTest?.base_discount_percent)
+      ? backendTest.base_discount_percent
+      : test?.percentageonstandard,
     max_discount: hasPriceValue(backendTest?.max_discount)
       ? backendTest.max_discount
       : test?.max_discount,
@@ -68,8 +81,8 @@ const mergeAppointmentBackendPrice = (patient, test, useBackendPrice) => {
   };
 };
 
-export const getStandardDiscountPercent = test =>
-  toPriceNumber(
+export const getStandardDiscountPercent = test => {
+  const directPercent = toPriceNumber(
     test?.percentageonstandard ||
       test?.percentageOnStandard ||
       test?.percentage_on_standard ||
@@ -77,8 +90,18 @@ export const getStandardDiscountPercent = test =>
       test?.percentagestandard ||
       test?.percentageStandard ||
       test?.percentage_standard ||
+      test?.base_discount_percent ||
+      test?.baseDiscountPercent ||
       test?.PercentageStandard,
   );
+  if (directPercent > 0) {
+    return directPercent;
+  }
+
+  const mrp = toPriceNumber(test?.mrp || test?.MRP || test?.amount);
+  const maxDiscount = toPriceNumber(test?.max_discount || test?.maxDiscount);
+  return mrp > 0 && maxDiscount > 0 ? (maxDiscount / mrp) * 100 : 0;
+};
 
 const getBillingChargeMode = source =>
   normalizeFormText(
@@ -124,10 +147,6 @@ export const getDisplayTestPrice = (test, options = {}) => {
   const mrp = toPriceNumber(getRawPriceValue(test?.mrp, test?.MRP, test?.amount));
   const rawCharge = getRawPriceValue(test?.charge, test?.Charge);
   const charge = toPriceNumber(rawCharge);
-  if (options.useBackendPrice && hasPriceValue(rawCharge)) {
-    return charge;
-  }
-
   const baseMrp = mrp || charge;
   const billingMode = getDisplayTestBillingMode({
     test,
@@ -135,8 +154,12 @@ export const getDisplayTestPrice = (test, options = {}) => {
     panelCompanies: options.panelCompanies,
   });
 
-  if (billingMode.includes('C') || billingMode.includes('F')) {
-    return mrp || baseMrp;
+  if (billingMode.includes('F')) {
+    return 0;
+  }
+
+  if (billingMode.includes('C')) {
+    return roundChargeAmount(mrp || baseMrp);
   }
 
   const discountPercent = Math.min(
@@ -144,9 +167,11 @@ export const getDisplayTestPrice = (test, options = {}) => {
     Math.max(0, getStandardDiscountPercent(test)),
   );
   if (discountPercent > 0 && baseMrp > 0) {
-    return Math.max(0, baseMrp - (baseMrp * discountPercent) / 100);
+    return roundChargeAmount(
+      Math.max(0, baseMrp - (baseMrp * discountPercent) / 100),
+    );
   }
-  return charge || baseMrp;
+  return roundChargeAmount(baseMrp || charge);
 };
 
 export const getPatientCceTestBookingStatus = patient =>
