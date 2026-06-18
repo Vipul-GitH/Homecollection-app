@@ -1,4 +1,4 @@
-export const API_BASE_URL = 'https://labmate.bhasinpathlabs.com:2015';
+export const API_BASE_URL = 'https://labmate.bhasinpathlabs.com:2010';
 
 export const LOGIN_API_URL = `${API_BASE_URL}/api/v1/auth/login`;
 
