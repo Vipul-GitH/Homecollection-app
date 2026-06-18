@@ -1,14 +1,10 @@
 import {collectUniqueTubesForSelectedTests} from '../../../utils/bookings/sampleTubeMapping';
+import {
+  getBillingChargeMode as getPricingBillingChargeMode,
+  getStandardDiscountPercent as getPricingStandardDiscountPercent,
+  getTestPricing,
+} from '../../../utils/bookings/pricing';
 import {normalizeFormText} from './helpers';
-
-const toPriceNumber = value => {
-  const numericValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
-  return Number.isFinite(numericValue) ? numericValue : 0;
-};
-const roundChargeAmount = value => {
-  const amount = toPriceNumber(value);
-  return amount > 0 ? Math.round(amount) : 0;
-};
 
 const hasPriceValue = value =>
   value !== null && value !== undefined && String(value).trim() !== '';
@@ -82,39 +78,11 @@ const mergeAppointmentBackendPrice = (patient, test, useBackendPrice) => {
 };
 
 export const getStandardDiscountPercent = test => {
-  const directPercent = toPriceNumber(
-    test?.percentageonstandard ||
-      test?.percentageOnStandard ||
-      test?.percentage_on_standard ||
-      test?.PercentageOnStandard ||
-      test?.percentagestandard ||
-      test?.percentageStandard ||
-      test?.percentage_standard ||
-      test?.base_discount_percent ||
-      test?.baseDiscountPercent ||
-      test?.PercentageStandard,
-  );
-  if (directPercent > 0) {
-    return directPercent;
-  }
-
-  const mrp = toPriceNumber(test?.mrp || test?.MRP || test?.amount);
-  const maxDiscount = toPriceNumber(test?.max_discount || test?.maxDiscount);
-  return mrp > 0 && maxDiscount > 0 ? (maxDiscount / mrp) * 100 : 0;
+  return getPricingStandardDiscountPercent(test);
 };
 
 const getBillingChargeMode = source =>
-  normalizeFormText(
-    source?.billingChargeMode ||
-      source?.BillingChargeMode ||
-      source?.billing_charge_mode ||
-      source?.chargeMode ||
-      source?.charge_mode ||
-      source?.selectedChargeMode ||
-      source?.selected_charge_mode ||
-      source?.selectedChargeModes ||
-      source?.selected_charge_modes,
-  ).toUpperCase();
+  getPricingBillingChargeMode(source);
 
 const getDisplayTestBillingMode = ({test, patient, panelCompanies = []}) => {
   const directMode = getBillingChargeMode(test);
@@ -144,34 +112,43 @@ const getDisplayTestBillingMode = ({test, patient, panelCompanies = []}) => {
 };
 
 export const getDisplayTestPrice = (test, options = {}) => {
-  const mrp = toPriceNumber(getRawPriceValue(test?.mrp, test?.MRP, test?.amount));
-  const rawCharge = getRawPriceValue(test?.charge, test?.Charge);
-  const charge = toPriceNumber(rawCharge);
-  const baseMrp = mrp || charge;
+  const panelCompanies = Array.isArray(options.panelCompanies)
+    ? options.panelCompanies
+    : [];
+  const testPanelId = normalizeFormText(test?.panelCompanyId || test?.compCatId);
+  const testPanelName = normalizeFormText(
+    test?.panelCompanyName || test?.panel_company || test?.panelCompany,
+  ).toLowerCase();
+  const matchedPanelCompany = panelCompanies.find(company => {
+    const companyPanelId = normalizeFormText(company?.compCatId || company?.id);
+    const companyName = normalizeFormText(
+      company?.name || company?.panelCompany,
+    ).toLowerCase();
+
+    return (
+      (testPanelId && companyPanelId && testPanelId === companyPanelId) ||
+      (testPanelName && companyName && testPanelName === companyName)
+    );
+  });
   const billingMode = getDisplayTestBillingMode({
     test,
     patient: options.patient,
-    panelCompanies: options.panelCompanies,
+    panelCompanies,
   });
-
-  if (billingMode.includes('F')) {
-    return 0;
-  }
-
-  if (billingMode.includes('C')) {
-    return roundChargeAmount(mrp || baseMrp);
-  }
-
-  const discountPercent = Math.min(
-    100,
-    Math.max(0, getStandardDiscountPercent(test)),
-  );
-  if (discountPercent > 0 && baseMrp > 0) {
-    return roundChargeAmount(
-      Math.max(0, baseMrp - (baseMrp * discountPercent) / 100),
-    );
-  }
-  return roundChargeAmount(baseMrp || charge);
+  return getTestPricing({
+    ...test,
+    selected_charge_mode: billingMode,
+    showmrp:
+      test?.showmrp ??
+      test?.showMrp ??
+      test?.show_mrp ??
+      test?.ShowMRP ??
+      matchedPanelCompany?.showmrp ??
+      matchedPanelCompany?.showMrp ??
+      matchedPanelCompany?.show_mrp ??
+      matchedPanelCompany?.ShowMRP ??
+      0,
+  }).charge;
 };
 
 export const getPatientCceTestBookingStatus = patient =>

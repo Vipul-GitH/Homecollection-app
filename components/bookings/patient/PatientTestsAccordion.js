@@ -3,6 +3,7 @@ import {Modal, NativeModules, Text, TouchableOpacity, View} from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import {getUploadFileName} from '../../../screens/bookings/appointmentDetails/helpers';
 import {API_BASE_URL} from '../../../constants/config/api';
+import {getTestPricing} from '../../../utils/bookings/pricing';
 
 const {LocalDocumentPickerModule, LocalGeoCameraModule} = NativeModules;
 
@@ -89,9 +90,6 @@ const getChargeModeLabel = company => {
 
 const getTestPrice = test =>
   (() => {
-    const mrp = Number(test?.mrp || test?.amount || 0) || 0;
-    const charge = Number(test?.charge || 0) || 0;
-    const baseMrp = mrp || charge;
     const billingMode = toStableValue(
       test?.selected_charge_mode ||
         test?.selectedChargeMode ||
@@ -101,43 +99,7 @@ const getTestPrice = test =>
         test?.selectedChargeModes ||
         test?.selected_charge_modes,
     ).toUpperCase();
-
-    if (billingMode.includes('F')) {
-      return 0;
-    }
-
-    if (billingMode.includes('C')) {
-      return Math.round(mrp || baseMrp);
-    }
-
-    const directDiscountPercent =
-      Number(
-        test?.percentageonstandard ||
-          test?.percentageOnStandard ||
-          test?.percentage_on_standard ||
-          test?.PercentageOnStandard ||
-          test?.percentagestandard ||
-          test?.percentageStandard ||
-          test?.percentage_standard ||
-          test?.base_discount_percent ||
-          test?.baseDiscountPercent ||
-          0,
-      ) || 0;
-    const maxDiscount = Number(test?.max_discount || test?.maxDiscount || 0) || 0;
-    const discountPercent =
-      directDiscountPercent > 0
-        ? directDiscountPercent
-        : baseMrp > 0 && maxDiscount > 0
-        ? (maxDiscount / baseMrp) * 100
-        : 0;
-
-    if (discountPercent > 0 && baseMrp > 0) {
-      return Math.round(
-        Math.max(0, baseMrp - (baseMrp * discountPercent) / 100),
-      );
-    }
-
-    return Math.round(baseMrp || charge);
+    return getTestPricing({...test, selected_charge_mode: billingMode}).charge;
   })();
 
 const TEST_BOOKING_STATUS_OPTIONS = [

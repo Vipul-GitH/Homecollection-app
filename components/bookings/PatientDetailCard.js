@@ -32,6 +32,10 @@ import PatientDocumentsList from './patient/PatientDocumentsList';
 import PatientDocumentViewerModal from './patient/PatientDocumentViewerModal';
 import RequiredLabel from './appointmentDetails/RequiredLabel';
 import {API_BASE_URL} from '../../constants/config/api';
+import {
+  getStandardDiscountPercent as getPricingStandardDiscountPercent,
+  getTestPricing,
+} from '../../utils/bookings/pricing';
 
 const {LocalDocumentPickerModule, LocalGeoCameraModule} = NativeModules;
 const DOCUMENT_ZOOM_MIN = 1;
@@ -60,41 +64,11 @@ const normalizePatientTagValues = value => {
     .filter(Boolean);
 };
 
-const toPriceNumber = value => {
-  const numericValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
-  return Number.isFinite(numericValue) ? numericValue : 0;
-};
-const roundChargeAmount = value => {
-  const amount = toPriceNumber(value);
-  return amount > 0 ? Math.round(amount) : 0;
-};
-
 const getStandardDiscountPercent = test => {
-  const directPercent = toPriceNumber(
-    test?.percentageonstandard ||
-      test?.percentageOnStandard ||
-      test?.percentage_on_standard ||
-      test?.PercentageOnStandard ||
-      test?.percentagestandard ||
-      test?.percentageStandard ||
-      test?.percentage_standard ||
-      test?.base_discount_percent ||
-      test?.baseDiscountPercent ||
-      test?.PercentageStandard,
-  );
-  if (directPercent > 0) {
-    return directPercent;
-  }
-
-  const mrp = toPriceNumber(test?.mrp || test?.MRP || test?.amount);
-  const maxDiscount = toPriceNumber(test?.max_discount || test?.maxDiscount);
-  return mrp > 0 && maxDiscount > 0 ? (maxDiscount / mrp) * 100 : 0;
+  return getPricingStandardDiscountPercent(test);
 };
 
 const getDisplayTestPrice = test => {
-  const mrp = toPriceNumber(test?.mrp || test?.MRP || test?.amount);
-  const charge = toPriceNumber(test?.charge || test?.Charge);
-  const baseMrp = mrp || charge;
   const billingMode = toStableValue(
     test?.selected_charge_mode ||
       test?.selectedChargeMode ||
@@ -104,22 +78,7 @@ const getDisplayTestPrice = test => {
       test?.selectedChargeModes ||
       test?.selected_charge_modes,
   ).toUpperCase();
-
-  if (billingMode.includes('F')) {
-    return 0;
-  }
-
-  if (billingMode.includes('C')) {
-    return roundChargeAmount(mrp || baseMrp);
-  }
-
-  const discountPercent = Math.min(100, Math.max(0, getStandardDiscountPercent(test)));
-  if (discountPercent > 0 && baseMrp > 0) {
-    return roundChargeAmount(
-      Math.max(0, baseMrp - (baseMrp * discountPercent) / 100),
-    );
-  }
-  return roundChargeAmount(baseMrp || charge);
+  return getTestPricing({...test, selected_charge_mode: billingMode}).charge;
 };
 
 const getTestDedupeKey = test =>

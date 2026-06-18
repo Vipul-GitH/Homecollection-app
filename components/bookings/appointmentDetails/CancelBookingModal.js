@@ -40,6 +40,8 @@ function CancelBookingModal({
 }) {
   const isPatientCancellation = Boolean(cancelTargetPatient);
   const patientName = cancelTargetPatient?.name || 'Patient';
+  const isPatientRequestedCancellation =
+    cancellationReason === 'Patient requested cancellation';
 
   return (
     <Modal
@@ -127,12 +129,22 @@ function CancelBookingModal({
                 </View>
               </View>
 
+              {isPatientRequestedCancellation ? (
+                <RequiredLabel styles={styles}>Patient Request Details</RequiredLabel>
+              ) : (
+                <Text style={styles.addPatientFieldLabel}>Remarks</Text>
+              )}
               <TextInput
                 value={cancelRemarks}
                 onChangeText={setCancelRemarks}
-                placeholder="Remarks (optional)"
+                placeholder={
+                  isPatientRequestedCancellation
+                    ? 'Enter patient cancellation request details'
+                    : 'Remarks (optional)'
+                }
                 placeholderTextColor={BRAND.textMuted}
                 style={styles.cancelRemarksInput}
+                multiline
               />
 
               <TouchableOpacity

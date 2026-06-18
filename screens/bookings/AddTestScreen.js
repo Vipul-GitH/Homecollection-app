@@ -30,6 +30,7 @@ import {
 import {
   normalizePanelCompanyItems,
 } from './appointmentDetails/helpers';
+import {getTestPricing} from '../../utils/bookings/pricing';
 
 const {CatalogDatabaseModule} = NativeModules;
 const CATALOG_PAGE_SIZE = 10;
@@ -1251,6 +1252,23 @@ function AddTestScreen({
                     Boolean(selectedGroup) &&
                     !selectedSubgroup;
                   const isTestsList = Boolean(selectedSubgroup) || isSearchResultsList;
+                  const testPricing = isTestsList
+                    ? getTestPricing({
+                        ...item,
+                        selected_charge_mode:
+                          activePanelCompany?.billingChargeMode ||
+                          activePanelCompany?.chargeMode ||
+                          activePanelCompany?.BillingChargeMode ||
+                          '',
+                        showmrp:
+                          activePanelCompany?.showmrp ??
+                          activePanelCompany?.showMrp ??
+                          activePanelCompany?.show_mrp ??
+                          activePanelCompany?.ShowMRP ??
+                          item?.showmrp ??
+                          0,
+                      })
+                    : null;
                   const testDisplayTitle =
                     item?.description?.trim() ||
                     (item?.booked_code ? `Test ${item.booked_code}` : '');
@@ -1301,8 +1319,13 @@ function AddTestScreen({
                           </Text>
                           {isSearchResultsList ? (
                             <Text style={styles.sampleCollectionCatalogMeta}>
-                              Code: {item?.booked_code || 'N/A'} | MRP:{' '}
-                              {item?.mrp ?? 0}
+                              Code: {item?.booked_code || 'N/A'} | Price:{' '}
+                              {testPricing?.charge ?? item?.mrp ?? 0}
+                            </Text>
+                          ) : null}
+                          {isTestsList && !isSearchResultsList ? (
+                            <Text style={styles.sampleCollectionCatalogMeta}>
+                              Price: {testPricing?.charge ?? item?.mrp ?? 0}
                             </Text>
                           ) : null}
                         </View>

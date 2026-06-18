@@ -136,7 +136,13 @@ function AddressEditScreen({
     </View>
   );
 
-  const renderAddressSelect = ({field, label, required = false, onPress}) => (
+  const renderAddressSelect = ({
+    field,
+    label,
+    required = false,
+    onPress,
+    disabled = false,
+  }) => (
     <View style={styles.addPatientFieldHalf}>
       <Text style={styles.addPatientFieldLabel}>
         {label}
@@ -144,8 +150,12 @@ function AddressEditScreen({
       </Text>
       <TouchableOpacity
         activeOpacity={0.85}
-        style={styles.addPatientDatePickerButton}
-        onPress={onPress}>
+        style={[
+          styles.addPatientDatePickerButton,
+          disabled && styles.addPatientInputDisabled,
+        ]}
+        onPress={onPress}
+        disabled={disabled}>
         <Text
           style={[
             styles.addPatientDatePickerText,
@@ -166,6 +176,11 @@ function AddressEditScreen({
   const hasSelectedAddressCity = Boolean(normalizeFormText(addressForm.city));
   const hasAddressPincode = Boolean(normalizeFormText(addressForm.pincode));
   const shouldShowAddressDetails = hasSelectedAddressCity && hasAddressPincode;
+  const hasNumericFloor = Boolean(normalizeFormText(addressForm.floor));
+  const hasFloorSpecial = Boolean(
+    normalizeFormText(addressForm.floor_special) &&
+      normalizeFormText(addressForm.floor_special) !== 'None',
+  );
 
   return (
     <>
@@ -279,14 +294,15 @@ function AddressEditScreen({
                     {renderAddressInput({
                       field: 'floor',
                       label: 'Floor',
-                      required: addressForm.floor_special !== 'None',
+                      required: !hasFloorSpecial,
                       keyboardType: 'numeric',
-                      disabled: addressForm.floor_special === 'None',
+                      disabled: hasFloorSpecial,
                     })}
                     <View style={styles.addPatientFieldHalf}>
                       {renderAddressSelect({
                         field: 'floor_special',
                         label: 'Floor Special',
+                        disabled: hasNumericFloor,
                         onPress: () => setIsAddressFloorSpecialSelectVisible(true),
                       })}
                     </View>

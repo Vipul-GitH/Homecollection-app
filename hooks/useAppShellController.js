@@ -10,6 +10,10 @@ import {
 } from '../services/local/panelCatalogLocal';
 import {getSpecimenNameForTestCode} from '../services/local/panelCatalogSpecimenLookup';
 import {
+  getStandardDiscountPercent as getPricingStandardDiscountPercent,
+  getTestPricing,
+} from '../utils/bookings/pricing';
+import {
   clearAppointmentDetailDraft,
   clearOfflineBookingStorage,
   getPendingOfflineActionCount,
@@ -24,52 +28,12 @@ import {useSessionAuth} from './useSessionAuth';
 const toStableValue = value =>
   value === null || value === undefined ? '' : String(value).trim();
 
-const toCurrencyNumber = value => {
-  const numericValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
-  return Number.isFinite(numericValue) ? numericValue : 0;
-};
-
-const roundChargeAmount = value => {
-  const amount = toCurrencyNumber(value);
-  return amount > 0 ? Math.round(amount) : 0;
-};
-
 const getTestStandardDiscountPercent = test => {
-  const directPercent = toCurrencyNumber(
-    test?.percentageonstandard ||
-      test?.percentageOnStandard ||
-      test?.percentage_on_standard ||
-      test?.PercentageOnStandard ||
-      test?.percentagestandard ||
-      test?.percentageStandard ||
-      test?.percentage_standard ||
-      test?.base_discount_percent ||
-      test?.baseDiscountPercent ||
-      test?.PercentageStandard,
-  );
-  if (directPercent > 0) {
-    return directPercent;
-  }
-
-  const mrp = toCurrencyNumber(test?.mrp || test?.MRP || test?.amount);
-  const maxDiscount = toCurrencyNumber(test?.max_discount || test?.maxDiscount);
-  return mrp > 0 && maxDiscount > 0 ? (maxDiscount / mrp) * 100 : 0;
+  return getPricingStandardDiscountPercent(test);
 };
 
 const getDiscountedTestPrice = test => {
-  const mrp = toCurrencyNumber(test?.mrp || test?.MRP || test?.amount);
-  const charge = toCurrencyNumber(test?.charge || test?.Charge);
-  const baseMrp = mrp || charge;
-  const discountPercent = Math.min(
-    100,
-    Math.max(0, getTestStandardDiscountPercent(test)),
-  );
-  if (discountPercent > 0 && baseMrp > 0) {
-    return roundChargeAmount(
-      Math.max(0, baseMrp - (baseMrp * discountPercent) / 100),
-    );
-  }
-  return roundChargeAmount(baseMrp || charge);
+  return getTestPricing(test).charge;
 };
 
 const getAppointmentDetailDraftKey = booking =>
@@ -154,6 +118,7 @@ const buildApiPanelCompaniesFromPatient = patient => {
         compCatId,
         billingChargeMode: chargeModes[index] || '',
         chargeMode: chargeModes[index] || '',
+        showmrp: 0,
       };
     })
     .filter(Boolean);
@@ -236,6 +201,16 @@ const buildSeededPatientTests = (patient, panelCompany = null) =>
         resolvedPanelCompany?.billingChargeMode ||
         resolvedPanelCompany?.chargeMode ||
         '',
+      showmrp:
+        test?.showmrp ??
+        test?.showMrp ??
+        test?.show_mrp ??
+        test?.ShowMRP ??
+        resolvedPanelCompany?.showmrp ??
+        resolvedPanelCompany?.showMrp ??
+        resolvedPanelCompany?.show_mrp ??
+        resolvedPanelCompany?.ShowMRP ??
+        0,
       panelCompanyId:
         test?.compCatId ||
         test?.comp_cat_id ||
@@ -324,6 +299,16 @@ const withPanelContextForTests = (tests, patient, panelCompany = null) =>
       cat_details: test?.cat_details || test?.catDetails || '',
       selected_charge_mode:
         test?.selected_charge_mode || test?.selectedChargeMode || '',
+      showmrp:
+        test?.showmrp ??
+        test?.showMrp ??
+        test?.show_mrp ??
+        test?.ShowMRP ??
+        panelCompany?.showmrp ??
+        panelCompany?.showMrp ??
+        panelCompany?.show_mrp ??
+        panelCompany?.ShowMRP ??
+        0,
       panelCompanyId,
       centerId,
       atype,
@@ -363,6 +348,7 @@ const resolvePanelCompanyFromPatientName = async patient => {
           compCatId: apiPanelCompany.compCatId,
           details: toStableValue(localMatch?.CatDetails),
           billingChargeMode: apiPanelCompany.billingChargeMode,
+          showmrp: toStableValue(localMatch?.showmrp || localMatch?.ShowMRP) === '1' ? 1 : 0,
           panelCode: toStableValue(localMatch?.code || localMatch?.Code),
           panelAbarid: toStableValue(localMatch?.ABARID || localMatch?.abarid),
         };
@@ -391,6 +377,7 @@ const resolvePanelCompanyFromPatientName = async patient => {
       compCatId: toStableValue(bestMatch?.CompCatID),
       details: toStableValue(bestMatch?.CatDetails),
       billingChargeMode: toStableValue(bestMatch?.BillingChargeMode),
+      showmrp: toStableValue(bestMatch?.showmrp || bestMatch?.ShowMRP) === '1' ? 1 : 0,
       panelCode: toStableValue(bestMatch?.code || bestMatch?.Code),
       panelAbarid: toStableValue(bestMatch?.ABARID || bestMatch?.abarid),
     };
@@ -605,6 +592,32 @@ const getPatientSeedTestIdentities = (seedState, patientId) =>
     getTestSelectionIdentity,
   );
 
+const buildRemovedSeedTestIdentitiesMap = (seedState, currentState) => {
+  const removedSeedTestIdentitiesMap = {};
+  const seedTestsMap = seedState?.patientSelectedTestsMap || {};
+  const currentTestsMap = currentState?.patientSelectedTestsMap || {};
+
+  if (!currentState?.patientSelectedTestsMap) {
+    return removedSeedTestIdentitiesMap;
+  }
+
+  Object.keys(seedTestsMap).forEach(patientId => {
+    const currentIdentities = new Set(
+      (currentTestsMap[patientId] || []).map(getTestSelectionIdentity),
+    );
+    const removedSeedIdentities = getPatientSeedTestIdentities(
+      seedState,
+      patientId,
+    ).filter(identity => !currentIdentities.has(identity));
+
+    if (removedSeedIdentities.length) {
+      removedSeedTestIdentitiesMap[patientId] = removedSeedIdentities;
+    }
+  });
+
+  return removedSeedTestIdentitiesMap;
+};
+
 const normalizeDraftState = draftState => {
   if (!draftState || typeof draftState !== 'object') {
     return {};
@@ -749,7 +762,9 @@ const mergeAppointmentDetailStateWithDraft = (seedState, draftState) => {
 const mergeAppointmentDetailStateWithFreshBooking = (seedState, currentState) =>
   mergeAppointmentDetailStateWithDraft(seedState, {
     ...(currentState || {}),
-    removedSeedTestIdentitiesMap: {},
+    removedSeedTestIdentitiesMap:
+      currentState?.removedSeedTestIdentitiesMap ||
+      buildRemovedSeedTestIdentitiesMap(seedState, currentState),
   });
 
 const buildAppointmentDetailDraftForStorage = ({state, selectedBooking}) => {
@@ -1770,12 +1785,54 @@ export const useAppShellController = () => {
           childTest?.mrp || test?.mrp || childTest?.charge || test?.charge || 0,
         ) || 0;
       const selectedStandardDiscount = getTestStandardDiscountPercent(
-        selectedCatalogTest,
+        {
+          ...selectedCatalogTest,
+          selected_charge_mode:
+            panelCompany?.billingChargeMode ||
+            panelCompany?.chargeMode ||
+            panelCompany?.BillingChargeMode ||
+            '',
+          showmrp:
+            panelCompany?.showmrp ??
+            panelCompany?.showMrp ??
+            panelCompany?.show_mrp ??
+            panelCompany?.ShowMRP ??
+            selectedCatalogTest?.showmrp ??
+            0,
+        },
       );
       const selectedDiscountedPrice = getDiscountedTestPrice({
         ...selectedCatalogTest,
         mrp: selectedMrp,
         percentageonstandard: selectedStandardDiscount,
+        selected_charge_mode:
+          panelCompany?.billingChargeMode ||
+          panelCompany?.chargeMode ||
+          panelCompany?.BillingChargeMode ||
+          '',
+        showmrp:
+          panelCompany?.showmrp ??
+          panelCompany?.showMrp ??
+          panelCompany?.show_mrp ??
+          panelCompany?.ShowMRP ??
+          selectedCatalogTest?.showmrp ??
+          0,
+      });
+      const selectedPricing = getTestPricing({
+        ...selectedCatalogTest,
+        mrp: selectedMrp,
+        selected_charge_mode:
+          panelCompany?.billingChargeMode ||
+          panelCompany?.chargeMode ||
+          panelCompany?.BillingChargeMode ||
+          '',
+        showmrp:
+          panelCompany?.showmrp ??
+          panelCompany?.showMrp ??
+          panelCompany?.show_mrp ??
+          panelCompany?.ShowMRP ??
+          selectedCatalogTest?.showmrp ??
+          0,
       });
       const nextEntry = {
         key,
@@ -1788,6 +1845,12 @@ export const useAppShellController = () => {
           panelCompany?.chargeMode ||
           panelCompany?.BillingChargeMode ||
           '',
+        showmrp:
+          panelCompany?.showmrp ??
+          panelCompany?.showMrp ??
+          panelCompany?.show_mrp ??
+          panelCompany?.ShowMRP ??
+          0,
         panelCompanyId: panelCompany?.compCatId || '',
         testcode1:
           childTest?.testcode1 ||
@@ -1807,14 +1870,7 @@ export const useAppShellController = () => {
         mrp: selectedMrp,
         charge: selectedDiscountedPrice,
         percentageonstandard: selectedStandardDiscount,
-        max_discount:
-          Number(
-            childTest?.max_discount ||
-              test?.max_discount ||
-              childTest?.maxDiscount ||
-              test?.maxDiscount ||
-              0,
-          ) || Math.max(0, selectedMrp - selectedDiscountedPrice),
+        max_discount: selectedPricing.maxDiscount,
         max_allowed_discount:
           Number(
             childTest?.max_allowed_discount ||

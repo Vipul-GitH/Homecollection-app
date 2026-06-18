@@ -215,6 +215,11 @@ export const normalizePanelCompanyItems = (responseData, options = {}) => {
         panelAbarid: normalizeFormText(item?.ABARID || item?.abarid) || syncAbarid,
         syncKey,
         billingChargeMode: normalizeFormText(item?.BillingChargeMode),
+        showmrp: normalizeFormText(
+          item?.showmrp || item?.showMrp || item?.show_mrp || item?.ShowMRP,
+        ) === '1'
+          ? 1
+          : 0,
         searchKey: normalizeFormText(item?.pname).toLowerCase(),
       };
     })

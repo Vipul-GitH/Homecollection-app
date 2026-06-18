@@ -70,6 +70,8 @@ const SYNC_TABLE_SPECS = {
       'title',
       'email',
       'BillingChargeMode',
+      'showmrp',
+      'Active',
       'updated_at',
     ],
     primaryKey: ['CenterID', 'Atype', 'code', 'ABARID'],
@@ -135,6 +137,7 @@ const SYNC_TABLE_SPECS = {
       'CenterID',
       'MRP',
       'PanelRateID',
+      'Active',
       'updated_at',
     ],
     primaryKey: ['CompCatID', 'GCode', 'SCode', 'TestCode', 'CTestCode', 'CenterID'],
@@ -404,6 +407,7 @@ const buildAddressSyncKeyFromRow = (rowIndex, row) =>
 const COLUMN_ALIASES = {
   address: {
     ophone: ['Omobile'],
+    showmrp: ['ShowMRP', 'showMRP', 'ShowMrp'],
   },
   panelrates: {
     PercentageOnStandard: ['percentageonstandard'],
@@ -434,6 +438,14 @@ const writeRawSyncInsert = (stream, tableName, rowIndex, row, seedTs) => {
 
     if (tableName === 'address' && column === 'sync_key') {
       return buildAddressSyncKeyFromRow(rowIndex, row);
+    }
+
+    if (tableName === 'address' && column === 'showmrp') {
+      return getRowValue(tableName, rowIndex, row, column) || '0';
+    }
+
+    if (column === 'Active') {
+      return getRowValue(tableName, rowIndex, row, column) || '1';
     }
 
     return getRowValue(tableName, rowIndex, row, column);
@@ -551,7 +563,7 @@ const rawSyncSchemaSql = () =>
   Object.entries(SYNC_TABLE_SPECS)
     .map(([tableName, spec]) => {
       const columns = spec.columns
-        .map(column => `${quoteIdent(column)} TEXT`)
+        .map(column => syncColumnDefinition(tableName, column))
         .join(',\n  ');
       const primaryKey = spec.primaryKey.map(quoteIdent).join(', ');
 
@@ -564,6 +576,15 @@ CREATE TABLE ${quoteIdent(tableName)} (
 `;
     })
     .join('\n');
+
+const syncColumnDefinition = (tableName, column) => {
+  const type =
+    tableName === 'address' && column.toLowerCase() === 'showmrp'
+      ? 'TINYINT(1) NOT NULL DEFAULT 0'
+      : 'TEXT';
+
+  return `${quoteIdent(column)} ${type}`;
+};
 
 const writeSyncMetaBaseline = (stream, seedTs) => {
   Object.keys(SYNC_TABLE_SPECS).forEach(tableName => {
@@ -616,6 +637,8 @@ CREATE TABLE panel_companies (
   billing_charge_mode TEXT,
   center_id INTEGER,
   atype TEXT,
+  showmrp INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
   search_key TEXT
 );
 CREATE TABLE groups (gcode TEXT PRIMARY KEY, description TEXT);
@@ -649,7 +672,8 @@ CREATE TABLE panel_rates (
   max_discount REAL,
   base_discount_percent REAL,
   max_allowed_discount_percent REAL,
-  booked_flag INTEGER
+  booked_flag INTEGER,
+  active INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE test_profiles (
   gcode TEXT,
@@ -791,6 +815,8 @@ const buildDatabase = ({input, extraInputs, output, version, sqlite3Path, seedTs
             compCatId: toInt(row[index.category]),
             category: cleanText(row[index.category]),
             billingChargeMode: cleanText(row[index.BillingChargeMode]),
+            showmrp: toInt(row[index.showmrp]) === 1 ? 1 : 0,
+            active: toInt(row[index.Active]) === 0 ? 0 : 1,
           });
         });
       } else if (tableName === 'groupmaster') {
@@ -855,6 +881,7 @@ const buildDatabase = ({input, extraInputs, output, version, sqlite3Path, seedTs
               'base_discount_percent',
               'max_allowed_discount_percent',
               'booked_flag',
+              'active',
             ],
             [
               toInt(row[index.CompCatID]),
@@ -870,6 +897,7 @@ const buildDatabase = ({input, extraInputs, output, version, sqlite3Path, seedTs
                 percentageOnStandard,
               toFloat(row[index.MaximumpercentageAllowed]),
               toInt(row[index.BookedFlag]),
+              toInt(row[index.Active]) === 0 ? 0 : 1,
             ],
           );
         });
@@ -936,6 +964,8 @@ const buildDatabase = ({input, extraInputs, output, version, sqlite3Path, seedTs
         'billing_charge_mode',
         'center_id',
         'atype',
+        'showmrp',
+        'active',
         'search_key',
       ],
       [
@@ -953,6 +983,8 @@ const buildDatabase = ({input, extraInputs, output, version, sqlite3Path, seedTs
         address.billingChargeMode,
         address.centerId,
         address.atype,
+        address.showmrp,
+        address.active,
         `${address.pname} ${catDetails} ${address.compCatId}`.toLowerCase(),
       ],
     );

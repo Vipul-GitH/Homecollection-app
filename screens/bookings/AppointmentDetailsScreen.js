@@ -101,6 +101,10 @@ import {
   collectUniqueTubesForSelectedTests,
 } from '../../utils/bookings/sampleTubeMapping';
 import {
+  getStandardDiscountPercent as getPricingStandardDiscountPercent,
+  getTestPricing,
+} from '../../utils/bookings/pricing';
+import {
   sampleTubeMappingCache,
   sampleTubeMappingRequests,
 } from '../../utils/bookings/sampleTubeMappingCache';
@@ -218,49 +222,12 @@ const toCurrencyNumber = value => {
   const normalizedValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
   return Number.isFinite(normalizedValue) ? normalizedValue : 0;
 };
-const roundChargeAmount = value => {
-  const amount = toCurrencyNumber(value);
-  return amount > 0 ? Math.round(amount) : 0;
-};
 const hasCurrencyValue = value =>
   value !== null && value !== undefined && String(value).trim() !== '';
 const getRawCurrencyValue = (...values) =>
   values.find(value => hasCurrencyValue(value));
 const getTestStandardDiscountPercent = test => {
-  const directPercent = toCurrencyNumber(
-    test?.percentageonstandard ||
-      test?.percentageOnStandard ||
-      test?.percentage_on_standard ||
-      test?.PercentageOnStandard ||
-      test?.percentagestandard ||
-      test?.percentageStandard ||
-      test?.percentage_standard ||
-      test?.base_discount_percent ||
-      test?.baseDiscountPercent ||
-      test?.PercentageStandard,
-  );
-  if (directPercent > 0) {
-    return directPercent;
-  }
-
-  const mrp = toCurrencyNumber(test?.mrp || test?.MRP || test?.amount);
-  const maxDiscount = toCurrencyNumber(test?.max_discount || test?.maxDiscount);
-  return mrp > 0 && maxDiscount > 0 ? (maxDiscount / mrp) * 100 : 0;
-};
-const getDiscountedTestPrice = test => {
-  const mrp = toCurrencyNumber(test?.mrp || test?.MRP || test?.amount);
-  const charge = toCurrencyNumber(test?.charge || test?.Charge);
-  const baseMrp = mrp || charge;
-  const standardDiscount = Math.min(
-    100,
-    Math.max(0, getTestStandardDiscountPercent(test)),
-  );
-  if (standardDiscount > 0 && baseMrp > 0) {
-    return roundChargeAmount(
-      Math.max(0, baseMrp - (baseMrp * standardDiscount) / 100),
-    );
-  }
-  return roundChargeAmount(baseMrp || charge);
+  return getPricingStandardDiscountPercent(test);
 };
 
 const getBackendPriceTestCode = test =>
@@ -330,30 +297,16 @@ const getAppointmentBackendPricedTest = (patient, test, useBackendPrice) => {
       backendTest?.compCatId ||
       backendTest?.comp_cat_id ||
       test?.panelCompanyId,
+    showmrp:
+      test?.showmrp ??
+      test?.showMrp ??
+      test?.show_mrp ??
+      test?.ShowMRP ??
+      backendTest?.showmrp ??
+      backendTest?.showMrp ??
+      backendTest?.show_mrp ??
+      backendTest?.ShowMRP,
   };
-};
-
-const getActualTestPrice = test => {
-  const billingMode = getBillingChargeMode(test);
-  const mrp = toCurrencyNumber(
-    getRawCurrencyValue(
-      test?.mrp,
-      test?.MRP,
-      test?.amount,
-      test?.charge,
-      test?.Charge,
-    ),
-  );
-
-  if (billingMode.includes('F')) {
-    return 0;
-  }
-
-  if (billingMode.includes('C')) {
-    return roundChargeAmount(mrp);
-  }
-
-  return getDiscountedTestPrice(test);
 };
 
 const getBillingChargeMode = company =>
@@ -629,6 +582,12 @@ const getMergedPatientSelectedTests = (patient, selectedTests, panelCompany = nu
       patient?.panel_abarid,
   );
   const baseBillingChargeMode = getBillingChargeMode(panelCompany);
+  const baseShowMrp =
+    panelCompany?.showmrp ??
+    panelCompany?.showMrp ??
+    panelCompany?.show_mrp ??
+    panelCompany?.ShowMRP ??
+    0;
 
   (Array.isArray(patient?.tests) ? patient.tests : []).forEach((test, index) => {
     const testCode = normalizeFormText(test?.code || test?.booked_code);
@@ -695,6 +654,12 @@ const getMergedPatientSelectedTests = (patient, selectedTests, panelCompany = nu
       chargeMode: getBillingChargeMode(test) || baseBillingChargeMode,
       selectedChargeMode: getBillingChargeMode(test) || baseBillingChargeMode,
       selected_charge_mode: getBillingChargeMode(test) || baseBillingChargeMode,
+      showmrp:
+        test?.showmrp ??
+        test?.showMrp ??
+        test?.show_mrp ??
+        test?.ShowMRP ??
+        baseShowMrp,
       isChildTest: false,
       parentDescription: '',
       dedupe_key: dedupeKey,
@@ -896,55 +861,67 @@ const getCompletedTubeNamesForPayload = sampleCollection => {
   return Array.from(new Set(tubeNames));
 };
 
-const buildAddressFormFromBooking = booking => ({
-  address_id: firstAddressValue(
-    booking?.address?.addressId,
-    booking?.address?.address_id,
-    booking?.addressId,
-    booking?.address_id,
-  ),
-  address_type: normalizeAddressField(booking?.address?.addressType) || 'Home',
-  house_flat_no: normalizeAddressField(booking?.address?.houseNumber),
-  floor: normalizeAddressField(booking?.address?.floor),
-  floor_special: normalizeAddressField(
+const buildAddressFormFromBooking = booking => {
+  const floorValue = normalizeAddressField(booking?.address?.floor);
+  const explicitFloorSpecial = normalizeAddressField(
     booking?.address?.floorSpecial || booking?.address?.floor_special,
-  ),
-  block_tower_no: normalizeAddressField(
-    booking?.address?.blockTowerNo ||
-      booking?.address?.block_tower_no ||
-      booking?.address?.blockNo ||
-      booking?.address?.towerNo,
-  ),
-  street_sector: normalizeAddressField(booking?.address?.streetLine),
-  landmark: normalizeAddressField(booking?.address?.landmark),
-  city: normalizeAddressField(booking?.address?.city),
-  colony: normalizeAddressField(booking?.address?.colonyName),
-  pincode: normalizeAddressField(booking?.address?.pincode),
-  route: normalizeAddressField(
-    firstAddressValue(
-      booking?.address?.routeNumber,
-      booking?.address?.routeNo,
-      booking?.address?.route_no,
-      booking?.address?.route_no_snapshot,
-      booking?.address?.route_number,
-      booking?.address?.routeNumberSnapshot,
-      booking?.routeNumber,
-      booking?.routeNo,
-      booking?.route_no,
-      booking?.route_no_snapshot,
+  );
+  const isNumericFloor = /^\d+$/.test(floorValue);
+  const floorSpecialValue =
+    explicitFloorSpecial || (floorValue && !isNumericFloor ? floorValue : 'None');
+
+  return {
+    address_id: firstAddressValue(
+      booking?.address?.addressId,
+      booking?.address?.address_id,
+      booking?.addressId,
+      booking?.address_id,
     ),
-  ),
-  is_manual_pincode: false,
-  google_location: normalizeAddressField(booking?.address?.locationUrl),
-  access_notes: normalizeAddressField(booking?.address?.accessNotes),
-});
+    address_type: normalizeAddressField(booking?.address?.addressType) || 'Home',
+    house_flat_no: normalizeAddressField(booking?.address?.houseNumber),
+    floor: isNumericFloor ? floorValue : '',
+    floor_special: floorSpecialValue,
+    block_tower_no: normalizeAddressField(
+      booking?.address?.blockTowerNo ||
+        booking?.address?.block_tower_no ||
+        booking?.address?.blockNo ||
+        booking?.address?.towerNo,
+    ),
+    street_sector: normalizeAddressField(booking?.address?.streetLine),
+    landmark: normalizeAddressField(booking?.address?.landmark),
+    city: normalizeAddressField(booking?.address?.city),
+    colony: normalizeAddressField(booking?.address?.colonyName),
+    pincode: normalizeAddressField(booking?.address?.pincode),
+    route: normalizeAddressField(
+      firstAddressValue(
+        booking?.address?.routeNumber,
+        booking?.address?.routeNo,
+        booking?.address?.route_no,
+        booking?.address?.route_no_snapshot,
+        booking?.address?.route_number,
+        booking?.address?.routeNumberSnapshot,
+        booking?.routeNumber,
+        booking?.routeNo,
+        booking?.route_no,
+        booking?.route_no_snapshot,
+      ),
+    ),
+    is_manual_pincode: false,
+    google_location: normalizeAddressField(booking?.address?.locationUrl),
+    access_notes: normalizeAddressField(booking?.address?.accessNotes),
+  };
+};
 
 const buildAddressPayloadFromForm = form =>
   sanitizePayloadValue({
     address_id: form.address_id,
     address_type: form.address_type,
     house_flat_no: form.house_flat_no,
-    floor: form.floor,
+    floor:
+      normalizeAddressField(form.floor_special) &&
+      normalizeAddressField(form.floor_special) !== 'None'
+        ? form.floor_special
+        : form.floor,
     block_tower_no: form.block_tower_no,
     street_line: form.street_sector,
     landmark: form.landmark,
@@ -2379,6 +2356,7 @@ function AppointmentDetailsScreen({
           : Array.isArray(patient?.tests)
           ? patient.tests
           : [];
+        const patientPanelCompanies = getPatientPanelCompanies(patient);
 
         return sourceTests.map(test => {
           const effectiveTest = getAppointmentBackendPricedTest(
@@ -2386,6 +2364,26 @@ function AppointmentDetailsScreen({
             test,
             isAppointmentSourceBooking,
           );
+          const testPanelId = normalizeFormText(
+            effectiveTest?.panelCompanyId ||
+              effectiveTest?.compCatId ||
+              effectiveTest?.comp_cat_id,
+          );
+          const testPanelName = normalizeFormText(
+            effectiveTest?.panelCompanyName ||
+              effectiveTest?.panel_company ||
+              effectiveTest?.panelCompany,
+          ).toLowerCase();
+          const matchedPanelCompany = patientPanelCompanies.find(company => {
+            const companyId = normalizeFormText(company?.compCatId || company?.id);
+            const companyName = normalizeFormText(
+              company?.name || company?.panelCompany || company?.pname,
+            ).toLowerCase();
+            return (
+              (testPanelId && companyId === testPanelId) ||
+              (testPanelName && companyName === testPanelName)
+            );
+          });
           const selectedChargeMode = getBillingModeForCalculation(
             effectiveTest?.selected_charge_mode ||
               effectiveTest?.selectedChargeMode ||
@@ -2403,14 +2401,23 @@ function AppointmentDetailsScreen({
               effectiveTest?.Charge,
             ),
           );
-          const discountedTestPrice = getActualTestPrice(
-            effectiveTest,
-            isAppointmentSourceBooking,
-          );
-          const standardDiscountAmount = Math.max(
-            0,
-            testMrp - discountedTestPrice,
-          );
+          const pricing = getTestPricing({
+            ...effectiveTest,
+            mrp: testMrp,
+            selected_charge_mode: selectedChargeMode,
+            showmrp:
+              effectiveTest?.showmrp ??
+              effectiveTest?.showMrp ??
+              effectiveTest?.show_mrp ??
+              effectiveTest?.ShowMRP ??
+              matchedPanelCompany?.showmrp ??
+              matchedPanelCompany?.showMrp ??
+              matchedPanelCompany?.show_mrp ??
+              matchedPanelCompany?.ShowMRP ??
+              0,
+          });
+          const discountedTestPrice = pricing.charge;
+          const standardDiscountAmount = pricing.standardDiscountAmount;
 
           return {
             key:
@@ -2430,26 +2437,20 @@ function AppointmentDetailsScreen({
             billingBucket: getBillingBucketFromChargeMode(selectedChargeMode),
             mrp: testMrp,
             charge: discountedTestPrice,
-            percentageonstandard: getTestStandardDiscountPercent(effectiveTest),
+            percentageonstandard: pricing.standardDiscountPercent,
             standard_discount_amount: standardDiscountAmount,
-            max_discount:
-              toCurrencyNumber(
-                getRawCurrencyValue(
-                  effectiveTest?.max_discount,
-                  effectiveTest?.maxDiscount,
-                ),
-              ) ||
-              standardDiscountAmount,
-            max_allowed_discount: toCurrencyNumber(
-              getRawCurrencyValue(
-                effectiveTest?.max_allowed_discount,
-                effectiveTest?.maxAllowedDiscount,
-              ),
-            ),
+            max_discount: pricing.maxDiscount,
+            max_allowed_discount: pricing.maxAllowedDiscount,
+            showmrp: pricing.showMrp ? 1 : 0,
           };
         });
       }),
-    [isAppointmentSourceBooking, patients, patientSelectedTestsMap],
+    [
+      getPatientPanelCompanies,
+      isAppointmentSourceBooking,
+      patients,
+      patientSelectedTestsMap,
+    ],
   );
   const bookingAmountFields = useMemo(
     () => selectedBooking?.amountFields || {},
@@ -2796,10 +2797,6 @@ function AppointmentDetailsScreen({
             test,
             isAppointmentSourceBooking,
           );
-          const actualTestPrice = getActualTestPrice(
-            effectiveTest,
-            isAppointmentSourceBooking,
-          );
           const actualTestMrp = toCurrencyNumber(
             getRawCurrencyValue(
               effectiveTest?.mrp,
@@ -2808,10 +2805,6 @@ function AppointmentDetailsScreen({
               effectiveTest?.charge,
               effectiveTest?.Charge,
             ),
-          );
-          const actualStandardDiscount = Math.max(
-            0,
-            actualTestMrp - actualTestPrice,
           );
           const panelCompany =
             normalizeFormText(
@@ -2869,6 +2862,23 @@ function AppointmentDetailsScreen({
                 patient?.billingChargeMode ||
                 patient?.chargeMode,
             ) || 'C';
+          const pricing = getTestPricing({
+            ...effectiveTest,
+            mrp: actualTestMrp,
+            selected_charge_mode: selectedChargeMode,
+            showmrp:
+              effectiveTest?.showmrp ??
+              effectiveTest?.showMrp ??
+              effectiveTest?.show_mrp ??
+              effectiveTest?.ShowMRP ??
+              matchedPanelCompany?.showmrp ??
+              matchedPanelCompany?.showMrp ??
+              matchedPanelCompany?.show_mrp ??
+              matchedPanelCompany?.ShowMRP ??
+              0,
+          });
+          const actualTestPrice = pricing.charge;
+          const actualStandardDiscount = pricing.standardDiscountAmount;
           const panelKey = [
             panelCompany.toLowerCase(),
             compCatId,
@@ -2898,21 +2908,11 @@ function AppointmentDetailsScreen({
               'Unnamed Test',
             mrp: actualTestMrp,
             charge: actualTestPrice,
-            percentageonstandard: getTestStandardDiscountPercent(effectiveTest),
+            percentageonstandard: pricing.standardDiscountPercent,
             standard_discount_amount: actualStandardDiscount,
-            max_discount:
-              toCurrencyNumber(
-                getRawCurrencyValue(
-                  effectiveTest?.max_discount,
-                  effectiveTest?.maxDiscount,
-                ),
-              ) || actualStandardDiscount,
-            max_allowed_discount: toCurrencyNumber(
-              getRawCurrencyValue(
-                effectiveTest?.max_allowed_discount,
-                effectiveTest?.maxAllowedDiscount,
-              ),
-            ),
+            max_discount: pricing.maxDiscount,
+            max_allowed_discount: pricing.maxAllowedDiscount,
+            showmrp: pricing.showMrp ? 1 : 0,
           });
         });
 
@@ -3613,9 +3613,12 @@ function AppointmentDetailsScreen({
               : nextValue && numericFloor < 1
               ? ''
               : nextValue;
+          if (nextForm.floor) {
+            nextForm.floor_special = 'None';
+          }
         }
 
-        if (field === 'floor_special' && nextValue === 'None') {
+        if (field === 'floor_special' && nextValue !== 'None') {
           nextForm.floor = '';
         }
 
@@ -3665,9 +3668,11 @@ function AppointmentDetailsScreen({
     [addressColonyOptions, loadAddressColonies, resolveRouteForPincode],
   );
   const handleUpdateAddress = useCallback(async () => {
+    const hasFloorValue = Boolean(normalizeFormText(addressForm.floor));
+    const floorSpecial = normalizeFormText(addressForm.floor_special);
+    const hasFloorSpecial = Boolean(floorSpecial && floorSpecial !== 'None');
     const requiredFields = [
       ['house_flat_no', 'House/Flat No'],
-      ...(addressForm.floor_special === 'None' ? [] : [['floor', 'Floor']]),
       ['city', 'City'],
       ['colony', 'Colony'],
       ['pincode', 'Pincode'],
@@ -3679,6 +3684,14 @@ function AppointmentDetailsScreen({
 
     if (missingField) {
       showAppAlert('Address Required', `Please enter ${missingField[1]}.`);
+      return;
+    }
+
+    if (!hasFloorValue && !hasFloorSpecial) {
+      showAppAlert(
+        'Address Required',
+        'Please enter Floor or select Floor Special.',
+      );
       return;
     }
 
@@ -3827,10 +3840,36 @@ function AppointmentDetailsScreen({
   };
 
   const updatePatientFormField = (field, value) => {
-    setPatientForm(previousForm => ({
-      ...previousForm,
-      [field]: value,
-    }));
+    setPatientForm(previousForm => {
+      const nextForm = {
+        ...previousForm,
+        [field]: value,
+      };
+
+      if (field === 'ageYears') {
+        const age = Number(value);
+        const today = new Date();
+        const currentYear = today.getFullYear();
+
+        if (Number.isFinite(age) && age > 0 && age <= 130) {
+          const existingDob = String(previousForm.dateOfBirth || '');
+          const [, , existingMonth, existingDay] =
+            existingDob.match(/^(\d{4})-(\d{2})-(\d{2})$/) || [];
+          const month = existingMonth || '01';
+          const day = existingDay || '01';
+          const hasBirthdayPassed =
+            Number(month) < today.getMonth() + 1 ||
+            (Number(month) === today.getMonth() + 1 &&
+              Number(day) <= today.getDate());
+          const birthYear = currentYear - age - (hasBirthdayPassed ? 0 : 1);
+          nextForm.dateOfBirth = `${birthYear}-${month}-${day}`;
+        } else if (!value) {
+          nextForm.dateOfBirth = '';
+        }
+      }
+
+      return nextForm;
+    });
   };
 
   const handlePatientFormPanelCompanyChange = value => {
@@ -4457,6 +4496,17 @@ function AppointmentDetailsScreen({
   );
 
   const confirmCancelBooking = async () => {
+    if (
+      cancellationReason === 'Patient requested cancellation' &&
+      !String(cancelRemarks || '').trim()
+    ) {
+      showAppAlert(
+        'Request Details Required',
+        'Please enter patient cancellation request details.',
+      );
+      return;
+    }
+
     const cancelPayload = buildCancelPayload();
     const didCancel = cancelTargetPatient
       ? true

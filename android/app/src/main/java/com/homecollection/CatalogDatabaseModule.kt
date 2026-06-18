@@ -57,6 +57,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         "title",
         "email",
         "BillingChargeMode",
+        "showmrp",
+        "Active",
         "updated_at",
       ),
       listOf("CenterID", "Atype", "code", "ABARID"),
@@ -123,6 +125,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         "CenterID",
         "MRP",
         "PanelRateID",
+        "Active",
         "updated_at",
       ),
       listOf("CompCatID", "GCode", "SCode", "TestCode", "CTestCode", "CenterID"),
@@ -329,7 +332,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
 
     syncTableSpecs.values.forEach { spec ->
       val columnSql = spec.columns.joinToString(", ") { column ->
-        "${quoteIdent(column)} TEXT"
+        syncColumnDefinition(spec.tableName, column)
       }
       val primaryKeySql = spec.primaryKey.joinToString(", ") { quoteIdent(it) }
       db.execSQL(
@@ -351,6 +354,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     }
 
     ensurePanelRatesDiscountPercentSchema(db)
+    ensureAddressShowMrpSchema(db)
+    ensureActiveFlagSchema(db)
     ensureAddressSyncKeySchema(db)
     ensureTestsGenderFlagSchema(db)
     ensurePerformanceIndexes(db)
@@ -395,6 +400,18 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
   private fun ensurePanelRatesDiscountPercentSchema(db: SQLiteDatabase) {
     ensureColumn(db, "panel_rates", "base_discount_percent", "REAL")
     ensureColumn(db, "panel_rates", "max_allowed_discount_percent", "REAL")
+  }
+
+  private fun ensureAddressShowMrpSchema(db: SQLiteDatabase) {
+    ensureColumn(db, "address", "showmrp", "TINYINT(1) NOT NULL DEFAULT 0")
+  }
+
+  private fun ensureActiveFlagSchema(db: SQLiteDatabase) {
+    ensureColumn(db, "address", "Active", "TEXT DEFAULT '1'")
+    ensureColumn(db, "panelrates", "Active", "TEXT DEFAULT '1'")
+    ensureColumn(db, "panel_companies", "showmrp", "INTEGER NOT NULL DEFAULT 0")
+    ensureColumn(db, "panel_companies", "active", "INTEGER NOT NULL DEFAULT 1")
+    ensureColumn(db, "panel_rates", "active", "INTEGER NOT NULL DEFAULT 1")
   }
 
   private fun ensureAddressSyncKeySchema(db: SQLiteDatabase) {
@@ -484,6 +501,17 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     )
   }
 
+  private fun syncColumnDefinition(tableName: String, columnName: String): String {
+    val type =
+      if (tableName == "address" && columnName.equals("showmrp", ignoreCase = true)) {
+        "TINYINT(1) NOT NULL DEFAULT 0"
+      } else {
+        "TEXT"
+      }
+
+    return "${quoteIdent(columnName)} $type"
+  }
+
   private fun Cursor.stringValue(columnName: String): String {
     val index = getColumnIndex(columnName)
     if (index < 0 || isNull(index)) {
@@ -548,8 +576,14 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       val db = openDatabase()
       val items = JSONArray()
       val normalizedAtype = atype.trim().uppercase()
-      val whereSql =
-        if (normalizedAtype.isBlank()) "" else "WHERE UPPER(TRIM(IFNULL(atype, ''))) = ?"
+      val whereParts = mutableListOf(
+        "TRIM(IFNULL(pname, '')) != ''",
+        "active = 1",
+      )
+      if (normalizedAtype.isNotBlank()) {
+        whereParts.add("UPPER(TRIM(IFNULL(atype, ''))) = ?")
+      }
+      val whereSql = "WHERE ${whereParts.joinToString(" AND ")}"
       val args =
         if (normalizedAtype.isBlank()) emptyArray<String>() else arrayOf(normalizedAtype)
 
@@ -563,7 +597,9 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           pname,
           CAST(comp_cat_id AS TEXT) AS comp_cat_id,
           cat_details,
-          billing_charge_mode
+          billing_charge_mode,
+          showmrp,
+          active
         FROM panel_companies
         $whereSql
         ORDER BY pname COLLATE NOCASE, comp_cat_id
@@ -580,7 +616,10 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
               .put("pname", cursor.stringValue("pname"))
               .put("CompCatID", cursor.stringValue("comp_cat_id"))
               .put("CatDetails", cursor.stringValue("cat_details"))
-              .put("BillingChargeMode", cursor.stringValue("billing_charge_mode")),
+              .put("BillingChargeMode", cursor.stringValue("billing_charge_mode"))
+              .put("showmrp", cursor.intValue("showmrp"))
+              .put("ShowMRP", cursor.intValue("showmrp"))
+              .put("Active", cursor.intValue("active")),
           )
         }
       }
@@ -763,6 +802,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         JOIN groups g ON g.gcode = pr.gcode
         WHERE pr.comp_cat_id = ?
           AND pr.booked_flag = 1
+          AND pr.active = 1
           AND TRIM(pr.gcode) != ''
           AND TRIM(pr.scode) != ''
           AND TRIM(pr.test_code) != ''
@@ -1081,6 +1121,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           $centerClause
           $rawCodeClause
           AND CAST(pr.BookedFlag AS TEXT) = '1'
+          AND CAST(IFNULL(pr.Active, '1') AS TEXT) = '1'
         ORDER BY CAST(pr.MRP AS REAL) DESC
         LIMIT 1
         """.trimIndent(),
@@ -1161,6 +1202,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         WHERE pr.comp_cat_id = ?
           $projectedCodeClause
           AND pr.booked_flag = 1
+          AND pr.active = 1
         ORDER BY pr.mrp DESC
         LIMIT 1
         """.trimIndent(),
@@ -1482,6 +1524,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           AND pr.gcode = ?
           AND pr.scode = ?
           AND pr.booked_flag = 1
+          AND pr.active = 1
           AND (
             pr.ctest_code = ?
             OR pr.test_code = ?
@@ -1645,6 +1688,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         AND pr.GCode = ?
         AND pr.SCode = ?
         AND CAST(pr.BookedFlag AS TEXT) = '1'
+          AND CAST(IFNULL(pr.Active, '1') AS TEXT) = '1'
         AND (
           pr.CTestCode = ?
           OR pr.TestCode = ?
@@ -1816,6 +1860,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       SELECT pname
       FROM panel_companies
       WHERE comp_cat_id = ?
+        AND TRIM(IFNULL(pname, '')) != ''
+        AND active = 1
       ORDER BY pname COLLATE NOCASE
       LIMIT 1
       """.trimIndent(),
@@ -1861,9 +1907,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
 
     db.rawQuery(
       """
-      SELECT id, sync_key, center_id, atype, pname, comp_cat_id, cat_details, billing_charge_mode
+      SELECT id, sync_key, center_id, atype, pname, comp_cat_id, cat_details, billing_charge_mode, showmrp, active
       FROM panel_companies
       WHERE $whereSql
+        AND TRIM(IFNULL(pname, '')) != ''
+        AND active = 1
       ORDER BY
         CASE WHEN sync_key LIKE ? THEN 0 ELSE 1 END,
         pname COLLATE NOCASE,
@@ -1884,6 +1932,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           .put("compCatId", cursor.stringValue("comp_cat_id"))
           .put("details", cursor.stringValue("cat_details"))
           .put("billingChargeMode", cursor.stringValue("billing_charge_mode"))
+          .put("showmrp", cursor.intValue("showmrp"))
+          .put("active", cursor.intValue("active"))
           .put("panelCode", syncParts.getOrNull(2) ?: panelCode)
           .put("panelAbarid", syncParts.getOrNull(3) ?: panelAbarid)
       }
@@ -1904,9 +1954,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
 
       db.rawQuery(
         """
-        SELECT id, sync_key, center_id, atype, pname, comp_cat_id, cat_details, billing_charge_mode
+        SELECT id, sync_key, center_id, atype, pname, comp_cat_id, cat_details, billing_charge_mode, showmrp, active
         FROM panel_companies
         WHERE ${fallbackWhereParts.joinToString(" AND ")}
+          AND TRIM(IFNULL(pname, '')) != ''
+          AND active = 1
         ORDER BY pname COLLATE NOCASE, comp_cat_id
         LIMIT 1
         """.trimIndent(),
@@ -1924,6 +1976,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("compCatId", cursor.stringValue("comp_cat_id"))
             .put("details", cursor.stringValue("cat_details"))
             .put("billingChargeMode", cursor.stringValue("billing_charge_mode"))
+            .put("showmrp", cursor.intValue("showmrp"))
+            .put("active", cursor.intValue("active"))
             .put("panelCode", syncParts.getOrNull(2) ?: panelCode)
             .put("panelAbarid", syncParts.getOrNull(3) ?: panelAbarid)
         }
@@ -1956,6 +2010,9 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       .put("CompCatID", cursor.stringValue("comp_cat_id"))
       .put("CatDetails", cursor.stringValue("cat_details"))
       .put("BillingChargeMode", cursor.stringValue("billing_charge_mode"))
+      .put("showmrp", cursor.intValue("showmrp"))
+      .put("ShowMRP", cursor.intValue("showmrp"))
+      .put("Active", cursor.intValue("active"))
       .put("code", syncParts.getOrNull(2) ?: fallbackPanelCode)
       .put("ABARID", syncParts.getOrNull(3) ?: fallbackPanelAbarid)
   }
@@ -1978,6 +2035,9 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       .put("CompCatID", identity.optString("compCatId", ""))
       .put("CatDetails", identity.optString("details", ""))
       .put("BillingChargeMode", identity.optString("billingChargeMode", ""))
+      .put("showmrp", identity.optInt("showmrp", 0))
+      .put("ShowMRP", identity.optInt("showmrp", 0))
+      .put("Active", identity.optInt("active", 1))
       .put("code", identity.optString("panelCode", ""))
       .put("ABARID", identity.optString("panelAbarid", ""))
 
@@ -2014,9 +2074,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
 
       db.rawQuery(
         """
-        SELECT id, sync_key, center_id, atype, pname, comp_cat_id, cat_details, billing_charge_mode
+        SELECT id, sync_key, center_id, atype, pname, comp_cat_id, cat_details, billing_charge_mode, showmrp, active
         FROM panel_companies
         WHERE UPPER(TRIM(IFNULL(atype, ''))) = 'C'
+          AND TRIM(IFNULL(pname, '')) != ''
+          AND active = 1
           AND ($selectedWhereSql)
         ORDER BY pname COLLATE NOCASE, comp_cat_id
         """.trimIndent(),
@@ -2069,9 +2131,11 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
 
     db.rawQuery(
       """
-      SELECT id, sync_key, center_id, atype, pname, comp_cat_id, cat_details, billing_charge_mode
+      SELECT id, sync_key, center_id, atype, pname, comp_cat_id, cat_details, billing_charge_mode, showmrp, active
       FROM panel_companies
       WHERE UPPER(TRIM(IFNULL(atype, ''))) = 'C'
+        AND TRIM(IFNULL(pname, '')) != ''
+        AND active = 1
         AND (${whereParts.joinToString(" OR ")})
       ORDER BY pname COLLATE NOCASE, comp_cat_id
       """.trimIndent(),
@@ -2174,6 +2238,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       JOIN groups g ON g.gcode = pr.gcode
       WHERE pr.comp_cat_id = ?
         AND pr.booked_flag = 1
+          AND pr.active = 1
         AND TRIM(pr.gcode) != ''
         AND TRIM(pr.scode) != ''
         AND TRIM(pr.test_code) != ''
@@ -2235,6 +2300,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       JOIN groups g ON g.gcode = pr.gcode
       WHERE pr.comp_cat_id = ?
         AND pr.booked_flag = 1
+          AND pr.active = 1
         AND TRIM(pr.gcode) != ''
         AND TRIM(pr.scode) != ''
         AND TRIM(pr.test_code) != ''
@@ -2275,6 +2341,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       WHERE pr.CompCatID = ?
         AND pr.CenterID = ?
         AND pr.BookedFlag = 1
+          AND CAST(IFNULL(pr.Active, '1') AS TEXT) = '1'
         AND TRIM(pr.GCode) != ''
         AND TRIM(pr.SCode) != ''
         AND TRIM(pr.TestCode) != ''
@@ -2315,6 +2382,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       WHERE CAST(pr.CompCatID AS TEXT) = ?
         AND CAST(pr.CenterID AS TEXT) = ?
         AND CAST(pr.BookedFlag AS TEXT) = '1'
+          AND CAST(IFNULL(pr.Active, '1') AS TEXT) = '1'
         AND TRIM(pr.GCode) != ''
         AND TRIM(pr.SCode) != ''
         AND TRIM(pr.TestCode) != ''
@@ -2356,6 +2424,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       WHERE pr.comp_cat_id = ?
         AND pr.gcode = ?
         AND pr.booked_flag = 1
+          AND pr.active = 1
         AND TRIM(pr.scode) != ''
         AND TRIM(pr.test_code) != ''
       ORDER BY sg.scode COLLATE NOCASE
@@ -2396,6 +2465,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       WHERE pr.comp_cat_id = ?
         AND pr.gcode = ?
         AND pr.booked_flag = 1
+          AND pr.active = 1
         AND TRIM(pr.scode) != ''
         AND TRIM(pr.test_code) != ''
       GROUP BY sg.scode, sg.description
@@ -2439,6 +2509,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         AND pr.CenterID = ?
         AND pr.GCode = ?
         AND pr.BookedFlag = 1
+          AND CAST(IFNULL(pr.Active, '1') AS TEXT) = '1'
         AND TRIM(pr.SCode) != ''
         AND TRIM(pr.TestCode) != ''
       ORDER BY sg.scode COLLATE NOCASE
@@ -2483,6 +2554,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         AND pr.CenterID = ?
         AND pr.GCode = ?
         AND pr.BookedFlag = 1
+          AND CAST(IFNULL(pr.Active, '1') AS TEXT) = '1'
         AND TRIM(pr.SCode) != ''
         AND TRIM(pr.TestCode) != ''
       GROUP BY sg.scode, sg.description
@@ -2580,6 +2652,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           AND pr.gcode = ?
           AND pr.scode = ?
           AND pr.booked_flag = 1
+          AND pr.active = 1
           AND TRIM(pr.test_code) != ''
       )
       WHERE booked_code IS NOT NULL
@@ -2696,6 +2769,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           AND pr.GCode = ?
           AND pr.SCode = ?
           AND pr.BookedFlag = 1
+          AND CAST(IFNULL(pr.Active, '1') AS TEXT) = '1'
           AND TRIM(pr.TestCode) != ''
       )
       WHERE booked_code IS NOT NULL
@@ -2814,6 +2888,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         LEFT JOIN test_specimens ts2 ON ts2.specimen_id = t2.specimen_id
         WHERE pr.comp_cat_id = ?
           AND pr.booked_flag = 1
+          AND pr.active = 1
           AND TRIM(pr.test_code) != ''
           AND (
             pr.test_code LIKE ? COLLATE NOCASE
@@ -2951,6 +3026,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         WHERE pr.CompCatID = ?
           AND pr.CenterID = ?
           AND pr.BookedFlag = 1
+          AND CAST(IFNULL(pr.Active, '1') AS TEXT) = '1'
           AND TRIM(pr.TestCode) != ''
           AND (
             pr.TestCode LIKE ? COLLATE NOCASE
@@ -3253,6 +3329,9 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       val value = when {
         column == "updated_at" -> rowUpdatedAt
         spec.tableName == "address" && column == "sync_key" -> addressSyncKey(row)
+        spec.tableName == "address" && column == "showmrp" ->
+          rowString(row, column).ifBlank { "0" }
+        column == "Active" -> rowString(row, column).ifBlank { "1" }
         else -> rowString(row, column)
       }
       values.put(column, value)
@@ -3435,6 +3514,12 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         "billing_charge_mode" to rowString(row, "BillingChargeMode"),
         "center_id" to rowInt(row, "CenterID"),
         "atype" to rowString(row, "Atype"),
+        "showmrp" to rowString(row, "showmrp").ifBlank { "0" }.toDoubleOrNull()?.toInt().let {
+          if (it == 1) 1 else 0
+        },
+        "active" to rowString(row, "Active").ifBlank { "1" }.toDoubleOrNull()?.toInt().let {
+          if (it == 0) 0 else 1
+        },
         "sync_key" to syncKey,
         "search_key" to "${rowString(row, "pname")} $catDetails $compCatId".lowercase(),
       ),
@@ -3481,6 +3566,9 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           rowNumber(row, "percentageonstandard"),
         "max_allowed_discount_percent" to rowNumber(row, "MaximumpercentageAllowed"),
         "booked_flag" to rowInt(row, "BookedFlag"),
+        "active" to rowString(row, "Active").ifBlank { "1" }.toDoubleOrNull()?.toInt().let {
+          if (it == 0) 0 else 1
+        },
       ),
     )
   }
@@ -3519,3 +3607,5 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
     super.invalidate()
   }
 }
+
+

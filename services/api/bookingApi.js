@@ -937,22 +937,31 @@ export const updateAssignedBookingStatusApi = async ({
     }
     const cancelPayload = buildAssignedBookingCancelPayload(payload);
     const cancelApiUrl = getAssignedBookingCancelApiUrl(cancelRouteId);
-    const response = await secureFetch(cancelApiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify(cancelPayload),
-      timeoutMs: NORMAL_WRITE_REQUEST_TIMEOUT_MS,
-    });
 
-    const responseData = await parseJsonResponse(response, '[Cancel Booking]');
-    const errorMessage = getApiErrorMessage(
-      response,
-      responseData,
-      'Unable to cancel booking right now.',
-    );
+    let response;
+    let responseData;
+    let errorMessage = '';
+
+    try {
+      response = await secureFetch(cancelApiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(cancelPayload),
+        timeoutMs: NORMAL_WRITE_REQUEST_TIMEOUT_MS,
+      });
+
+      responseData = await parseJsonResponse(response, '[Cancel Booking]');
+      errorMessage = getApiErrorMessage(
+        response,
+        responseData,
+        'Unable to cancel booking right now.',
+      );
+    } catch (error) {
+      throw error;
+    }
 
     if (errorMessage) {
       throw createApiError(response, errorMessage, responseData);
@@ -1446,9 +1455,14 @@ export const cancelAssignedBookingPatientApi = async ({
   bookingPatientId,
   cancelPayload = {},
 }) => {
-  const response = await secureFetch(
-    getAssignedBookingPatientCancelApiUrl(bookingId, bookingPatientId),
-    {
+  const url = getAssignedBookingPatientCancelApiUrl(bookingId, bookingPatientId);
+
+  let response;
+  let responseData;
+  let errorMessage = '';
+
+  try {
+    response = await secureFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1456,15 +1470,17 @@ export const cancelAssignedBookingPatientApi = async ({
       },
       body: JSON.stringify(cancelPayload || {}),
       timeoutMs: NORMAL_WRITE_REQUEST_TIMEOUT_MS,
-    },
-  );
+    });
 
-  const responseData = await parseJsonResponse(response, '[Cancel Patient]');
-  const errorMessage = getApiErrorMessage(
-    response,
-    responseData,
-    'Unable to cancel patient right now.',
-  );
+    responseData = await parseJsonResponse(response, '[Cancel Patient]');
+    errorMessage = getApiErrorMessage(
+      response,
+      responseData,
+      'Unable to cancel patient right now.',
+    );
+  } catch (error) {
+    throw error;
+  }
 
   if (errorMessage) {
     throw new Error(errorMessage);

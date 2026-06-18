@@ -14,6 +14,7 @@ import {
   getCatalogSubgroupId,
 } from '../../../screens/bookings/appointmentDetails/catalogHelpers';
 import {BRAND} from '../../../styles/appStyles';
+import {getTestPricing} from '../../../utils/bookings/pricing';
 
 function PanelCompanyFlowScreen({
   styles,
@@ -112,6 +113,23 @@ function PanelCompanyFlowScreen({
       const isSubgroupList =
         Boolean(selectedCatalogGroup) && !selectedCatalogSubgroup;
       const isTestsList = Boolean(selectedCatalogSubgroup);
+      const testPricing = isTestsList
+        ? getTestPricing({
+            ...item,
+            selected_charge_mode:
+              selectedPanelCompany?.billingChargeMode ||
+              selectedPanelCompany?.chargeMode ||
+              selectedPanelCompany?.BillingChargeMode ||
+              '',
+            showmrp:
+              selectedPanelCompany?.showmrp ??
+              selectedPanelCompany?.showMrp ??
+              selectedPanelCompany?.show_mrp ??
+              selectedPanelCompany?.ShowMRP ??
+              item?.showmrp ??
+              0,
+          })
+        : null;
       const title = getCatalogDisplayTitle({
         item,
         isGroupList,
@@ -154,8 +172,8 @@ function PanelCompanyFlowScreen({
                 ? `GCode: ${getCatalogGroupId(item) || 'N/A'}`
                 : isSubgroupList
                 ? `SCode: ${getCatalogSubgroupId(item) || 'N/A'}`
-                : `Code: ${item?.booked_code || 'N/A'} | MRP: ${
-                    item?.mrp ?? 0
+                : `Code: ${item?.booked_code || 'N/A'} | Price: ${
+                    testPricing?.charge ?? item?.mrp ?? 0
                   }`}
             </Text>
             {isTestsList ? (
@@ -179,6 +197,7 @@ function PanelCompanyFlowScreen({
       selectedCatalogGroup,
       selectedCatalogSubgroup,
       selectedPanelCompanyName,
+      selectedPanelCompany,
       setCatalogVisibleCount,
       setExpandedCatalogTests,
       setSelectedCatalogGroup,
