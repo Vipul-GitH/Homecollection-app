@@ -998,17 +998,13 @@ function AppointmentDetailsScreen({
     useState(false);
   const [isCancelTimeSlotSelectVisible, setIsCancelTimeSlotSelectVisible] =
     useState(false);
-  const [cancellationReason, setCancellationReason] = useState(
-    CANCELLATION_REASON_OPTIONS[0],
-  );
+  const [cancellationReason, setCancellationReason] = useState('');
   const [cancelRemarks, setCancelRemarks] = useState('');
   const [isCancelRescheduleRequested, setIsCancelRescheduleRequested] =
-    useState(true);
-  const [isCancelKnownSlot, setIsCancelKnownSlot] = useState(true);
+    useState(false);
+  const [isCancelKnownSlot, setIsCancelKnownSlot] = useState(null);
   const [cancelNewVisitDate, setCancelNewVisitDate] = useState('');
-  const [cancelNewTimeSlot, setCancelNewTimeSlot] = useState(
-    CANCEL_TIME_SLOT_OPTIONS[0],
-  );
+  const [cancelNewTimeSlot, setCancelNewTimeSlot] = useState('');
   const [linkedAppointmentDate, setLinkedAppointmentDate] = useState('');
   const [linkedAppointmentTimeSlot, setLinkedAppointmentTimeSlot] =
     useState('');
@@ -4063,18 +4059,15 @@ function AppointmentDetailsScreen({
   };
 
   const resetCancelForm = useCallback(() => {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    setCancellationReason(CANCELLATION_REASON_OPTIONS[0]);
+    setCancellationReason('');
     setIsCancellationReasonSelectVisible(false);
     setIsCancelTimeSlotSelectVisible(false);
-    setIsCancelRescheduleRequested(true);
-    setIsCancelKnownSlot(true);
+    setIsCancelRescheduleRequested(false);
+    setIsCancelKnownSlot(null);
     setCancelRemarks('');
-    setCancelNewVisitDate(toDateInputValue(tomorrow));
-    setCancelCalendarMonth(new Date(tomorrow.getFullYear(), tomorrow.getMonth(), 1));
-    setCancelNewTimeSlot(CANCEL_TIME_SLOT_OPTIONS[0]);
+    setCancelNewVisitDate('');
+    setCancelCalendarMonth(new Date());
+    setCancelNewTimeSlot('');
   }, []);
 
   const handlePatientCancelBooking = patient => {
@@ -4496,6 +4489,14 @@ function AppointmentDetailsScreen({
   );
 
   const confirmCancelBooking = async () => {
+    if (!String(cancellationReason || '').trim()) {
+      showAppAlert(
+        'Cancellation Reason Required',
+        'Please select a cancellation reason.',
+      );
+      return;
+    }
+
     if (
       cancellationReason === 'Patient requested cancellation' &&
       !String(cancelRemarks || '').trim()

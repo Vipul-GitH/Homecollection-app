@@ -239,7 +239,7 @@ function CancelBookingModal({
                           setIsCancelTimeSlotSelectVisible(previous => !previous)
                         }>
                         <Text style={styles.cancelSelectButtonText}>
-                          {cancelNewTimeSlot}
+                          {cancelNewTimeSlot || 'Select time slot'}
                         </Text>
                         <Ionicons
                           name={
