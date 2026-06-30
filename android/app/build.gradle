@@ -137,10 +137,10 @@ dependencies {
 afterEvaluate {
     tasks.matching { it.name == "configureCMakeRelWithDebInfo[arm64-v8a]" }.configureEach {
         if (rootProject.findProject(":react-native-worklets") != null) {
-            dependsOn(":react-native-worklets:prefabReleaseConfigurePackage")
+            dependsOn(":react-native-worklets:prefabReleasePackage")
         }
         if (rootProject.findProject(":react-native-reanimated") != null) {
-            dependsOn(":react-native-reanimated:prefabReleaseConfigurePackage")
+            dependsOn(":react-native-reanimated:prefabReleasePackage")
         }
     }
 }

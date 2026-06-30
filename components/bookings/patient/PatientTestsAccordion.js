@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useState} from 'react';
 import {Modal, NativeModules, Text, TouchableOpacity, View} from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import {getUploadFileName} from '../../../screens/bookings/appointmentDetails/helpers';
-import {API_BASE_URL} from '../../../constants/config/api';
+import {DOCUMENT_BASE_URL} from '../../../constants/config/api';
 import {getTestPricing} from '../../../utils/bookings/pricing';
 
 const {LocalDocumentPickerModule, LocalGeoCameraModule} = NativeModules;
@@ -174,10 +174,13 @@ const resolveDocumentUrl = value => {
   }
 
   if (/^https?:\/\//i.test(rawValue)) {
-    return rawValue;
+    return rawValue.replace(
+      /^https?:\/\/labmate\.bhasinpathlabs\.com:2010(?=\/|$)/i,
+      DOCUMENT_BASE_URL,
+    );
   }
 
-  return `${API_BASE_URL}/${rawValue.replace(/^\/+/, '')}`;
+  return `${DOCUMENT_BASE_URL}/${rawValue.replace(/^\/+/, '')}`;
 };
 
 const getDisplayNameFromUri = value => {

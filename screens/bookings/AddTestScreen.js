@@ -413,6 +413,8 @@ function AddTestScreen({
               __groupName: group?.group_name || '',
               __subgroupName: subgroup?.subgroup_name || '',
               __searchKey: `${test?.description || ''} ${
+                test?.shortname || ''
+              } ${
                 test?.booked_code || ''
               } ${group?.group_name || ''} ${
                 subgroup?.subgroup_name || ''
@@ -561,6 +563,8 @@ function AddTestScreen({
 
         const tests = extractSearchTestsFromCatalogResponse(response).filter(test => {
           const searchKey = `${test?.description || ''} ${
+            test?.shortname || ''
+          } ${
             test?.booked_code || ''
           } ${test?.__groupName || test?.group_name || ''} ${
             test?.__subgroupName || test?.subgroup_name || ''
@@ -574,6 +578,8 @@ function AddTestScreen({
             __groupName: test?.__groupName || test?.group_name || '',
             __subgroupName: test?.__subgroupName || test?.subgroup_name || '',
             __searchKey: `${test?.description || ''} ${
+              test?.shortname || ''
+            } ${
               test?.booked_code || ''
             } ${test?.__groupName || test?.group_name || ''} ${
               test?.__subgroupName || test?.subgroup_name || ''

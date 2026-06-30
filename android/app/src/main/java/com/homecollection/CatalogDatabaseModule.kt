@@ -463,6 +463,29 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
 
   private fun ensureTestsGenderFlagSchema(db: SQLiteDatabase) {
     ensureColumn(db, "tests", "gender_flag", "TEXT")
+    ensureColumn(db, "tests", "shortname", "TEXT")
+    db.execSQL(
+      """
+      UPDATE tests
+      SET shortname = (
+        SELECT Shortname
+        FROM test
+        WHERE test.Gcode = tests.gcode
+          AND test.Scode = tests.scode
+          AND test.TestCode = tests.test_code
+        LIMIT 1
+      )
+      WHERE (shortname IS NULL OR TRIM(shortname) = '')
+        AND EXISTS (
+          SELECT 1
+          FROM test
+          WHERE test.Gcode = tests.gcode
+            AND test.Scode = tests.scode
+            AND test.TestCode = tests.test_code
+            AND TRIM(IFNULL(test.Shortname, '')) != ''
+        )
+      """.trimIndent(),
+    )
   }
 
   private fun maxUpdatedAtForTable(db: SQLiteDatabase, tableName: String): String {
@@ -2595,6 +2618,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         dedupe_key,
         MIN(booked_code) AS booked_code,
         MIN(description) AS description,
+        MIN(shortname) AS shortname,
         MAX(profile) AS profile,
         MAX(charge) AS charge,
         MAX(mrp) AS mrp,
@@ -2630,6 +2654,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             NULLIF(pr.ctest_name, ''),
             NULLIF(pr.test_code, '')
           ) AS description,
+          COALESCE(NULLIF(t1.shortname, ''), NULLIF(t2.shortname, ''), NULLIF(pr.ctest_name, '')) AS shortname,
           COALESCE(t1.profile, t2.profile, 0) AS profile,
           pr.charge,
           pr.mrp,
@@ -2707,6 +2732,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         dedupe_key,
         MIN(booked_code) AS booked_code,
         MIN(description) AS description,
+        MIN(shortname) AS shortname,
         MAX(profile) AS profile,
         MAX(charge) AS charge,
         MAX(mrp) AS mrp,
@@ -2824,6 +2850,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         dedupe_key,
         MIN(booked_code) AS booked_code,
         MIN(description) AS description,
+        MIN(shortname) AS shortname,
         MAX(profile) AS profile,
         MAX(charge) AS charge,
         MAX(mrp) AS mrp,
@@ -2866,6 +2893,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             NULLIF(pr.ctest_name, ''),
             NULLIF(pr.test_code, '')
           ) AS description,
+          COALESCE(NULLIF(t1.shortname, ''), NULLIF(t2.shortname, ''), NULLIF(pr.ctest_name, '')) AS shortname,
           COALESCE(t1.profile, t2.profile, 0) AS profile,
           pr.charge,
           pr.mrp,
@@ -2895,6 +2923,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             OR pr.ctest_code LIKE ? COLLATE NOCASE
             OR t1.description LIKE ? COLLATE NOCASE
             OR t2.description LIKE ? COLLATE NOCASE
+            OR t1.shortname LIKE ? COLLATE NOCASE
+            OR t2.shortname LIKE ? COLLATE NOCASE
             OR pr.ctest_name LIKE ? COLLATE NOCASE
           )
       )
@@ -2905,7 +2935,16 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       ORDER BY description COLLATE NOCASE
       LIMIT ?
       """.trimIndent(),
-      arrayOf(compCatId, searchLike, searchLike, searchLike, searchLike, searchLike) +
+      arrayOf(
+        compCatId,
+        searchLike,
+        searchLike,
+        searchLike,
+        searchLike,
+        searchLike,
+        searchLike,
+        searchLike,
+      ) +
         genderArgs +
         arrayOf(limit.toString()),
     ).use { cursor ->
@@ -2919,6 +2958,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("dedupe_key", cursor.stringValue("dedupe_key"))
             .put("booked_code", bookedCode)
             .put("description", cursor.stringValue("description"))
+            .put("shortname", cursor.stringValue("shortname"))
             .put("is_profile", cursor.intValue("profile") == 1)
             .put("has_children", false)
             .put("charge", cursor.doubleValue("charge"))
@@ -2957,6 +2997,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         dedupe_key,
         MIN(booked_code) AS booked_code,
         MIN(description) AS description,
+        MIN(shortname) AS shortname,
         MAX(profile) AS profile,
         MAX(charge) AS charge,
         MAX(mrp) AS mrp,
@@ -2999,6 +3040,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             NULLIF(pr.CTestName, ''),
             NULLIF(pr.TestCode, '')
           ) AS description,
+          COALESCE(NULLIF(t1.shortname, ''), NULLIF(t2.shortname, ''), NULLIF(pr.CTestName, '')) AS shortname,
           COALESCE(t1.profile, t2.profile, 0) AS profile,
           CAST(pr.Charge AS REAL) AS charge,
           CAST(pr.MRP AS REAL) AS mrp,
@@ -3033,6 +3075,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             OR pr.CTestCode LIKE ? COLLATE NOCASE
             OR t1.description LIKE ? COLLATE NOCASE
             OR t2.description LIKE ? COLLATE NOCASE
+            OR t1.shortname LIKE ? COLLATE NOCASE
+            OR t2.shortname LIKE ? COLLATE NOCASE
             OR pr.CTestName LIKE ? COLLATE NOCASE
           )
       )
@@ -3043,7 +3087,17 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       ORDER BY description COLLATE NOCASE
       LIMIT ?
       """.trimIndent(),
-      arrayOf(compCatId, centerId, searchLike, searchLike, searchLike, searchLike, searchLike) +
+      arrayOf(
+        compCatId,
+        centerId,
+        searchLike,
+        searchLike,
+        searchLike,
+        searchLike,
+        searchLike,
+        searchLike,
+        searchLike,
+      ) +
         genderArgs +
         arrayOf(limit.toString()),
     ).use { cursor ->
@@ -3057,6 +3111,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("dedupe_key", cursor.stringValue("dedupe_key"))
             .put("booked_code", bookedCode)
             .put("description", cursor.stringValue("description"))
+            .put("shortname", cursor.stringValue("shortname"))
             .put("is_profile", cursor.intValue("profile") == 1)
             .put("has_children", false)
             .put("charge", cursor.doubleValue("charge"))
@@ -3441,6 +3496,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           "test_code" to rowString(row, "TestCode"),
           "testcode1" to rowString(row, "Testcode1"),
           "description" to rowString(row, "Description"),
+          "shortname" to rowString(row, "Shortname"),
           "gender_flag" to rowString(row, "Test"),
           "profile" to rowInt(row, "Profile"),
           "specimen_id" to rowInt(row, "SpecimenID"),

@@ -31,7 +31,7 @@ import {BRAND} from '../../styles/appStyles';
 import PatientDocumentsList from './patient/PatientDocumentsList';
 import PatientDocumentViewerModal from './patient/PatientDocumentViewerModal';
 import RequiredLabel from './appointmentDetails/RequiredLabel';
-import {API_BASE_URL} from '../../constants/config/api';
+import {DOCUMENT_BASE_URL} from '../../constants/config/api';
 import {
   getStandardDiscountPercent as getPricingStandardDiscountPercent,
   getTestPricing,
@@ -338,11 +338,16 @@ const resolvePatientDocumentUrl = value => {
   }
 
   if (/^https?:\/\//i.test(rawUrl)) {
-    return normalizeDocumentPreviewUri(rawUrl);
+    return normalizeDocumentPreviewUri(
+      rawUrl.replace(
+        /^https?:\/\/labmate\.bhasinpathlabs\.com:2010(?=\/|$)/i,
+        DOCUMENT_BASE_URL,
+      ),
+    );
   }
 
   return normalizeDocumentPreviewUri(
-    `${API_BASE_URL}/${rawUrl.replace(/^\/+/, '')}`,
+    `${DOCUMENT_BASE_URL}/${rawUrl.replace(/^\/+/, '')}`,
   );
 };
 

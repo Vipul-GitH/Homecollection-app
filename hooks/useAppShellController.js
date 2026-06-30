@@ -427,6 +427,7 @@ const buildEmptyAppointmentDetailState = () => ({
   patientPanelCompaniesMap: {},
   activePatientPanelCompanyMap: {},
   patientSelectedTestsMap: {},
+  explicitlyRemovedSeedTestIdentitiesMap: {},
   patientReportCourierMap: {},
   patientReportScheduleMap: {},
   patientSampleCollectionMap: {},
@@ -587,37 +588,6 @@ const getTestSelectionIdentity = test =>
     toStableValue(test?.key || test?.catalog_key),
   ].join('|');
 
-const getPatientSeedTestIdentities = (seedState, patientId) =>
-  (seedState?.patientSelectedTestsMap?.[patientId] || []).map(
-    getTestSelectionIdentity,
-  );
-
-const buildRemovedSeedTestIdentitiesMap = (seedState, currentState) => {
-  const removedSeedTestIdentitiesMap = {};
-  const seedTestsMap = seedState?.patientSelectedTestsMap || {};
-  const currentTestsMap = currentState?.patientSelectedTestsMap || {};
-
-  if (!currentState?.patientSelectedTestsMap) {
-    return removedSeedTestIdentitiesMap;
-  }
-
-  Object.keys(seedTestsMap).forEach(patientId => {
-    const currentIdentities = new Set(
-      (currentTestsMap[patientId] || []).map(getTestSelectionIdentity),
-    );
-    const removedSeedIdentities = getPatientSeedTestIdentities(
-      seedState,
-      patientId,
-    ).filter(identity => !currentIdentities.has(identity));
-
-    if (removedSeedIdentities.length) {
-      removedSeedTestIdentitiesMap[patientId] = removedSeedIdentities;
-    }
-  });
-
-  return removedSeedTestIdentitiesMap;
-};
-
 const normalizeDraftState = draftState => {
   if (!draftState || typeof draftState !== 'object') {
     return {};
@@ -626,9 +596,9 @@ const normalizeDraftState = draftState => {
   return draftState.data && typeof draftState.data === 'object'
     ? {
         ...draftState.data,
-        removedSeedTestIdentitiesMap:
-          draftState.removedSeedTestIdentitiesMap ||
-          draftState.data.removedSeedTestIdentitiesMap ||
+        explicitlyRemovedSeedTestIdentitiesMap:
+          draftState.explicitlyRemovedSeedTestIdentitiesMap ||
+          draftState.data.explicitlyRemovedSeedTestIdentitiesMap ||
           {},
       }
     : draftState;
@@ -639,16 +609,19 @@ const mergeAppointmentDetailStateWithDraft = (seedState, draftState) => {
   const draft = normalizeDraftState(draftState);
   const mergedPatientSelectedTestsMap = {...(seed.patientSelectedTestsMap || {})};
   const draftSelectedTestsMap = draft.patientSelectedTestsMap || {};
-  const removedSeedTestIdentitiesMap = draft.removedSeedTestIdentitiesMap || {};
+  const explicitlyRemovedSeedTestIdentitiesMap =
+    draft.explicitlyRemovedSeedTestIdentitiesMap || {};
 
   Array.from(
     new Set([
       ...Object.keys(draftSelectedTestsMap),
-      ...Object.keys(removedSeedTestIdentitiesMap),
+      ...Object.keys(explicitlyRemovedSeedTestIdentitiesMap),
     ]),
   ).forEach(patientId => {
     const seedTests = seed.patientSelectedTestsMap?.[patientId] || [];
-    const removedIdentities = new Set(removedSeedTestIdentitiesMap[patientId] || []);
+    const removedIdentities = new Set(
+      explicitlyRemovedSeedTestIdentitiesMap[patientId] || [],
+    );
     const visibleSeedTests = seedTests.filter(
       test => !removedIdentities.has(getTestSelectionIdentity(test)),
     );
@@ -679,6 +652,7 @@ const mergeAppointmentDetailStateWithDraft = (seedState, draftState) => {
       ...(draft.activePatientPanelCompanyMap || {}),
     },
     patientSelectedTestsMap: mergedPatientSelectedTestsMap,
+    explicitlyRemovedSeedTestIdentitiesMap,
     patientReportCourierMap: {
       ...(seed.patientReportCourierMap || {}),
       ...(draft.patientReportCourierMap || {}),
@@ -762,38 +736,29 @@ const mergeAppointmentDetailStateWithDraft = (seedState, draftState) => {
 const mergeAppointmentDetailStateWithFreshBooking = (seedState, currentState) =>
   mergeAppointmentDetailStateWithDraft(seedState, {
     ...(currentState || {}),
-    removedSeedTestIdentitiesMap:
-      currentState?.removedSeedTestIdentitiesMap ||
-      buildRemovedSeedTestIdentitiesMap(seedState, currentState),
+    explicitlyRemovedSeedTestIdentitiesMap:
+      currentState?.explicitlyRemovedSeedTestIdentitiesMap || {},
   });
 
-const buildAppointmentDetailDraftForStorage = ({state, selectedBooking}) => {
+const buildAppointmentDetailDraftForStorage = ({state}) => {
   const safeState = state || buildEmptyAppointmentDetailState();
-  const seedState = buildAppointmentDetailStateFromBooking(selectedBooking);
   const draftSelectedTestsMap = {};
-  const removedSeedTestIdentitiesMap = {};
+  const explicitlyRemovedSeedTestIdentitiesMap =
+    safeState.explicitlyRemovedSeedTestIdentitiesMap || {};
 
   Object.keys(safeState.patientSelectedTestsMap || {}).forEach(patientId => {
     const currentTests = safeState.patientSelectedTestsMap[patientId] || [];
-    const currentIdentities = new Set(currentTests.map(getTestSelectionIdentity));
     const appAddedTests = currentTests.filter(test => Boolean(test?.isAppAdded));
-    const removedSeedIdentities = getPatientSeedTestIdentities(
-      seedState,
-      patientId,
-    ).filter(identity => !currentIdentities.has(identity));
 
     if (appAddedTests.length) {
       draftSelectedTestsMap[patientId] = appAddedTests;
     }
-    if (removedSeedIdentities.length) {
-      removedSeedTestIdentitiesMap[patientId] = removedSeedIdentities;
-    }
   });
 
   return {
-    version: 2,
+    version: 3,
     updatedAt: new Date().toISOString(),
-    removedSeedTestIdentitiesMap,
+    explicitlyRemovedSeedTestIdentitiesMap,
     data: {
       patientApiPanelCompaniesMap: safeState.patientApiPanelCompaniesMap || {},
       patientPanelCompaniesMap: safeState.patientPanelCompaniesMap || {},
@@ -839,7 +804,8 @@ const buildAppointmentDetailDraftForStorage = ({state, selectedBooking}) => {
 const serializeAppointmentDetailDraft = draft =>
   JSON.stringify({
     data: draft?.data || {},
-    removedSeedTestIdentitiesMap: draft?.removedSeedTestIdentitiesMap || {},
+    explicitlyRemovedSeedTestIdentitiesMap:
+      draft?.explicitlyRemovedSeedTestIdentitiesMap || {},
   });
 
 const buildBookingTestPriceRequests = booking =>
@@ -1904,6 +1870,35 @@ export const useAppShellController = () => {
             (toStableValue(item?.panelCompanyId) === selectedPanelCompanyId &&
               getTestDedupeKey(item) === selectedDedupeKey),
         );
+        const selectedExistingTest = previousTests.find(
+          item =>
+            item.key === key ||
+            (toStableValue(item?.panelCompanyId) === selectedPanelCompanyId &&
+              getTestDedupeKey(item) === selectedDedupeKey),
+        );
+        const explicitRemovals = {
+          ...(previousState?.explicitlyRemovedSeedTestIdentitiesMap || {}),
+        };
+
+        if (alreadySelected && !selectedExistingTest?.isAppAdded) {
+          explicitRemovals[patientId] = Array.from(
+            new Set([
+              ...(explicitRemovals[patientId] || []),
+              getTestSelectionIdentity(selectedExistingTest),
+            ]),
+          );
+        } else if (!alreadySelected) {
+          const restoredIdentity = getTestSelectionIdentity(nextEntry);
+          const remainingRemovals = (explicitRemovals[patientId] || []).filter(
+            identity => identity !== restoredIdentity,
+          );
+
+          if (remainingRemovals.length) {
+            explicitRemovals[patientId] = remainingRemovals;
+          } else {
+            delete explicitRemovals[patientId];
+          }
+        }
 
         return {
           ...previousState,
@@ -1921,6 +1916,7 @@ export const useAppShellController = () => {
                 )
               : [...previousTests, nextEntry],
           },
+          explicitlyRemovedSeedTestIdentitiesMap: explicitRemovals,
         };
       });
 
@@ -1957,10 +1953,23 @@ export const useAppShellController = () => {
       const previousTests =
         previousMap[patientId] || buildSeededPatientTests(patient);
       const removeIndex = previousTests.findIndex(item => item.key === testKey);
+      const removedTest = removeIndex >= 0 ? previousTests[removeIndex] : null;
       const nextTests =
         removeIndex >= 0
           ? previousTests.filter((item, index) => index !== removeIndex)
           : previousTests;
+      const explicitRemovals = {
+        ...(previousState?.explicitlyRemovedSeedTestIdentitiesMap || {}),
+      };
+
+      if (removedTest && !removedTest.isAppAdded) {
+        explicitRemovals[patientId] = Array.from(
+          new Set([
+            ...(explicitRemovals[patientId] || []),
+            getTestSelectionIdentity(removedTest),
+          ]),
+        );
+      }
 
       return {
         ...previousState,
@@ -1968,6 +1977,7 @@ export const useAppShellController = () => {
           ...previousMap,
           [patientId]: nextTests,
         },
+        explicitlyRemovedSeedTestIdentitiesMap: explicitRemovals,
       };
     });
 
