@@ -203,12 +203,14 @@ const ReportDeliverySelectedForm = React.memo(function ReportDeliverySelectedFor
 function ReportDeliverySection({
   styles,
   patients = [],
+  selectedPatientId = '',
+  onPatientSelect,
   patientReportCourierMap = {},
   patientReportScheduleMap = {},
   onToggleReportDelivery,
   onReportScheduleChange,
 }) {
-  const [selectedPatientId, setSelectedPatientId] = useState('');
+  const [internalSelectedPatientId, setInternalSelectedPatientId] = useState('');
   const patientSummaries = useMemo(
     () =>
       patients.map(patient => {
@@ -233,32 +235,51 @@ function ReportDeliverySection({
 
   useEffect(() => {
     if (!patientSummaries.length) {
-      setSelectedPatientId('');
+      setInternalSelectedPatientId('');
       return;
     }
 
+    const activeSelectedPatientId =
+      selectedPatientId || internalSelectedPatientId;
     const selectedPatientExists = patientSummaries.some(
-      patient => String(patient.id) === String(selectedPatientId),
+      patient => String(patient.id) === String(activeSelectedPatientId),
     );
 
     if (!selectedPatientExists) {
-      setSelectedPatientId(String(patientSummaries[0].id));
+      const nextPatientId = String(patientSummaries[0].id);
+      setInternalSelectedPatientId(nextPatientId);
+      onPatientSelect?.(nextPatientId);
     }
-  }, [patientSummaries, selectedPatientId]);
+  }, [
+    internalSelectedPatientId,
+    onPatientSelect,
+    patientSummaries,
+    selectedPatientId,
+  ]);
 
   const selectedPatient = useMemo(() => {
     if (!patientSummaries.length) {
       return null;
     }
 
+    const activeSelectedPatientId =
+      selectedPatientId || internalSelectedPatientId;
+
     return (
-      patientSummaries.find(patient => String(patient.id) === selectedPatientId) ||
+      patientSummaries.find(
+        patient => String(patient.id) === String(activeSelectedPatientId),
+      ) ||
       patientSummaries[0]
     );
-  }, [patientSummaries, selectedPatientId]);
-  const handleSelectPatient = useCallback(patientId => {
-    setSelectedPatientId(String(patientId));
-  }, []);
+  }, [internalSelectedPatientId, patientSummaries, selectedPatientId]);
+  const handleSelectPatient = useCallback(
+    patientId => {
+      const nextPatientId = String(patientId);
+      setInternalSelectedPatientId(nextPatientId);
+      onPatientSelect?.(nextPatientId);
+    },
+    [onPatientSelect],
+  );
 
   return (
     <View style={styles.paymentSummaryCard}>
@@ -272,7 +293,7 @@ function ReportDeliverySection({
       </View>
 
       <View style={styles.completePaymentsCollectedCard}>
-            {patientSummaries.length ? (
+        {patientSummaries.length ? (
           <>
             <ScrollView
               horizontal

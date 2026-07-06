@@ -2618,7 +2618,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         dedupe_key,
         MIN(booked_code) AS booked_code,
         MIN(description) AS description,
-        MIN(shortname) AS shortname,
         MAX(profile) AS profile,
         MAX(charge) AS charge,
         MAX(mrp) AS mrp,
@@ -2654,7 +2653,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             NULLIF(pr.ctest_name, ''),
             NULLIF(pr.test_code, '')
           ) AS description,
-          COALESCE(NULLIF(t1.shortname, ''), NULLIF(t2.shortname, ''), NULLIF(pr.ctest_name, '')) AS shortname,
           COALESCE(t1.profile, t2.profile, 0) AS profile,
           pr.charge,
           pr.mrp,
@@ -2732,7 +2730,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         dedupe_key,
         MIN(booked_code) AS booked_code,
         MIN(description) AS description,
-        MIN(shortname) AS shortname,
         MAX(profile) AS profile,
         MAX(charge) AS charge,
         MAX(mrp) AS mrp,

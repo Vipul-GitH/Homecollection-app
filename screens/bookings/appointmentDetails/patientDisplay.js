@@ -112,6 +112,10 @@ const getDisplayTestBillingMode = ({test, patient, panelCompanies = []}) => {
 };
 
 export const getDisplayTestPrice = (test, options = {}) => {
+  if (options.useBackendPrice && hasPriceValue(test?.charge)) {
+    return Number(test.charge) || 0;
+  }
+
   const panelCompanies = Array.isArray(options.panelCompanies)
     ? options.panelCompanies
     : [];

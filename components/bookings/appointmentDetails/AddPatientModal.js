@@ -484,7 +484,7 @@ function AddPatientModal({
                           setIsPatientFormPanelCompanyFocused(false);
                         }, 120);
                       }}
-                      placeholder="CGHS"
+                      placeholder="Enter panel company"
                       placeholderTextColor={BRAND.textMuted}
                       style={styles.addPatientInput}
                     />

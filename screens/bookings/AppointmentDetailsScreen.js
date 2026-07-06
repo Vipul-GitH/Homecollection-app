@@ -200,6 +200,9 @@ const CANCELLATION_REASON_OPTIONS = [
   'High charges / booked at another lab',
 ];
 const CANCEL_TIME_SLOT_OPTIONS = [
+  '06:00 AM to 06:30 AM',
+  '06:30 AM to 07:00 AM',
+  '07:00 AM to 07:30 AM',
   '07:30 AM to 08:00 AM',
   '08:00 AM to 08:30 AM',
   '08:30 AM to 09:00 AM',
@@ -2358,7 +2361,7 @@ function AppointmentDetailsScreen({
           const effectiveTest = getAppointmentBackendPricedTest(
             patient,
             test,
-            isAppointmentSourceBooking,
+            true,
           );
           const testPanelId = normalizeFormText(
             effectiveTest?.panelCompanyId ||
@@ -2381,10 +2384,12 @@ function AppointmentDetailsScreen({
             );
           });
           const selectedChargeMode = getBillingModeForCalculation(
-            effectiveTest?.selected_charge_mode ||
+              effectiveTest?.selected_charge_mode ||
               effectiveTest?.selectedChargeMode ||
               effectiveTest?.billingChargeMode ||
               effectiveTest?.chargeMode ||
+              patient?.selectedChargeModes ||
+              patient?.selected_charge_modes ||
               patient?.billingChargeMode ||
               patient?.chargeMode,
           );
@@ -2412,8 +2417,13 @@ function AppointmentDetailsScreen({
               matchedPanelCompany?.ShowMRP ??
               0,
           });
-          const discountedTestPrice = pricing.charge;
-          const standardDiscountAmount = pricing.standardDiscountAmount;
+          const backendTestCharge = toCurrencyNumber(effectiveTest?.charge);
+          const discountedTestPrice =
+            backendTestCharge > 0 ? backendTestCharge : pricing.charge;
+          const standardDiscountAmount =
+            backendTestCharge > 0
+              ? Math.max(0, testMrp - discountedTestPrice)
+              : pricing.standardDiscountAmount;
 
           return {
             key:
@@ -2791,7 +2801,7 @@ function AppointmentDetailsScreen({
           const effectiveTest = getAppointmentBackendPricedTest(
             patient,
             test,
-            isAppointmentSourceBooking,
+            true,
           );
           const actualTestMrp = toCurrencyNumber(
             getRawCurrencyValue(
@@ -2851,10 +2861,12 @@ function AppointmentDetailsScreen({
           );
           const selectedChargeMode =
             normalizeCompleteChargeMode(
-              effectiveTest?.selected_charge_mode ||
+                effectiveTest?.selected_charge_mode ||
                 effectiveTest?.selectedChargeMode ||
                 effectiveTest?.billingChargeMode ||
                 effectiveTest?.chargeMode ||
+                patient?.selectedChargeModes ||
+                patient?.selected_charge_modes ||
                 patient?.billingChargeMode ||
                 patient?.chargeMode,
             ) || 'C';
@@ -2873,8 +2885,13 @@ function AppointmentDetailsScreen({
               matchedPanelCompany?.ShowMRP ??
               0,
           });
-          const actualTestPrice = pricing.charge;
-          const actualStandardDiscount = pricing.standardDiscountAmount;
+          const backendTestCharge = toCurrencyNumber(effectiveTest?.charge);
+          const actualTestPrice =
+            backendTestCharge > 0 ? backendTestCharge : pricing.charge;
+          const actualStandardDiscount =
+            backendTestCharge > 0
+              ? Math.max(0, actualTestMrp - actualTestPrice)
+              : pricing.standardDiscountAmount;
           const panelKey = [
             panelCompany.toLowerCase(),
             compCatId,
@@ -4396,16 +4413,44 @@ function AppointmentDetailsScreen({
     setIsLinkedAppointmentTimeSlotSelectVisible(false);
   }, [isCompleteBookingScreenVisible, selectedBookingScreen]);
 
-  const handleLinkedAppointmentChange = useCallback(isSelected => {
-    setIsLinkedAppointmentSelected(isSelected);
+  const openLinkedAppointmentCalendar = useCallback(() => {
+    const today = new Date();
+    const currentMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
-    if (!isSelected) {
+    setLinkedAppointmentCalendarMonth(previousMonth => {
+      if (linkedAppointmentDate) {
+        return previousMonth;
+      }
+
+      return currentMonth;
+    });
+    setLinkedAppointmentDate(previousDate => previousDate || toDateInputValue(today));
+    setIsLinkedAppointmentCalendarVisible(true);
+  }, [linkedAppointmentDate]);
+
+  const handleLinkedAppointmentChange = useCallback(
+    isSelected => {
+      setIsLinkedAppointmentSelected(isSelected);
+
+      if (isSelected) {
+        const today = new Date();
+        setLinkedAppointmentCalendarMonth(
+          new Date(today.getFullYear(), today.getMonth(), 1),
+        );
+        setLinkedAppointmentDate(
+          previousDate => previousDate || toDateInputValue(today),
+        );
+        setIsLinkedAppointmentCalendarVisible(true);
+        return;
+      }
+
       setLinkedAppointmentDate('');
       setLinkedAppointmentTimeSlot('');
       setIsLinkedAppointmentCalendarVisible(false);
       setIsLinkedAppointmentTimeSlotSelectVisible(false);
-    }
-  }, []);
+    },
+    [],
+  );
 
   const handleSamplePickCountChange = useCallback(
     value => {
@@ -6237,7 +6282,7 @@ function AppointmentDetailsScreen({
           onLinkedAppointmentChange={handleLinkedAppointmentChange}
           linkedAppointmentDate={linkedAppointmentDate}
           setIsLinkedAppointmentCalendarVisible={
-            setIsLinkedAppointmentCalendarVisible
+            openLinkedAppointmentCalendar
           }
           linkedAppointmentTimeSlot={linkedAppointmentTimeSlot}
           isLinkedAppointmentTimeSlotSelectVisible={
@@ -6352,7 +6397,13 @@ function AppointmentDetailsScreen({
             patientPrecomputedSampleTubesMap={patientPrecomputedSampleTubesMap}
             patientSampleCollectionMap={patientSampleCollectionMap}
             patientTestBookingStatusMap={patientTestBookingStatusMap}
-            useBackendTestPrices={isAppointmentSourceBooking}
+            useBackendTestPrices={
+              isAppointmentSourceBooking ||
+              (Array.isArray(selectedPatientItem?.patient?.tests) &&
+                selectedPatientItem.patient.tests.some(
+                  test => hasCurrencyValue(test?.charge) || hasCurrencyValue(test?.mrp),
+                ))
+            }
             hidePatientEditAction={isAppointmentSourceBooking}
             skipPatientDocumentRequirements={isAppointmentSourceBooking}
             isAppointmentSourceBooking={isAppointmentSourceBooking}
@@ -6398,6 +6449,8 @@ function AppointmentDetailsScreen({
           <ReportDeliverySection
             styles={styles}
             patients={reportDeliveryPatients}
+            selectedPatientId={selectedPatientKey}
+            onPatientSelect={setSelectedPatientKey}
             patientReportCourierMap={patientReportCourierMap}
             patientReportScheduleMap={patientReportScheduleMap}
             onToggleReportDelivery={

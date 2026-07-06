@@ -69,6 +69,11 @@ const getStandardDiscountPercent = test => {
 };
 
 const getDisplayTestPrice = test => {
+  const directCharge = Number(test?.charge || 0);
+  if (directCharge > 0) {
+    return directCharge;
+  }
+
   const billingMode = toStableValue(
     test?.selected_charge_mode ||
       test?.selectedChargeMode ||
@@ -340,7 +345,7 @@ const resolvePatientDocumentUrl = value => {
   if (/^https?:\/\//i.test(rawUrl)) {
     return normalizeDocumentPreviewUri(
       rawUrl.replace(
-        /^https?:\/\/labmate\.bhasinpathlabs\.com:2010(?=\/|$)/i,
+        /^https?:\/\/labmate\.bhasinpathlabs\.com:(?:2010|2015)(?=\/|$)/i,
         DOCUMENT_BASE_URL,
       ),
     );

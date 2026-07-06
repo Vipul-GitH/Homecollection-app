@@ -60,7 +60,7 @@ export const INITIAL_PATIENT_FORM = {
   alternateMobile: '',
   email: '',
   labmatePid: '',
-  panelCompany: 'CGHS',
+  panelCompany: '',
   cghsCardNo: '',
   tag: '',
   tags: [],

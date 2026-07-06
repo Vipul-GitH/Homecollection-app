@@ -702,7 +702,6 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
     appointmentId,
     sourceType,
   );
-  console.log('[Appointment Details API request]', apiUrl);
 
   const response = await secureFetch(apiUrl, {
     method: 'GET',
@@ -714,10 +713,6 @@ export const fetchAssignedBookingDetailApi = async ({accessToken, booking}) => {
   });
 
   const responseData = await parseJsonResponse(response, '[Assigned Detail]');
-  console.log(
-    '[Appointment Details API response]',
-    JSON.stringify(responseData, null, 2),
-  );
   const errorMessage = getApiErrorMessage(
     response,
     responseData,

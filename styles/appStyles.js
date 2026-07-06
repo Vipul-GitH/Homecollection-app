@@ -584,6 +584,12 @@ const appStyles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  appHeaderBannerImage: {
+    width: '100%',
+    aspectRatio: 1600 / 600,
+    borderRadius: 0,
+    overflow: 'hidden',
+  },
   appHeaderTitle: {
     fontSize: 22,
     lineHeight: 27,
@@ -650,6 +656,15 @@ const appStyles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
+  },
+  homeHeaderBannerWrap: {
+    position: 'relative',
+    width: '100%',
+    overflow: 'hidden',
+  },
+  homeHeaderBannerImage: {
+    width: '100%',
+    aspectRatio: 1600 / 600,
   },
   homeHeaderText: {flex: 1, minWidth: 0, paddingRight: 8},
   profileChip: {
@@ -723,6 +738,15 @@ const appStyles = StyleSheet.create({
     elevation: 3,
   },
   logoutButtonCompact: {alignSelf: 'flex-start', marginTop: 0},
+  homeHeaderLogoutButton: {
+    position: 'absolute',
+    right: 10,
+    top: 10,
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.86)',
+  },
   logoutIcon: {
     color: BRAND.primary,
   },

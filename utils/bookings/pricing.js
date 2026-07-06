@@ -44,8 +44,6 @@ export const isShowMrpEnabled = source => {
 export const getStandardDiscountPercent = test => {
   if (
     isShowMrpEnabled(test) &&
-    getBillingChargeMode(test).includes('P') &&
-    !getBillingChargeMode(test).includes('C') &&
     !getBillingChargeMode(test).includes('F')
   ) {
     return 0;
@@ -83,10 +81,7 @@ export const getTestPricing = (test, options = {}) => {
   const charge = toNumber(test?.charge || test?.Charge);
   const baseMrp = mrp || charge;
   const showMrp =
-    isShowMrpEnabled(test) &&
-    billingMode.includes('P') &&
-    !billingMode.includes('C') &&
-    !billingMode.includes('F');
+    isShowMrpEnabled(test) && !billingMode.includes('F');
   const discountPercent = Math.min(
     100,
     Math.max(0, getStandardDiscountPercent({...test, billingChargeMode: billingMode})),
@@ -118,7 +113,7 @@ export const getTestPricing = (test, options = {}) => {
     baseDiscount,
     standardDiscountAmount: showMrp ? 0 : Math.max(0, baseMrp - finalCharge),
     standardDiscountPercent: showMrp ? 0 : discountPercent,
-    maxDiscount: showMrp ? 0 : defaultMaxDiscount || Math.max(0, baseMrp - finalCharge),
+    maxDiscount: defaultMaxDiscount || Math.max(0, baseMrp - finalCharge),
     maxAllowedDiscount,
     additionalAllowed: Math.max(0, maxAllowedDiscount - (showMrp ? 0 : baseDiscount)),
     showMrp,
