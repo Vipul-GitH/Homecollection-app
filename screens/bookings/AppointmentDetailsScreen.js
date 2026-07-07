@@ -199,28 +199,37 @@ const CANCELLATION_REASON_OPTIONS = [
   'phlebo not able to collect sample',
   'High charges / booked at another lab',
 ];
-const CANCEL_TIME_SLOT_OPTIONS = [
-  '06:00 AM to 06:30 AM',
-  '06:30 AM to 07:00 AM',
-  '07:00 AM to 07:30 AM',
-  '07:30 AM to 08:00 AM',
-  '08:00 AM to 08:30 AM',
-  '08:30 AM to 09:00 AM',
-  '09:00 AM to 09:30 AM',
-  '09:30 AM to 10:00 AM',
-  '10:00 AM to 10:30 AM',
-  '10:30 AM to 11:00 AM',
-  '11:00 AM to 11:30 AM',
-  '11:30 AM to 12:00 PM',
-  '12:00 PM to 12:30 PM',
-  '12:30 PM to 01:00 PM',
-  '01:00 PM to 01:30 PM',
-  '01:30 PM to 02:00 PM',
-  '02:00 PM to 02:30 PM',
-  '02:30 PM to 03:00 PM',
-  '03:00 PM to 03:30 PM',
-  '03:30 PM to 04:00 PM',
-];
+const formatTimeSlotMinute = totalMinutes => {
+  const hour24 = Math.floor(totalMinutes / 60);
+  const minute = totalMinutes % 60;
+  const period = hour24 >= 12 ? 'PM' : 'AM';
+  const hour12 = hour24 % 12 || 12;
+
+  return `${String(hour12).padStart(2, '0')}:${String(minute).padStart(
+    2,
+    '0',
+  )} ${period}`;
+};
+const buildTimeSlotOptions = (startHour, endHour, intervalMinutes = 30) => {
+  const slots = [];
+  const startMinutes = startHour * 60;
+  const endMinutes = endHour * 60;
+
+  for (
+    let minute = startMinutes;
+    minute < endMinutes;
+    minute += intervalMinutes
+  ) {
+    slots.push(
+      `${formatTimeSlotMinute(minute)} to ${formatTimeSlotMinute(
+        minute + intervalMinutes,
+      )}`,
+    );
+  }
+
+  return slots;
+};
+const CANCEL_TIME_SLOT_OPTIONS = buildTimeSlotOptions(6, 20);
 const toCurrencyNumber = value => {
   const normalizedValue = Number(String(value || '').replace(/[^0-9.]/g, ''));
   return Number.isFinite(normalizedValue) ? normalizedValue : 0;
@@ -4440,7 +4449,7 @@ function AppointmentDetailsScreen({
         setLinkedAppointmentDate(
           previousDate => previousDate || toDateInputValue(today),
         );
-        setIsLinkedAppointmentCalendarVisible(true);
+        setIsLinkedAppointmentCalendarVisible(false);
         return;
       }
 

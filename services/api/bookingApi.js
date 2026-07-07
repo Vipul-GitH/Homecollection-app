@@ -38,7 +38,7 @@ const NORMAL_WRITE_REQUEST_TIMEOUT_MS = 20000;
 const STATUS_REQUEST_TIMEOUT_MS = 30000;
 const UPLOAD_REQUEST_TIMEOUT_MS = 45000;
 const HANDOVER_HISTORY_REQUEST_TIMEOUT_MS = 15000;
-const COMPLETE_UPLOAD_MAX_FILES = 12;
+const COMPLETE_UPLOAD_MAX_FILES_PER_PATIENT = 6;
 const COMPLETE_UPLOAD_MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024;
 
 const toStableApiValue = value =>
@@ -300,9 +300,26 @@ const hasDocumentsWithUri = documents =>
   (Array.isArray(documents) ? documents : []).some(isUploadableDocument);
 
 const validateCompleteBookingAttachments = fileParts => {
-  if (fileParts.length > COMPLETE_UPLOAD_MAX_FILES) {
+  const patientFileCountMap = fileParts.reduce((countMap, filePart) => {
+    const patientId =
+      toStableApiValue(filePart?.patientId) ||
+      toStableApiValue(filePart?.fieldName).replace(
+        /^(patient_documents_|payment_shot_)/,
+        '',
+      ) ||
+      'booking';
+
+    countMap[patientId] = (countMap[patientId] || 0) + 1;
+    return countMap;
+  }, {});
+  const overLimitPatientEntry = Object.entries(patientFileCountMap).find(
+    ([, fileCount]) => fileCount > COMPLETE_UPLOAD_MAX_FILES_PER_PATIENT,
+  );
+
+  if (overLimitPatientEntry) {
+    const [patientId, fileCount] = overLimitPatientEntry;
     throw new Error(
-      `You can upload up to ${COMPLETE_UPLOAD_MAX_FILES} files while completing a booking.`,
+      `You can upload up to ${COMPLETE_UPLOAD_MAX_FILES_PER_PATIENT} files per patient while completing a booking. Patient ${patientId} has ${fileCount} files.`,
     );
   }
 
@@ -352,7 +369,7 @@ const hasCompleteBookingAttachments = ({
   );
 };
 
-const buildUploadDocumentPart = (fieldName, document) => {
+const buildUploadDocumentPart = (fieldName, document, patientId = '') => {
   if (!isUploadableDocument(document)) {
     return null;
   }
@@ -365,6 +382,7 @@ const buildUploadDocumentPart = (fieldName, document) => {
     sizeBytes: Number(
       document?.fileSize ?? document?.size ?? document?.sizeBytes ?? 0,
     ),
+    patientId,
   };
 
   if (document?.geoStampText) {
@@ -378,9 +396,9 @@ const buildUploadDocumentPart = (fieldName, document) => {
   return uploadPart;
 };
 
-const buildDocumentPartList = (fieldName, documents) =>
+const buildDocumentPartList = (fieldName, documents, patientId = '') =>
   (Array.isArray(documents) ? documents : [])
-    .map(document => buildUploadDocumentPart(fieldName, document))
+    .map(document => buildUploadDocumentPart(fieldName, document, patientId))
     .filter(Boolean);
 
 const buildPatientDocumentParts = ({
@@ -392,25 +410,38 @@ const buildPatientDocumentParts = ({
 
   Object.entries(manualSlipDocumentsMap || {}).forEach(([patientId, documents]) => {
     fileParts.push(
-      ...buildDocumentPartList(`patient_documents_${patientId}`, documents),
+      ...buildDocumentPartList(
+        `patient_documents_${patientId}`,
+        documents,
+        patientId,
+      ),
     );
   });
 
   Object.entries(patientCghsDocumentsMap || {}).forEach(([patientId, sections]) => {
     fileParts.push(
-      ...buildDocumentPartList(`patient_documents_${patientId}`, sections?.cghsCard),
+      ...buildDocumentPartList(
+        `patient_documents_${patientId}`,
+        sections?.cghsCard,
+        patientId,
+      ),
     );
     fileParts.push(
       ...buildDocumentPartList(
         `patient_documents_${patientId}`,
         sections?.patientPhotos,
+        patientId,
       ),
     );
   });
 
   Object.entries(patientDocumentsMap || {}).forEach(([patientId, documents]) => {
     fileParts.push(
-      ...buildDocumentPartList(`patient_documents_${patientId}`, documents),
+      ...buildDocumentPartList(
+        `patient_documents_${patientId}`,
+        documents,
+        patientId,
+      ),
     );
   });
 
@@ -434,6 +465,7 @@ const buildPaymentProofParts = ({
       ...buildDocumentPartList(
         `payment_shot_${patientId}`,
         paymentProof?.documents,
+        patientId,
       ),
     );
   });

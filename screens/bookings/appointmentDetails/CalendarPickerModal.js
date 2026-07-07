@@ -108,7 +108,7 @@ function CalendarPickerModal({
                   return (
                     <View
                       key={`${emptyKeyPrefix}-${index}`}
-                      style={styles.addPatientCalendarDayPlaceholder}
+                      style={styles.addPatientCalendarDaySlot}
                     />
                   );
                 }
@@ -118,25 +118,28 @@ function CalendarPickerModal({
                 const isDisabled = Boolean(disableDate?.(date));
 
                 return (
-                  <TouchableOpacity
+                  <View
                     key={`${dateKeyPrefix}-${dateValue}`}
-                    activeOpacity={0.85}
-                    style={[
-                      styles.addPatientCalendarDay,
-                      isSelected && styles.addPatientCalendarDaySelected,
-                      isDisabled && styles.addPatientCalendarDayDisabled,
-                    ]}
-                    onPress={() => onSelectDate(date)}
-                    disabled={isDisabled}>
-                    <Text
+                    style={styles.addPatientCalendarDaySlot}>
+                    <TouchableOpacity
+                      activeOpacity={0.85}
                       style={[
-                        styles.addPatientCalendarDayText,
-                        isSelected && styles.addPatientCalendarDayTextSelected,
-                        isDisabled && styles.addPatientCalendarDayTextDisabled,
-                      ]}>
-                      {date.getDate()}
-                    </Text>
-                  </TouchableOpacity>
+                        styles.addPatientCalendarDay,
+                        isSelected && styles.addPatientCalendarDaySelected,
+                        isDisabled && styles.addPatientCalendarDayDisabled,
+                      ]}
+                      onPress={() => onSelectDate(date)}
+                      disabled={isDisabled}>
+                      <Text
+                        style={[
+                          styles.addPatientCalendarDayText,
+                          isSelected && styles.addPatientCalendarDayTextSelected,
+                          isDisabled && styles.addPatientCalendarDayTextDisabled,
+                        ]}>
+                        {date.getDate()}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
                 );
               })}
             </View>

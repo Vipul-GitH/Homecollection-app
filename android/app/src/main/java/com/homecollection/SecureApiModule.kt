@@ -37,9 +37,10 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
   ReactContextBaseJavaModule(reactContext) {
 
   companion object {
-    private const val UPLOAD_IMAGE_MAX_SIDE = 1024
-    private val UPLOAD_IMAGE_JPEG_QUALITIES = intArrayOf(60, 50, 42)
-    private const val UPLOAD_IMAGE_TARGET_BYTES = 2L * 1024L * 1024L
+    private const val UPLOAD_IMAGE_MAX_SIDE = 1800
+    private const val UPLOAD_IMAGE_MIN_SIDE = 480
+    private val UPLOAD_IMAGE_JPEG_QUALITIES = intArrayOf(95, 92, 90, 85, 80, 75, 70, 65, 60, 50, 42, 35, 30, 25, 20)
+    private const val UPLOAD_IMAGE_TARGET_BYTES = 300L * 1024L
     private const val UPLOAD_IMAGE_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1000L
   }
 
@@ -224,13 +225,13 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
     }
   }
 
-  private fun scaleUploadBitmap(bitmap: Bitmap): Bitmap {
+  private fun scaleUploadBitmap(bitmap: Bitmap, maxSide: Int = UPLOAD_IMAGE_MAX_SIDE): Bitmap {
     val largestSide = max(bitmap.width, bitmap.height)
-    if (largestSide <= UPLOAD_IMAGE_MAX_SIDE) {
+    if (largestSide <= maxSide) {
       return bitmap
     }
 
-    val scale = UPLOAD_IMAGE_MAX_SIDE.toFloat() / largestSide.toFloat()
+    val scale = maxSide.toFloat() / largestSide.toFloat()
     val width = max(1, (bitmap.width * scale).toInt())
     val height = max(1, (bitmap.height * scale).toInt())
     return Bitmap.createScaledBitmap(bitmap, width, height, true)
@@ -382,6 +383,10 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
 
     return try {
       val originalSize = resolveUploadFileSize(uriString)
+      if (originalSize > 0L && originalSize <= UPLOAD_IMAGE_TARGET_BYTES && uploadStampText.isBlank()) {
+        return null
+      }
+
       decodedBitmap = decodeUploadBitmap(uriString) ?: return null
       scaledBitmap = scaleUploadBitmap(decodedBitmap)
       uploadBitmap = stampUploadBitmap(scaledBitmap, uploadStampText)
@@ -393,29 +398,58 @@ class SecureApiModule(reactContext: ReactApplicationContext) :
 
       val outputName = compressedUploadFileName(fileName, index)
       var bestFile: File? = null
+      val initialUploadBitmap = uploadBitmap ?: return null
+      var compressionBitmap = initialUploadBitmap
+      var currentMaxSide = max(compressionBitmap.width, compressionBitmap.height)
 
-      for (quality in UPLOAD_IMAGE_JPEG_QUALITIES) {
-        val attemptFile = writeCompressedUploadAttempt(
-          uploadBitmap,
-          directory,
-          outputName,
-          quality,
-        ) ?: continue
+      while (true) {
+        for (quality in UPLOAD_IMAGE_JPEG_QUALITIES) {
+          val attemptFile = writeCompressedUploadAttempt(
+            compressionBitmap,
+            directory,
+            outputName,
+            quality,
+          ) ?: continue
 
-        val currentBest = bestFile
-        if (currentBest == null || attemptFile.length() < currentBest.length()) {
-          currentBest?.delete()
-          bestFile = attemptFile
-        } else {
-          attemptFile.delete()
+          val currentBest = bestFile
+          if (attemptFile.length() <= UPLOAD_IMAGE_TARGET_BYTES) {
+            currentBest?.delete()
+            bestFile = attemptFile
+            break
+          }
+
+          if (currentBest == null || attemptFile.length() < currentBest.length()) {
+            currentBest?.delete()
+            bestFile = attemptFile
+          } else {
+            attemptFile.delete()
+          }
         }
 
         if ((bestFile?.length() ?: Long.MAX_VALUE) <= UPLOAD_IMAGE_TARGET_BYTES) {
           break
         }
+
+        if (currentMaxSide <= UPLOAD_IMAGE_MIN_SIDE) {
+          break
+        }
+
+        val nextMaxSide = max(
+          UPLOAD_IMAGE_MIN_SIDE,
+          (currentMaxSide * 0.8f).toInt(),
+        )
+        val nextBitmap = scaleUploadBitmap(compressionBitmap, nextMaxSide)
+        if (compressionBitmap != initialUploadBitmap && compressionBitmap != scaledBitmap && compressionBitmap != decodedBitmap) {
+          compressionBitmap.recycle()
+        }
+        compressionBitmap = nextBitmap
+        currentMaxSide = max(compressionBitmap.width, compressionBitmap.height)
       }
 
       val resolvedBestFile = bestFile ?: return null
+      if (compressionBitmap != initialUploadBitmap && compressionBitmap != scaledBitmap && compressionBitmap != decodedBitmap) {
+        compressionBitmap.recycle()
+      }
       if (originalSize > 0L && resolvedBestFile.length() >= originalSize) {
         resolvedBestFile.delete()
         return null
