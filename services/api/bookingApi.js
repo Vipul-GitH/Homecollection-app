@@ -94,6 +94,13 @@ const buildCompletedHistoryDetailForNormalizer = (detail, fallbackBooking) => {
       const patientName = toStableApiValue(
         patient?.patient_name || patient?.patientName || patient?.name,
       );
+      const patientMobile = toStableApiValue(
+        patient?.patient_mobile ||
+          patient?.patientMobile ||
+          patient?.contact_mobile ||
+          patient?.contactMobile ||
+          patient?.mobile,
+      );
 
       return {
         id:
@@ -105,6 +112,9 @@ const buildCompletedHistoryDetailForNormalizer = (detail, fallbackBooking) => {
           ) || `completed-patient-${index}`,
         full_name: patientName,
         name: patientName,
+        patient_mobile: patientMobile,
+        patientMobile,
+        contact_mobile: patientMobile,
         booking_patient_status:
           patient?.booking_patient_status ?? patient?.bookingPatientStatus,
         status_code:

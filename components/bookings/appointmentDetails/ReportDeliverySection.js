@@ -248,7 +248,9 @@ function ReportDeliverySection({
     if (!selectedPatientExists) {
       const nextPatientId = String(patientSummaries[0].id);
       setInternalSelectedPatientId(nextPatientId);
-      onPatientSelect?.(nextPatientId);
+      if (!selectedPatientId) {
+        onPatientSelect?.(nextPatientId);
+      }
     }
   }, [
     internalSelectedPatientId,

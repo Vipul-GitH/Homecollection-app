@@ -77,6 +77,8 @@ const getAppointmentDetailDraftKeys = booking => {
     booking?.id,
     booking?.bookingId,
     booking?.booking_id,
+    booking?.appointmentId,
+    booking?.appointment_id,
   ]
     .map(toStableValue)
     .filter(Boolean);
@@ -990,6 +992,9 @@ const getTerminalBookingStatus = booking => {
   return null;
 };
 
+const shouldSkipAppointmentDetailDraft = (booking, appointmentsViewMode = '') =>
+  appointmentsViewMode === 'completed' || Boolean(getTerminalBookingStatus(booking));
+
 const getLoadingOverlayCopy = ({
   appointmentsViewMode,
   isLoadingCompletedAppointments,
@@ -1227,10 +1232,57 @@ export const useAppShellController = () => {
     return () => clearTimeout(persistTimer);
   }, [appointmentDetailDrafts]);
 
+  const clearAppointmentDetailDraftsForBooking = useCallback(booking => {
+    const draftKeys = getAppointmentDetailDraftKeys(booking);
+    if (!draftKeys.length) {
+      return;
+    }
+
+    if (appointmentDraftUpdateTimerRef.current) {
+      clearTimeout(appointmentDraftUpdateTimerRef.current);
+      appointmentDraftUpdateTimerRef.current = null;
+    }
+
+    draftKeys.forEach(draftKey => {
+      clearedAppointmentDraftKeysRef.current.add(draftKey);
+    });
+
+    const nextSignatures = {
+      ...latestDraftSignatureByKeyRef.current,
+    };
+    draftKeys.forEach(draftKey => {
+      delete nextSignatures[draftKey];
+    });
+    latestDraftSignatureByKeyRef.current = nextSignatures;
+
+    setAppointmentDetailDrafts(previousDrafts => {
+      const nextDrafts = {...previousDrafts};
+      let didRemoveDraft = false;
+
+      draftKeys.forEach(draftKey => {
+        if (Object.prototype.hasOwnProperty.call(nextDrafts, draftKey)) {
+          delete nextDrafts[draftKey];
+          didRemoveDraft = true;
+        }
+      });
+
+      return didRemoveDraft ? nextDrafts : previousDrafts;
+    });
+
+    draftKeys.forEach(draftKey => {
+      clearAppointmentDetailDraft(draftKey).catch(() => {});
+    });
+  }, []);
+
   useEffect(() => {
     const draftKey = getAppointmentDetailDraftKey(selectedBooking);
 
     if (!isAppointmentDetailStateHydratedRef.current || !draftKey) {
+      return;
+    }
+
+    if (shouldSkipAppointmentDetailDraft(selectedBooking, appointmentsViewMode)) {
+      clearAppointmentDetailDraftsForBooking(selectedBooking);
       return;
     }
 
@@ -1272,7 +1324,12 @@ export const useAppShellController = () => {
         appointmentDraftUpdateTimerRef.current = null;
       }
     };
-  }, [appointmentDetailState, selectedBooking]);
+  }, [
+    appointmentDetailState,
+    appointmentsViewMode,
+    clearAppointmentDetailDraftsForBooking,
+    selectedBooking,
+  ]);
 
   useEffect(() => {
     if (['assigned', 'started', 'completed'].includes(appointmentsViewMode)) {
@@ -1497,7 +1554,11 @@ export const useAppShellController = () => {
 
         const freshBooking = buildFinalBooking(freshBookingDetail);
         const freshDraftKey = getAppointmentDetailDraftKey(freshBooking);
-        const freshCachedDraft = freshDraftKey
+        const shouldSkipDraft = shouldSkipAppointmentDetailDraft(
+          freshBooking,
+          appointmentsViewMode,
+        );
+        const freshCachedDraft = !shouldSkipDraft && freshDraftKey
           ? appointmentDetailDrafts[freshDraftKey]
           : null;
 
@@ -1513,12 +1574,17 @@ export const useAppShellController = () => {
             : previousBooking;
         });
         setAppointmentDetailState(previousState =>
-          mergeAppointmentDetailStateWithFreshBooking(
-            buildAppointmentDetailStateFromBooking(freshBooking),
-            previousState || freshCachedDraft,
-            {ignoreDraftTests: true},
-          ),
+          shouldSkipDraft
+            ? buildAppointmentDetailStateFromBooking(freshBooking)
+            : mergeAppointmentDetailStateWithFreshBooking(
+                buildAppointmentDetailStateFromBooking(freshBooking),
+                previousState || freshCachedDraft,
+                {ignoreDraftTests: true},
+              ),
         );
+        if (shouldSkipDraft) {
+          clearAppointmentDetailDraftsForBooking(freshBooking);
+        }
 
         if (!shouldUseBackendAppointmentPrices(freshBooking)) {
           getLocalBookingTestPricesResponse(
@@ -1533,6 +1599,10 @@ export const useAppShellController = () => {
                 freshBooking,
                 priceResponse,
               );
+              const shouldSkipPricedDraft = shouldSkipAppointmentDetailDraft(
+                pricedBooking,
+                appointmentsViewMode,
+              );
               setSelectedBooking(previousBooking => {
                 const previousKey = getAppointmentDetailDraftKey(previousBooking);
                 const freshKey = getAppointmentDetailDraftKey(pricedBooking);
@@ -1541,12 +1611,17 @@ export const useAppShellController = () => {
                   : previousBooking;
               });
               setAppointmentDetailState(previousState =>
-                mergeAppointmentDetailStateWithFreshBooking(
-                  buildAppointmentDetailStateFromBooking(pricedBooking),
-                  previousState,
-                  {ignoreDraftTests: true},
-                ),
+                shouldSkipPricedDraft
+                  ? buildAppointmentDetailStateFromBooking(pricedBooking)
+                  : mergeAppointmentDetailStateWithFreshBooking(
+                      buildAppointmentDetailStateFromBooking(pricedBooking),
+                      previousState,
+                      {ignoreDraftTests: true},
+                    ),
               );
+              if (shouldSkipPricedDraft) {
+                clearAppointmentDetailDraftsForBooking(pricedBooking);
+              }
             })
             .catch(() => {});
         }
@@ -1564,10 +1639,19 @@ export const useAppShellController = () => {
       if (bookingDetail) {
         const finalBooking = buildFinalBooking(bookingDetail);
         const draftKey = getAppointmentDetailDraftKey(finalBooking);
-        const cachedDraft = draftKey ? appointmentDetailDrafts[draftKey] : null;
+        const shouldSkipDraft = shouldSkipAppointmentDetailDraft(
+          finalBooking,
+          appointmentsViewMode,
+        );
+        const cachedDraft = !shouldSkipDraft && draftKey
+          ? appointmentDetailDrafts[draftKey]
+          : null;
 
-        if (draftKey) {
+        if (draftKey && !shouldSkipDraft) {
           clearedAppointmentDraftKeysRef.current.delete(draftKey);
+        }
+        if (shouldSkipDraft) {
+          clearAppointmentDetailDraftsForBooking(finalBooking);
         }
 
         setSelectedBooking({
@@ -1586,11 +1670,13 @@ export const useAppShellController = () => {
         setSelectedSamplePatient(null);
         setSelectedSamplePanelCompany(null);
         setAppointmentDetailState(
-          mergeAppointmentDetailStateWithDraft(
-            buildAppointmentDetailStateFromBooking(finalBooking),
-            cachedDraft,
-            {ignoreDraftTests: true},
-          ),
+          shouldSkipDraft
+            ? buildAppointmentDetailStateFromBooking(finalBooking)
+            : mergeAppointmentDetailStateWithDraft(
+                buildAppointmentDetailStateFromBooking(finalBooking),
+                cachedDraft,
+                {ignoreDraftTests: true},
+              ),
         );
 
         if (!shouldUseBackendAppointmentPrices(finalBooking)) {
@@ -1606,21 +1692,30 @@ export const useAppShellController = () => {
                 finalBooking,
                 priceResponse,
               );
+              const shouldSkipPricedDraft = shouldSkipAppointmentDetailDraft(
+                pricedBooking,
+                appointmentsViewMode,
+              );
               setSelectedBooking(previousBooking =>
                 previousBooking?.id === pricedBooking.id
                   ? pricedBooking
                   : previousBooking,
               );
               setAppointmentDetailState(previousState =>
-                mergeAppointmentDetailStateWithDraft(
-                  buildAppointmentDetailStateFromBooking(pricedBooking),
-                  buildAppointmentDetailDraftForStorage({
-                    state: previousState,
-                    selectedBooking: pricedBooking,
-                  }),
-                  {ignoreDraftTests: true},
-                ),
+                shouldSkipPricedDraft
+                  ? buildAppointmentDetailStateFromBooking(pricedBooking)
+                  : mergeAppointmentDetailStateWithDraft(
+                      buildAppointmentDetailStateFromBooking(pricedBooking),
+                      buildAppointmentDetailDraftForStorage({
+                        state: previousState,
+                        selectedBooking: pricedBooking,
+                      }),
+                      {ignoreDraftTests: true},
+                    ),
               );
+              if (shouldSkipPricedDraft) {
+                clearAppointmentDetailDraftsForBooking(pricedBooking);
+              }
             })
             .catch(() => {});
         }
@@ -1631,6 +1726,7 @@ export const useAppShellController = () => {
       appointmentsViewMode,
       beginScreenTransition,
       bookings,
+      clearAppointmentDetailDraftsForBooking,
     ],
   );
 
@@ -2156,44 +2252,19 @@ export const useAppShellController = () => {
 
       if (
         didUpdate &&
-        ['complete', 'completed', 'cancel', 'cancelled'].includes(
-          toStableValue(action).toLowerCase(),
-        )
+        ['complete', 'completed'].includes(toStableValue(action).toLowerCase())
       ) {
-        const draftKeys = getAppointmentDetailDraftKeys(selectedBooking);
-        if (draftKeys.length) {
-          draftKeys.forEach(draftKey => {
-            clearedAppointmentDraftKeysRef.current.add(draftKey);
-          });
-          const nextSignatures = {
-            ...latestDraftSignatureByKeyRef.current,
-          };
-          draftKeys.forEach(draftKey => {
-            delete nextSignatures[draftKey];
-          });
-          latestDraftSignatureByKeyRef.current = nextSignatures;
-          setAppointmentDetailDrafts(previousDrafts => {
-            const nextDrafts = {...previousDrafts};
-            let didRemoveDraft = false;
-
-            draftKeys.forEach(draftKey => {
-              if (Object.prototype.hasOwnProperty.call(nextDrafts, draftKey)) {
-                delete nextDrafts[draftKey];
-                didRemoveDraft = true;
-              }
-            });
-
-            return didRemoveDraft ? nextDrafts : previousDrafts;
-          });
-          draftKeys.forEach(draftKey => {
-            clearAppointmentDetailDraft(draftKey).catch(() => {});
-          });
-        }
+        clearAppointmentDetailDraftsForBooking(selectedBooking);
       }
 
       return didUpdate;
     },
-    [appointmentDetailState, bookings, selectedBooking],
+    [
+      appointmentDetailState,
+      bookings,
+      clearAppointmentDetailDraftsForBooking,
+      selectedBooking,
+    ],
   );
 
   const handleBookingCompletedNavigation = useCallback(async () => {

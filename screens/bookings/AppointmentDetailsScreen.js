@@ -1087,6 +1087,7 @@ function AppointmentDetailsScreen({
   const [selectedPatientKey, setSelectedPatientKey] = useState(
     () => appointmentDetailState?.selectedPatientKey || '',
   );
+  const lastPatientSelectionHydrationBookingIdRef = useRef('');
   const [patientSearchText, setPatientSearchText] = useState('');
   const deferredPatientSearchText = useDeferredValue(patientSearchText);
   const [appAlert, setAppAlert] = useState(null);
@@ -1258,7 +1259,14 @@ function AppointmentDetailsScreen({
         ? currentDraft.sampleCollectionEasyToughPatientIds
         : [],
     );
-    setSelectedPatientKey(currentDraft?.selectedPatientKey || '');
+    const bookingId = normalizeFormText(selectedBooking?.id);
+    const isNewBooking =
+      lastPatientSelectionHydrationBookingIdRef.current !== bookingId;
+    lastPatientSelectionHydrationBookingIdRef.current = bookingId;
+    setSelectedPatientKey(previousKey => {
+      const draftPatientKey = currentDraft?.selectedPatientKey || '';
+      return isNewBooking ? draftPatientKey : previousKey || draftPatientKey;
+    });
     setPendingPaymentPatientId(currentDraft?.pendingPaymentPatientId || '');
     setIsAdditionalDiscountEnabled(
       Boolean(currentDraft?.isAdditionalDiscountEnabled),
@@ -6207,6 +6215,19 @@ function AppointmentDetailsScreen({
                 iconBg: '#FDF2F8',
                 iconColor: '#DB2777',
               })}
+              {renderCompletedHistoryValue(
+                'Contact No',
+                patient.mobileNumber ||
+                  patient.patientMobile ||
+                  patient.patient_mobile ||
+                  patient.contactMobile ||
+                  patient.contact_mobile,
+                'call-outline',
+                {
+                  iconBg: '#F0FDFA',
+                  iconColor: '#0F766E',
+                },
+              )}
               {renderCompletedHistoryValue('Report Delivery', patient.reportDelivery, 'document-text-outline', {
                 iconBg: '#EFF6FF',
                 iconColor: '#2563EB',
