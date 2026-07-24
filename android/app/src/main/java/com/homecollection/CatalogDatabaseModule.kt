@@ -19,7 +19,7 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
 
   private val assetName = "catalog_preload.db"
   private val databaseVersion = "2"
-  private val seedSyncedAt = "2026-05-09 14:56:55"
+  private val seedSyncedAt = "2026-07-24 17:00:00"
   private val maxProfileTreeDepth = 8
   private val maxProfileChildrenPerNode = 150
   private val skippedSyncTables = setOf("address_allowed_center", "testwarning")

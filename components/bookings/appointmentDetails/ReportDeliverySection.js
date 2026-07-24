@@ -5,6 +5,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 const REPORT_DELIVERY_OPTIONS = [
   {value: 'whatsapp', label: 'WhatsApp', icon: 'logo-whatsapp'},
   {value: 'courier', label: 'Courier', icon: 'cube-outline'},
+  {value: 'by_hand', label: 'By Hand', icon: 'hand-left-outline'},
   {value: 'lab', label: 'Lab', icon: 'business-outline'},
 ];
 const REPORT_SCHEDULE_OPTIONS = [

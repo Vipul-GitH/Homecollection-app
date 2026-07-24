@@ -195,7 +195,7 @@ function HomeScreen({
   const mainScrollKey = isBookingDetailScreen
     ? `booking:${selectedBooking?.id || 'unknown'}:${selectedBookingScreen}`
     : activeTab === 'appointments'
-      ? `appointments:${appointmentsViewMode}`
+      ? ` :${appointmentsViewMode}`
       : `tab:${activeTab}`;
   if (previousScrollKeyRef.current !== mainScrollKey) {
     previousScrollKeyRef.current = mainScrollKey;

@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "android": "react-native run-android",
-    "build:catalog-db": "node scripts/build-catalog-db.js --input data/bhasin_7001_new.sql --extra-input data/hcolony_master.sql --extra-input data/tag_master.sql --output android/app/src/main/assets/catalog_preload.db --version 2 --seed-ts \"2026-06-02 14:35:00\"",
+    "build:catalog-db": "node scripts/build-catalog-db.js --input data/bhasin_7001_new.sql --extra-input data/hcolony_master.sql --extra-input data/tag_master.sql --output android/app/src/main/assets/catalog_preload.db --version 2 --seed-ts \"2026-07-24 17:00:00\"",
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start",
