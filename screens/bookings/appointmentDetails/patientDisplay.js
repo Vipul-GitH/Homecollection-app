@@ -16,15 +16,53 @@ const getTestCode = test =>
   ).toUpperCase();
 
 const getBackendTestForCode = (patient, test) => {
+  if (test?.isAppAdded) {
+    return null;
+  }
+
   const testCode = getTestCode(test);
 
   if (!testCode) {
     return null;
   }
 
-  return (Array.isArray(patient?.tests) ? patient.tests : []).find(
+  const testPanelId = normalizeFormText(
+    test?.panelCompanyId || test?.compCatId || test?.comp_cat_id,
+  );
+  const testPanelName = normalizeFormText(
+    test?.panelCompanyName || test?.panel_company || test?.panelCompany,
+  ).toLowerCase();
+  const matchingBackendTests = (Array.isArray(patient?.tests) ? patient.tests : []).filter(
     patientTest => getTestCode(patientTest) === testCode,
   );
+
+  if (!matchingBackendTests.length) {
+    return null;
+  }
+
+  if (testPanelId || testPanelName) {
+    const panelMatch = matchingBackendTests.find(patientTest => {
+      const backendPanelId = normalizeFormText(
+        patientTest?.compCatId ||
+          patientTest?.comp_cat_id ||
+          patientTest?.panelCompanyId,
+      );
+      const backendPanelName = normalizeFormText(
+        patientTest?.panelCompanyName ||
+          patientTest?.panel_company ||
+          patientTest?.panelCompany,
+      ).toLowerCase();
+
+      return (
+        (testPanelId && backendPanelId && testPanelId === backendPanelId) ||
+        (testPanelName && backendPanelName && testPanelName === backendPanelName)
+      );
+    });
+
+    return panelMatch || null;
+  }
+
+  return matchingBackendTests[0] || null;
 };
 
 const mergeAppointmentBackendPrice = (patient, test, useBackendPrice) => {

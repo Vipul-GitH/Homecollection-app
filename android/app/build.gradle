@@ -135,7 +135,7 @@ dependencies {
 }
 
 afterEvaluate {
-    tasks.matching { it.name == "configureCMakeRelWithDebInfo[arm64-v8a]" }.configureEach {
+    tasks.matching { it.name.startsWith("configureCMakeRelWithDebInfo[") }.configureEach {
         if (rootProject.findProject(":react-native-worklets") != null) {
             dependsOn(":react-native-worklets:prefabReleasePackage")
         }
