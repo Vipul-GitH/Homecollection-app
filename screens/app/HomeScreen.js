@@ -234,18 +234,34 @@ function HomeScreen({
         return;
       }
 
-      onAppointmentDetailStateChange?.(previousState => ({
-        ...previousState,
-        patientSampleCollectionMap: {
-          ...(previousState?.patientSampleCollectionMap || {}),
-          [selectedPatientId]: {
-            ...(previousState?.patientSampleCollectionMap?.[
-              selectedPatientId
-            ] || {}),
-            ...(draft || {}),
+      onAppointmentDetailStateChange?.(previousState => {
+        const patientSequence = toStableValue(draft?.patientSequence);
+        const previousSampleCollection =
+          previousState?.patientSampleCollectionMap?.[selectedPatientId] || {};
+        const nextSampleCollection = {
+          ...previousSampleCollection,
+          ...(draft || {}),
+        };
+
+        if (previousSampleCollection?.collected && !draft?.collected) {
+          nextSampleCollection.collected = true;
+          nextSampleCollection.collectedAt = previousSampleCollection.collectedAt;
+        }
+
+        return {
+          ...previousState,
+          patientSampleCollectionMap: {
+            ...(previousState?.patientSampleCollectionMap || {}),
+            [selectedPatientId]: nextSampleCollection,
           },
-        },
-      }));
+          sampleCollectionPatientSequenceMap: patientSequence
+            ? {
+                ...(previousState?.sampleCollectionPatientSequenceMap || {}),
+                [selectedPatientId]: patientSequence,
+              }
+            : previousState?.sampleCollectionPatientSequenceMap || {},
+        };
+      });
     },
     [onAppointmentDetailStateChange, selectedPatientId],
   );
@@ -417,11 +433,18 @@ function HomeScreen({
                     ] || null
                   : null
               }
+              patientSampleCollectionMap={
+                appointmentDetailState?.patientSampleCollectionMap || {}
+              }
+              patientSequenceMap={
+                appointmentDetailState?.sampleCollectionPatientSequenceMap || {}
+              }
               styles={styles}
               onCollectSample={onCollectSample}
               onSampleCollectionDraftChange={handleSampleCollectionDraftChange}
               onRemoveSelectedTest={onRemovePatientSelectedTest}
               onLocalDatabaseLoadingChange={onLocalDatabaseLoadingChange}
+              loggedInUser={loggedInUser}
             />
           );
         }
@@ -452,6 +475,7 @@ function HomeScreen({
             onLocalDatabaseLoadingChange={onLocalDatabaseLoadingChange}
             selectedBookingScreen={selectedBookingScreen}
             onBookingScreenChange={onBookingScreenChange}
+            loggedInUser={loggedInUser}
           />
         );
       }

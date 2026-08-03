@@ -463,6 +463,40 @@ const normalizeLinkedPatients = source =>
     }))
     .filter(Boolean);
 
+const findMatchingLinkedPatient = (patient, linkedPatients) => {
+  const patientId = toDisplayString(
+    patient?.patientId ||
+      patient?.patient_id ||
+      patient?.id ||
+      patient?.existing_patient_id,
+  );
+  const patientMobile = toDisplayString(
+    patient?.mobileNumber ||
+      patient?.mobile_number ||
+      patient?.contact_mobile ||
+      patient?.phone,
+  );
+  const patientName = toDisplayString(
+    patient?.full_name ||
+      patient?.name ||
+      [patient?.first_name, patient?.last_name].filter(Boolean).join(' '),
+  ).toLowerCase();
+
+  return (Array.isArray(linkedPatients) ? linkedPatients : []).find(linkedPatient => {
+    const linkedPatientId = toDisplayString(linkedPatient?.patientId || linkedPatient?.id);
+    const linkedPatientMobile = toDisplayString(linkedPatient?.mobileNumber);
+    const linkedPatientName = toDisplayString(linkedPatient?.name).toLowerCase();
+
+    return (
+      (patientId && linkedPatientId && patientId === linkedPatientId) ||
+      (patientMobile &&
+        linkedPatientMobile &&
+        patientMobile === linkedPatientMobile) ||
+      (patientName && linkedPatientName && patientName === linkedPatientName)
+    );
+  });
+};
+
 const normalizeYesNoValue = value => {
   if (typeof value === 'boolean') {
     return value ? 'Yes' : 'No';
@@ -696,8 +730,14 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
   );
   const shouldUseAppointmentPatientStatus =
     sourceType.toUpperCase() === 'APPOINTMENT' && Boolean(appointmentId);
+  const linkedPatients = normalizeLinkedPatients(
+    booking?.linked_patients ||
+      booking?.linkedPatients ||
+      fallbackBooking?.linkedPatients,
+  );
   const patients = (patientsSource.length ? patientsSource : fallbackPatients).map(
     (patient, index) => {
+      const linkedPatient = findMatchingLinkedPatient(patient, linkedPatients);
       const selectedCompCatIds = toDisplayString(
         patient?.selected_comp_cat_ids || patient?.selectedCompCatIds,
       );
@@ -723,16 +763,24 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
       return {
         id: bookingPatientId || patientId || `patient-${index}`,
         bookingPatientId,
-        patientId,
-        title: toDisplayString(patient?.title) || 'Mr.',
+        patientId: patientId || linkedPatient?.patientId || '',
+        title: toDisplayString(patient?.title) || linkedPatient?.title || 'Mr.',
         name:
           toDisplayString(
             patient?.full_name ||
               patient?.name ||
               [patient?.first_name, patient?.last_name].filter(Boolean).join(' '),
-          ) || `Patient ${index + 1}`,
-        age: toDisplayString(patient?.age_years || patient?.age) || 'N/A',
-        dob: toDisplayString(patient?.dob || patient?.date_of_birth) || 'N/A',
+          ) ||
+          linkedPatient?.name ||
+          `Patient ${index + 1}`,
+        age:
+          toDisplayString(patient?.age_years || patient?.age) ||
+          linkedPatient?.age ||
+          'N/A',
+        dob:
+          toDisplayString(patient?.dob || patient?.date_of_birth) ||
+          linkedPatient?.dob ||
+          'N/A',
         panelCompany:
           toDisplayString(
             patient?.panelCompany || patient?.panel_company || patient?.panel,
@@ -773,7 +821,9 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
               patient?.mobileNumber ||
               patient?.mobile_number ||
               patient?.phone,
-          ) || 'N/A',
+          ) ||
+          linkedPatient?.mobileNumber ||
+          'N/A',
         alternateMobileNumber:
           toDisplayString(patient?.alternate_mobile || patient?.alternateMobile) ||
           'N/A',
@@ -844,8 +894,8 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
             patient?.status_code ??
             patient?.statusCode,
         ),
-        gender: toDisplayString(patient?.gender) || 'N/A',
-        tag: toDisplayString(patient?.tag) || 'N/A',
+        gender: toDisplayString(patient?.gender) || linkedPatient?.gender || 'N/A',
+        tag: toDisplayString(patient?.tag) || linkedPatient?.tag || 'N/A',
         additionalDiscountAmount: toNumberValue(
           firstNonEmptyValue(
             patient?.additional_discount_amount,
@@ -1201,10 +1251,6 @@ export const normalizeAssignedBookingDetail = (booking, fallbackBooking) => {
             documents: [],
           },
         ],
-    linkedPatients: normalizeLinkedPatients(
-      booking?.linked_patients ||
-        booking?.linkedPatients ||
-        fallbackBooking?.linkedPatients,
-    ),
+    linkedPatients,
   };
 };

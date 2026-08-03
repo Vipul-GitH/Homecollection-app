@@ -12,6 +12,7 @@ class SecureApiPackage : ReactPackage {
       LocalDocumentPickerModule(reactContext),
       LocalGeoCameraModule(reactContext),
       CatalogDatabaseModule(reactContext),
+      PrinterModule(reactContext),
     )
 
   override fun createViewManagers(

@@ -58,14 +58,33 @@ const getDiscountedTestPrice = test => {
   return getTestPricing(test).charge;
 };
 
-const getAppointmentDetailDraftKey = booking =>
-  toStableValue(
-    booking?.id ||
-      booking?.bookingId ||
-      booking?.booking_id ||
-      booking?.appointmentId ||
-      booking?.appointment_id,
-  );
+const getAppointmentDetailDraftSource = booking => {
+  const sourceType = toStableValue(
+    booking?.sourceType || booking?.source_type,
+  ).toUpperCase();
+  return sourceType === 'APPOINTMENT' ||
+    Boolean(toStableValue(booking?.appointmentId || booking?.appointment_id))
+    ? 'APPOINTMENT'
+    : 'BOOKING';
+};
+
+const getAppointmentDetailDraftEntityId = booking => {
+  const source = getAppointmentDetailDraftSource(booking);
+  return source === 'APPOINTMENT'
+    ? toStableValue(
+        booking?.appointmentId || booking?.appointment_id || booking?.id,
+      )
+    : toStableValue(
+        booking?.bookingId || booking?.booking_id || booking?.id,
+      );
+};
+
+const getAppointmentDetailDraftKey = booking => {
+  const entityId = getAppointmentDetailDraftEntityId(booking);
+  return entityId
+    ? `${getAppointmentDetailDraftSource(booking)}:${entityId}`
+    : '';
+};
 
 const shouldUseBackendAppointmentPrices = booking =>
   toStableValue(booking?.sourceType || booking?.source_type).toUpperCase() ===
@@ -73,7 +92,7 @@ const shouldUseBackendAppointmentPrices = booking =>
   Boolean(toStableValue(booking?.appointmentId || booking?.appointment_id));
 
 const getAppointmentDetailDraftKeys = booking => {
-  const keys = [
+  const legacyKeys = [
     booking?.id,
     booking?.bookingId,
     booking?.booking_id,
@@ -83,7 +102,25 @@ const getAppointmentDetailDraftKeys = booking => {
     .map(toStableValue)
     .filter(Boolean);
 
-  return Array.from(new Set(keys));
+  const bookingIds = [booking?.bookingId, booking?.booking_id, booking?.id]
+    .map(toStableValue)
+    .filter(Boolean);
+  const appointmentIds = [
+    booking?.appointmentId,
+    booking?.appointment_id,
+    booking?.id,
+  ]
+    .map(toStableValue)
+    .filter(Boolean);
+
+  return Array.from(
+    new Set([
+      getAppointmentDetailDraftKey(booking),
+      ...bookingIds.map(id => `BOOKING:${id}`),
+      ...appointmentIds.map(id => `APPOINTMENT:${id}`),
+      ...legacyKeys,
+    ].filter(Boolean)),
+  );
 };
 
 const getTestDedupeKey = test =>
@@ -461,6 +498,7 @@ const buildEmptyAppointmentDetailState = () => ({
   patientReportCourierMap: {},
   patientReportScheduleMap: {},
   patientSampleCollectionMap: {},
+  sampleCollectionPatientSequenceMap: {},
   patientTestBookingStatusMap: {},
   patientCghsEnabledMap: {},
   patientCghsIdMap: {},
@@ -2173,6 +2211,8 @@ export const useAppShellController = () => {
     selectedSpecimens = {},
     selectedSpecimenTests = {},
     selectedAdditionalTubes = [],
+    patientSequence = '',
+    tubeBarcodeMap = {},
     unselectedTubes = [],
     unselectedTests = [],
   }) => {
@@ -2208,6 +2248,11 @@ export const useAppShellController = () => {
           selectedAdditionalTubes: Array.isArray(selectedAdditionalTubes)
             ? selectedAdditionalTubes
             : [],
+          patientSequence,
+          tubeBarcodeMap:
+            tubeBarcodeMap && typeof tubeBarcodeMap === 'object'
+              ? tubeBarcodeMap
+              : {},
           unselectedTubes: Array.isArray(unselectedTubes)
             ? unselectedTubes
             : [],
@@ -2216,6 +2261,12 @@ export const useAppShellController = () => {
             : [],
         },
       },
+      sampleCollectionPatientSequenceMap: patientSequence
+        ? {
+            ...(previousState?.sampleCollectionPatientSequenceMap || {}),
+            [patientId]: patientSequence,
+          }
+        : previousState?.sampleCollectionPatientSequenceMap || {},
     }));
     setSelectedBookingScreen('details');
   }, []);

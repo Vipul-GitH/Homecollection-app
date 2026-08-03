@@ -889,26 +889,75 @@ const normalizeAddressField = value => {
 const firstAddressValue = (...values) =>
   values.find(value => normalizeAddressField(value)) || '';
 
+const getTubePayloadName = tube => {
+  const tubeName = normalizeFormText(
+    typeof tube === 'string'
+      ? tube
+      : tube?.tubeName || tube?.specimenName || tube?.name,
+  );
+  const tubeCode = normalizeFormText(
+    typeof tube === 'string'
+      ? ''
+      : tube?.tubeCode || tube?.tube_code || tube?.barcode,
+  );
+
+  if (!tubeName) {
+    return '';
+  }
+
+  return tubeCode ? `${tubeName}-${tubeCode}` : tubeName;
+};
+
 const getCompletedTubeNamesForPayload = sampleCollection => {
   const sourceTubes = Array.isArray(sampleCollection?.selectedTubes)
     ? sampleCollection.selectedTubes
     : [];
   const fallbackTubes = Array.isArray(sampleCollection?.tubeSelectionSummary)
     ? sampleCollection.tubeSelectionSummary.filter(
-        tube => Number(tube?.selectedCount || 0) > 0,
+        tube =>
+          Number(tube?.selectedCount || 0) > 0 &&
+          !tube?.isAdditionalTube,
       )
     : [];
   const tubeNames = (sourceTubes.length ? sourceTubes : fallbackTubes)
-    .map(tube =>
-      normalizeFormText(
-        typeof tube === 'string'
-          ? tube
-          : tube?.tubeName || tube?.specimenName || tube?.name,
-      ),
-    )
+    .filter(tube => !tube?.isAdditionalTube)
+    .map(getTubePayloadName)
     .filter(Boolean);
 
   return Array.from(new Set(tubeNames));
+};
+
+const getAdditionalSampleForPayload = sampleCollection => {
+  const selectedTubes = Array.isArray(sampleCollection?.selectedTubes)
+    ? sampleCollection.selectedTubes
+    : [];
+  const selectedAdditionalTubes = Array.isArray(
+    sampleCollection?.selectedAdditionalTubes,
+  )
+    ? sampleCollection.selectedAdditionalTubes
+    : [];
+  const additionalTubeMap = selectedTubes.reduce((nextMap, tube) => {
+    if (!tube?.isAdditionalTube) {
+      return nextMap;
+    }
+
+    const tubeName = normalizeFormText(tube?.tubeName || tube?.specimenName);
+
+    if (tubeName) {
+      nextMap[tubeName.toLowerCase()] = tube;
+    }
+
+    return nextMap;
+  }, {});
+
+  return selectedAdditionalTubes
+    .map(tubeName => {
+      const normalizedTubeName = normalizeFormText(tubeName);
+      const matchingTube = additionalTubeMap[normalizedTubeName.toLowerCase()];
+      return getTubePayloadName(matchingTube || normalizedTubeName);
+    })
+    .filter(Boolean)
+    .join(',');
 };
 
 const buildAddressFormFromBooking = booking => {
@@ -1008,6 +1057,7 @@ function AppointmentDetailsScreen({
   selectedBookingScreen = 'details',
   onBookingScreenChange,
   onBookingCompleted,
+  loggedInUser = '',
 }) {
   const {width} = useWindowDimensions();
   const isNarrowScreen = width < 390;
@@ -1165,8 +1215,14 @@ function AppointmentDetailsScreen({
     () => appointmentDetailState?.patientSampleCollectionMap || {},
     [appointmentDetailState?.patientSampleCollectionMap],
   );
+  const sampleCollectionPatientSequenceMap = useMemo(
+    () => appointmentDetailState?.sampleCollectionPatientSequenceMap || {},
+    [appointmentDetailState?.sampleCollectionPatientSequenceMap],
+  );
   const hasPendingSampleTubes = useMemo(() => {
-    const sampleCollections = Object.values(patientSampleCollectionMap || {});
+    const sampleCollections = Object.values(patientSampleCollectionMap || {}).filter(
+      sampleCollection => Boolean(sampleCollection?.collected),
+    );
 
     if (!sampleCollections.length) {
       return false;
@@ -1831,42 +1887,71 @@ function AppointmentDetailsScreen({
   );
   const patientSelectorItems = useMemo(
     () =>
-      patients.map((patient, index) => {
-        const patientId =
-          getPatientMutationId(patient) ||
-          patient?.id ||
-          patient?.patientId ||
-          `patient-${index}`;
-        const statusCode = Number(patient?.bookingPatientStatusCode || 0);
-        const sampleCollected =
-          Boolean(
-            patientId && patientSampleCollectionMap[patientId]?.collected,
-          ) || statusCode === 3;
-        const statusLabel =
-          statusCode === 4
-            ? 'Cancelled'
-            : statusCode === 5
-            ? 'Partial'
-            : sampleCollected
-            ? 'Collected'
-            : 'Pending';
+      patients
+        .map((patient, index) => {
+          const patientId =
+            getPatientMutationId(patient) ||
+            patient?.id ||
+            patient?.patientId ||
+            `patient-${index}`;
+          const savedPatientSequence = Number(
+            sampleCollectionPatientSequenceMap?.[patientId] ||
+              patientSampleCollectionMap?.[patientId]?.patientSequence ||
+              0,
+          );
+          const statusCode = Number(patient?.bookingPatientStatusCode || 0);
+          const sampleCollected =
+            Boolean(
+              patientId && patientSampleCollectionMap[patientId]?.collected,
+            ) || statusCode === 3;
+          const statusLabel =
+            statusCode === 4
+              ? 'Cancelled'
+              : statusCode === 5
+              ? 'Partial'
+              : sampleCollected
+              ? 'Collected'
+              : 'Pending';
 
-        return {
-          patient,
-          index,
-          key: String(patientId),
-          name: normalizeFormText(patient?.name) || `Patient ${index + 1}`,
-          meta: [
-            normalizeFormText(patient?.labmatePid || patient?.labmate_pid),
-            normalizeFormText(patient?.mobileNumber || patient?.mobile_number),
-          ]
-            .filter(Boolean)
-            .join(' | '),
-          statusCode,
-          statusLabel,
-        };
-      }),
-    [patientSampleCollectionMap, patients],
+          return {
+            patient,
+            index,
+            patientSequence:
+              Number.isFinite(savedPatientSequence) && savedPatientSequence > 0
+                ? savedPatientSequence
+                : 0,
+            key: String(patientId),
+            name: normalizeFormText(patient?.name) || `Patient ${index + 1}`,
+            meta: [
+              normalizeFormText(patient?.labmatePid || patient?.labmate_pid),
+              normalizeFormText(patient?.mobileNumber || patient?.mobile_number),
+            ]
+              .filter(Boolean)
+              .join(' | '),
+            statusCode,
+            statusLabel,
+          };
+        })
+        .sort((leftItem, rightItem) => {
+          if (leftItem.patientSequence && rightItem.patientSequence) {
+            return leftItem.patientSequence - rightItem.patientSequence;
+          }
+
+          if (leftItem.patientSequence) {
+            return -1;
+          }
+
+          if (rightItem.patientSequence) {
+            return 1;
+          }
+
+          return leftItem.index - rightItem.index;
+        })
+        .map((item, sortedIndex) => ({
+          ...item,
+          displaySequence: item.patientSequence || sortedIndex + 1,
+        })),
+    [patientSampleCollectionMap, patients, sampleCollectionPatientSequenceMap],
   );
   const filteredPatientSelectorItems = useMemo(() => {
     const searchText = deferredPatientSearchText.trim().toLowerCase();
@@ -2508,7 +2593,6 @@ function AppointmentDetailsScreen({
       }),
     [
       getPatientPanelCompanies,
-      isAppointmentSourceBooking,
       patients,
       patientSelectedTestsMap,
     ],
@@ -3023,6 +3107,7 @@ function AppointmentDetailsScreen({
             isManualHcSlipSelected(patientPayload.test_booking_status)),
       );
     const pendingChildTestsPayload = Object.values(patientSampleCollectionMap)
+      .filter(sampleCollection => Boolean(sampleCollection?.collected))
       .flatMap(sampleCollection =>
         Array.isArray(sampleCollection?.pendingChildTests)
           ? sampleCollection.pendingChildTests
@@ -3144,15 +3229,8 @@ function AppointmentDetailsScreen({
           patientSampleCollectionMap[patientId] || {};
         const completedTubeNames =
           getCompletedTubeNamesForPayload(patientSampleCollection);
-        const additionalSample = (Array.isArray(
-          patientSampleCollection?.selectedAdditionalTubes,
-        )
-          ? patientSampleCollection.selectedAdditionalTubes
-          : []
-        )
-          .map(tubeName => normalizeFormText(tubeName))
-          .filter(Boolean)
-          .join(',');
+        const additionalSample =
+          getAdditionalSampleForPayload(patientSampleCollection);
         const patientDocumentFileField = `patient_documents_${payloadPatientId}`;
         const patientDocumentMeta = [];
         const appendPatientDocumentMeta = (documents, type) => {
@@ -3387,7 +3465,6 @@ function AppointmentDetailsScreen({
     getPatientPanelCompanies,
     hasPendingSampleTubes,
     isAppointmentPatientStatusContext,
-    isAppointmentSourceBooking,
     isLinkedAppointmentSelected,
     linkedAppointmentDate,
     linkedAppointmentTimeSlot,
@@ -6475,6 +6552,7 @@ function AppointmentDetailsScreen({
             hidePatientEditAction={isAppointmentSourceBooking}
             skipPatientDocumentRequirements={isAppointmentSourceBooking}
             isAppointmentSourceBooking={isAppointmentSourceBooking}
+            loggedInUser={loggedInUser}
             patientCghsEnabledMap={patientCghsEnabledMap}
             patientCghsIdMap={patientCghsIdMap}
             patientCghsDocumentsMap={patientCghsDocumentsMap}

@@ -5,7 +5,9 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  Alert,
   NativeModules,
   Text,
   TouchableOpacity,
@@ -24,12 +26,365 @@ import {
   sampleTubeMappingRequests,
 } from '../../utils/bookings/sampleTubeMappingCache';
 
-const {CatalogDatabaseModule} = NativeModules;
+const {CatalogDatabaseModule, PrinterModule} = NativeModules;
 const SAMPLE_TUBE_MAPPING_TIMEOUT_MS = 7000;
 const logSampleTubePerf = () => {};
+const SAVED_PRINTER_KEY = '@homecollection/default_printer';
 
 const toStableValue = value =>
   value === null || value === undefined ? '' : String(value).trim();
+
+const parseSavedPrinter = value => {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsedValue = JSON.parse(value);
+    return parsedValue?.address ? parsedValue : null;
+  } catch {
+    return null;
+  }
+};
+
+const getPatientName = patient => {
+  const title = toStableValue(patient?.title || patient?.patient_title);
+  const name =
+    toStableValue(
+    patient?.name ||
+      patient?.full_name ||
+      patient?.fullName ||
+      patient?.patient_name ||
+      patient?.patientName,
+    ) || 'Patient';
+  const normalizedTitle = title.replace(/\s+/g, ' ');
+
+  if (
+    normalizedTitle &&
+    !name.toLowerCase().startsWith(normalizedTitle.toLowerCase())
+  ) {
+    return `${normalizedTitle} ${name}`;
+  }
+
+  return name;
+};
+
+const calculateAgeYearsFromDate = value => {
+  const normalizedDate = toStableValue(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) {
+    return '';
+  }
+
+  const [year, month, day] = normalizedDate.split('-').map(Number);
+  const birthDate = new Date(year, month - 1, day);
+
+  if (
+    birthDate.getFullYear() !== year ||
+    birthDate.getMonth() !== month - 1 ||
+    birthDate.getDate() !== day
+  ) {
+    return '';
+  }
+
+  const today = new Date();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const hasBirthdayPassed =
+    today.getMonth() > birthDate.getMonth() ||
+    (today.getMonth() === birthDate.getMonth() &&
+      today.getDate() >= birthDate.getDate());
+
+  if (!hasBirthdayPassed) {
+    age -= 1;
+  }
+
+  return age >= 0 ? String(age) : '';
+};
+
+const getGenderFromPatientTitle = title => {
+  const normalizedTitle = toStableValue(title).toLowerCase().replace(/\.$/, '');
+
+  if (['mr', 'master', 'mst', 'son of'].includes(normalizedTitle)) {
+    return 'Male';
+  }
+
+  if (
+    ['mrs', 'ms', 'miss', 'baby', 'daughter of', 'dr (ms)'].includes(
+      normalizedTitle,
+    )
+  ) {
+    return 'Female';
+  }
+
+  return '';
+};
+
+const normalizeGenderText = value => {
+  const normalizedValue = toStableValue(value);
+  const lowerValue = normalizedValue.toLowerCase();
+
+  if (['m', 'male'].includes(lowerValue)) {
+    return 'Male';
+  }
+
+  if (['f', 'female'].includes(lowerValue)) {
+    return 'Female';
+  }
+
+  return normalizedValue === 'N/A' ? '' : normalizedValue;
+};
+
+const getPatientAgeGender = patient => {
+  const explicitAgeValue = toStableValue(
+    patient?.age ||
+      patient?.Age ||
+      patient?.age_years ||
+      patient?.ageYears ||
+      patient?.age_year ||
+      patient?.patient_age_years ||
+      patient?.patient_age ||
+      patient?.patientAge,
+  );
+  const ageValue =
+    explicitAgeValue && explicitAgeValue !== 'N/A'
+      ? explicitAgeValue
+      : calculateAgeYearsFromDate(
+          patient?.dob ||
+            patient?.date_of_birth ||
+            patient?.dateOfBirth ||
+            patient?.birth_date,
+        );
+  const genderValue =
+    normalizeGenderText(
+      patient?.gender ||
+        patient?.Gender ||
+        patient?.patient_gender ||
+        patient?.sex ||
+        patient?.Sex,
+    ) || getGenderFromPatientTitle(patient?.title || patient?.patient_title);
+  const ageText = ageValue ? `${ageValue} Yrs` : '';
+  return [ageText, genderValue].filter(Boolean).join(' ');
+};
+
+const getPrintDateText = () => {
+  const date = new Date();
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+};
+
+const TUBE_BARCODE_CENTER_ID = '1';
+
+const getFinancialYearShortCode = () => {
+  const date = new Date();
+  const fiscalYearStart = date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
+  return String(fiscalYearStart).slice(-2);
+};
+
+const getDigitsOnly = value => toStableValue(value).replace(/\D/g, '');
+
+const getBookingSourceType = booking =>
+  toStableValue(booking?.sourceType || booking?.source_type).toUpperCase();
+
+const getBookingAppointmentId = booking =>
+  getDigitsOnly(booking?.appointmentId || booking?.appointment_id);
+
+const getBookingId = booking =>
+  getDigitsOnly(booking?.id || booking?.bookingId || booking?.booking_id);
+
+const getTubeBarcodePrefix = booking => {
+  const appointmentId = getBookingAppointmentId(booking);
+  const sourceType = getBookingSourceType(booking);
+
+  if (sourceType === 'APPOINTMENT' && appointmentId) {
+    return `0${appointmentId}`;
+  }
+
+  return `${getFinancialYearShortCode()}${getBookingId(booking)}`;
+};
+
+const getPatientIdentityCandidates = patient =>
+  [
+    patient?.bookingPatientId,
+    patient?.booking_patient_id,
+    patient?.booking_patient,
+    patient?.patientId,
+    patient?.patient_id,
+    patient?.labmatePid,
+    patient?.labmate_pid,
+    patient?.id,
+  ]
+    .map(value => toStableValue(value))
+    .filter(Boolean);
+
+const isSamePatient = (leftPatient, rightPatient) => {
+  const leftCandidates = getPatientIdentityCandidates(leftPatient);
+  const rightCandidates = new Set(getPatientIdentityCandidates(rightPatient));
+  return leftCandidates.some(candidate => rightCandidates.has(candidate));
+};
+
+const getPatientSequenceFromBarcode = (booking, barcode) => {
+  const prefix = getTubeBarcodePrefix(booking);
+  const normalizedBarcode = toStableValue(barcode);
+
+  if (!prefix || !normalizedBarcode.startsWith(`${prefix}${TUBE_BARCODE_CENTER_ID}`)) {
+    return '';
+  }
+
+  const sequencePart = normalizedBarcode
+    .slice(`${prefix}${TUBE_BARCODE_CENTER_ID}`.length)
+    .split('-')[0];
+
+  return getDigitsOnly(sequencePart);
+};
+
+const getExistingPatientSequenceFromTubeMap = (booking, tubeBarcodeMap) => {
+  if (!tubeBarcodeMap || typeof tubeBarcodeMap !== 'object') {
+    return '';
+  }
+
+  for (const record of Object.values(tubeBarcodeMap)) {
+    const sequence = getPatientSequenceFromBarcode(
+      booking,
+      record?.tubeCode || record?.tube_code || record?.barcode,
+    );
+
+    if (sequence) {
+      return sequence;
+    }
+  }
+
+  return '';
+};
+
+const getUsedPatientSequences = (booking, patientSampleCollectionMap) => {
+  const usedSequences = new Set();
+
+  Object.values(patientSampleCollectionMap || {}).forEach(sampleCollection => {
+    const sequence =
+      toStableValue(sampleCollection?.patientSequence) ||
+      getExistingPatientSequenceFromTubeMap(
+        booking,
+        sampleCollection?.tubeBarcodeMap,
+      );
+
+    if (sequence) {
+      usedSequences.add(sequence);
+    }
+  });
+
+  return usedSequences;
+};
+
+const getSavedPatientSequence = (patientSequenceMap, selectedPatient) => {
+  if (!patientSequenceMap || typeof patientSequenceMap !== 'object') {
+    return '';
+  }
+
+  const candidates = getPatientIdentityCandidates(selectedPatient);
+
+  for (const candidate of candidates) {
+    const sequence = toStableValue(patientSequenceMap[candidate]);
+
+    if (sequence) {
+      return sequence;
+    }
+  }
+
+  return '';
+};
+
+const getNextPatientSequence = usedSequences => {
+  let nextSequence = 1;
+
+  while (usedSequences.has(String(nextSequence))) {
+    nextSequence += 1;
+  }
+
+  return String(nextSequence);
+};
+
+const getPatientSequence = (
+  booking,
+  selectedPatient,
+  sampleCollectionDraft,
+  patientSampleCollectionMap,
+  patientSequenceMap,
+) => {
+  const existingSequence =
+    getSavedPatientSequence(patientSequenceMap, selectedPatient) ||
+    toStableValue(sampleCollectionDraft?.patientSequence) ||
+    getExistingPatientSequenceFromTubeMap(
+      booking,
+      sampleCollectionDraft?.tubeBarcodeMap,
+    );
+
+  if (existingSequence) {
+    return existingSequence;
+  }
+
+  const usedSequences = getUsedPatientSequences(booking, patientSampleCollectionMap);
+  Object.values(patientSequenceMap || {}).forEach(sequence => {
+    const normalizedSequence = toStableValue(sequence);
+
+    if (normalizedSequence) {
+      usedSequences.add(normalizedSequence);
+    }
+  });
+  const patients = Array.isArray(booking?.patients) ? booking.patients : [];
+  const patientIndex = patients.findIndex(patient =>
+    isSamePatient(patient, selectedPatient),
+  );
+  const listSequence = patientIndex >= 0 ? String(patientIndex + 1) : '';
+
+  if (listSequence && !usedSequences.has(listSequence)) {
+    return listSequence;
+  }
+
+  return getNextPatientSequence(usedSequences);
+};
+
+const getTubePhysicalKey = tube => {
+  const tubeName = toStableValue(tube?.tubeName || tube?.specimenName).toLowerCase();
+  const sourcePrefix = tube?.isAdditionalTube ? 'additional' : 'specimen';
+  return `${sourcePrefix}:${tubeName}`;
+};
+
+const getTubeSequenceFromRecord = record => {
+  const explicitSequence = Number(record?.tubeSeq || record?.tube_seq || 0);
+  if (explicitSequence > 0) {
+    return explicitSequence;
+  }
+
+  const code = toStableValue(record?.tubeCode || record?.tube_code || record?.barcode);
+  const suffixMatch = code.match(/-(\d+)$/);
+  return suffixMatch ? Number(suffixMatch[1]) : 0;
+};
+
+const buildTubeBarcode = ({
+  booking,
+  selectedPatient,
+  sampleCollectionDraft,
+  patientSampleCollectionMap,
+  patientSequenceMap,
+  tubeSeq,
+}) => {
+  const prefix = getTubeBarcodePrefix(booking);
+  const patientSequence = getPatientSequence(
+    booking,
+    selectedPatient,
+    sampleCollectionDraft,
+    patientSampleCollectionMap,
+    patientSequenceMap,
+  );
+  const normalizedTubeSeq = String(Number(tubeSeq || 0) || '');
+
+  if (!prefix || !patientSequence || !normalizedTubeSeq) {
+    return '';
+  }
+
+  return `${prefix}${TUBE_BARCODE_CENTER_ID}${patientSequence}-${normalizedTubeSeq}`;
+};
 
 const getTestDedupeKey = test =>
   toStableValue(
@@ -243,12 +598,17 @@ function SampleCollectionScreen({
   selectedPatient,
   selectedTests,
   sampleCollectionDraft,
+  patientSampleCollectionMap = {},
+  patientSequenceMap = {},
   styles,
   onCollectSample,
   onSampleCollectionDraftChange,
   onLocalDatabaseLoadingChange,
+  loggedInUser = '',
 }) {
   const [appAlert, setAppAlert] = useState(null);
+  const [isPrintingLabels, setIsPrintingLabels] = useState(false);
+  const tubeBarcodeMapRef = useRef(sampleCollectionDraft?.tubeBarcodeMap || {});
   const [expandedSpecimens, setExpandedSpecimens] = useState({});
   const [expandedParentTests, setExpandedParentTests] = useState({});
   const [expandedAdditionalTubes, setExpandedAdditionalTubes] = useState(false);
@@ -273,6 +633,12 @@ function SampleCollectionScreen({
 
   useEffect(() => {
     sampleCollectionDraftRef.current = sampleCollectionDraft;
+    if (
+      sampleCollectionDraft?.tubeBarcodeMap &&
+      typeof sampleCollectionDraft.tubeBarcodeMap === 'object'
+    ) {
+      tubeBarcodeMapRef.current = sampleCollectionDraft.tubeBarcodeMap;
+    }
   }, [sampleCollectionDraft]);
 
   useEffect(() => {
@@ -287,6 +653,7 @@ function SampleCollectionScreen({
         ? currentDraft.selectedAdditionalTubes
         : [],
     );
+    tubeBarcodeMapRef.current = currentDraft?.tubeBarcodeMap || {};
     setSelectionRestoreVersion(0);
   }, [selectedPatient]);
 
@@ -850,16 +1217,83 @@ function SampleCollectionScreen({
     [getSelectedSpecimenTestCount, selectedAdditionalTubes, selectedSpecimenSummary],
   );
   const selectedTubes = useMemo(
-    () =>
-      tubeSelectionSummary
-        .filter(item => Number(item.selectedCount || 0) > 0)
-        .map(item => ({
+    () => {
+      const existingBarcodeMap = tubeBarcodeMapRef.current || {};
+      const currentDraft = sampleCollectionDraftRef.current || {};
+      const nextBarcodeMap = {...existingBarcodeMap};
+      const maxExistingTubeSeq = Object.values(existingBarcodeMap).reduce(
+        (maxSequence, record) =>
+          Math.max(maxSequence, getTubeSequenceFromRecord(record)),
+        0,
+      );
+      let nextTubeSeq = maxExistingTubeSeq + 1;
+
+      const selectedTubeRows = tubeSelectionSummary
+        .map((item, index) => ({
           tubeName: item.tubeName,
           totalCount: item.totalCount,
           selectedCount: item.selectedCount,
           pendingCount: item.pendingCount,
-        })),
-    [tubeSelectionSummary],
+          isAdditionalTube: Boolean(item.isAdditionalTube),
+          reservedTubeSeq: index + 1,
+        }))
+        .filter(item => Number(item.selectedCount || 0) > 0);
+
+      const rowsWithBarcodes = selectedTubeRows.map(item => {
+        const tubeKey = getTubePhysicalKey(item);
+        const existingRecord = nextBarcodeMap[tubeKey];
+        const reservedTubeSeq = Number(item.reservedTubeSeq || 0);
+        const tubeSeq =
+          getTubeSequenceFromRecord(existingRecord) ||
+          (reservedTubeSeq > 0 ? reservedTubeSeq : nextTubeSeq++);
+        nextTubeSeq = Math.max(nextTubeSeq, tubeSeq + 1);
+        const tubeCode =
+          toStableValue(
+            existingRecord?.tubeCode ||
+              existingRecord?.tube_code ||
+              existingRecord?.barcode,
+          ) ||
+          buildTubeBarcode({
+            booking: selectedBooking,
+            selectedPatient,
+            sampleCollectionDraft: currentDraft,
+            patientSampleCollectionMap,
+            patientSequenceMap,
+            tubeSeq,
+          });
+        const patientSequence = getPatientSequence(
+          selectedBooking,
+          selectedPatient,
+          currentDraft,
+          patientSampleCollectionMap,
+          patientSequenceMap,
+        );
+        const record = {
+          tubeCode,
+          tubeSeq,
+          patientSequence,
+          tubeName: item.tubeName,
+          isAdditionalTube: Boolean(item.isAdditionalTube),
+        };
+
+        nextBarcodeMap[tubeKey] = record;
+
+        return {
+          ...item,
+          ...record,
+        };
+      });
+
+      tubeBarcodeMapRef.current = nextBarcodeMap;
+      return rowsWithBarcodes;
+    },
+    [
+      patientSampleCollectionMap,
+      patientSequenceMap,
+      selectedBooking,
+      selectedPatient,
+      tubeSelectionSummary,
+    ],
   );
   const unselectedTubes = useMemo(
     () =>
@@ -997,6 +1431,14 @@ function SampleCollectionScreen({
       selectedSpecimens,
       selectedSpecimenTests,
       selectedAdditionalTubes,
+      patientSequence: getPatientSequence(
+        selectedBooking,
+        selectedPatient,
+        sampleCollectionDraftRef.current || {},
+        patientSampleCollectionMap,
+        patientSequenceMap,
+      ),
+      tubeBarcodeMap: tubeBarcodeMapRef.current,
       tubeSelectionSummary,
       selectedTubes,
       unselectedTubes,
@@ -1007,8 +1449,11 @@ function SampleCollectionScreen({
   }, [
     allSpecimenTests.length,
     onSampleCollectionDraftChange,
+    patientSampleCollectionMap,
+    patientSequenceMap,
     pendingChildTestsPayload,
     sampleCollectionDraft?.collected,
+    selectedBooking,
     selectedPatient,
     selectedSampleTestCount,
     selectedAdditionalTubes,
@@ -1032,6 +1477,100 @@ function SampleCollectionScreen({
       cancelable: false,
     });
   }, []);
+  const handlePrintTubeLabels = async () => {
+    if (isPrintingLabels) {
+      return;
+    }
+
+    try {
+      setIsPrintingLabels(true);
+      if (!PrinterModule?.printTubeLabels) {
+        Alert.alert(
+          'Printer Unavailable',
+          'Printer module is not available in this APK build.',
+        );
+        return;
+      }
+
+      const savedPrinter = parseSavedPrinter(
+        await AsyncStorage.getItem(SAVED_PRINTER_KEY),
+      );
+
+      if (!savedPrinter?.address) {
+        Alert.alert(
+          'Printer Not Selected',
+          'Please select a default printer from Profile > Printer first.',
+        );
+        return;
+      }
+
+      if (!selectedTubes.length) {
+        Alert.alert(
+          'No Tubes Selected',
+          'Select at least one tube before printing labels.',
+        );
+        return;
+      }
+
+      if (selectedTubes.some(tube => !toStableValue(tube?.tubeCode))) {
+        Alert.alert(
+          'Tube Code Missing',
+          'Unable to generate a tube barcode for one or more selected tubes.',
+        );
+        return;
+      }
+
+      const patientName = getPatientName(selectedPatient);
+      const ageGender = getPatientAgeGender(selectedPatient);
+      const dateText = getPrintDateText();
+      const labels = selectedTubes.map(tube => ({
+        patientName,
+        ageGender,
+        tubeName: tube.tubeName,
+        tubeCode: tube.tubeCode,
+        barcode: tube.tubeCode,
+        dateText,
+        phleboName: toStableValue(loggedInUser),
+      }));
+
+      await PrinterModule.printTubeLabels(
+        savedPrinter.address,
+        savedPrinter.transport || '',
+        labels,
+      );
+
+      onSampleCollectionDraftChange?.({
+        collected: Boolean(sampleCollectionDraft?.collected),
+        selectedCount: selectedSampleTestCount,
+        selectedSpecimens,
+        selectedSpecimenTests,
+        selectedAdditionalTubes,
+        patientSequence: getPatientSequence(
+          selectedBooking,
+          selectedPatient,
+          sampleCollectionDraftRef.current || {},
+          patientSampleCollectionMap,
+          patientSequenceMap,
+        ),
+        tubeBarcodeMap: tubeBarcodeMapRef.current,
+        tubeSelectionSummary,
+        selectedTubes,
+        unselectedTubes,
+        unselectedTests,
+        pendingChildTests: pendingChildTestsPayload,
+        updatedAt: new Date().toISOString(),
+      });
+
+      Alert.alert('Labels Printed', `${labels.length} tube label(s) printed.`);
+    } catch (error) {
+      Alert.alert(
+        'Print Failed',
+        error?.message || 'Unable to print tube labels.',
+      );
+    } finally {
+      setIsPrintingLabels(false);
+    }
+  };
   const handleCollectSample = () => {
     if (!canCollectSample) {
       return;
@@ -1047,6 +1586,14 @@ function SampleCollectionScreen({
         selectedSpecimens,
         selectedSpecimenTests,
         selectedAdditionalTubes,
+        patientSequence: getPatientSequence(
+          selectedBooking,
+          selectedPatient,
+          sampleCollectionDraftRef.current || {},
+          patientSampleCollectionMap,
+          patientSequenceMap,
+        ),
+        tubeBarcodeMap: tubeBarcodeMapRef.current,
         unselectedTubes,
         unselectedTests,
       });
@@ -1491,6 +2038,30 @@ function SampleCollectionScreen({
               No selected tests available yet. Add tests from panel company chips first.
             </Text>
           )}
+
+          <TouchableOpacity
+            activeOpacity={0.88}
+            style={[
+              styles.sampleCollectionCollectButton,
+              (!selectedTubes.length || isPrintingLabels) &&
+                styles.sampleCollectionCollectButtonDisabled,
+            ]}
+            onPress={handlePrintTubeLabels}
+            disabled={!selectedTubes.length || isPrintingLabels}>
+            <Ionicons
+              name="barcode-outline"
+              size={18}
+              style={styles.sampleCollectionCollectButtonIcon}
+            />
+            <Text style={styles.sampleCollectionCollectButtonText}>
+              {isPrintingLabels ? 'Printing Tube Labels...' : 'Print Tube Labels'}
+            </Text>
+            <View style={styles.sampleCollectionCollectCountBadge}>
+              <Text style={styles.sampleCollectionCollectCountText}>
+                {selectedTubes.length}
+              </Text>
+            </View>
+          </TouchableOpacity>
 
           <TouchableOpacity
             activeOpacity={0.88}

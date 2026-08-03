@@ -46,7 +46,7 @@ const getPreviewStatusTone = status => {
 };
 
 const isCompletedBooking = booking => {
-  const statusCode = Number(booking?.bookingStatusCode || 0);
+  const     = Number(booking?.bookingStatusCode || 0);
   const statusText = String(booking?.status || '').trim().toLowerCase();
 
   return (

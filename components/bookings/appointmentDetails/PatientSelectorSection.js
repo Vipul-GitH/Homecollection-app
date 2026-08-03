@@ -29,7 +29,7 @@ const PatientSelectorChip = React.memo(function PatientSelectorChip({
             isSelected && styles.patientSelectorChipNameActive,
           ]}
           numberOfLines={1}>
-          {item.index + 1}. {item.name}
+          {item.displaySequence || item.index + 1}. {item.name}
         </Text>
         {isSelected ? (
           <Ionicons
@@ -97,7 +97,10 @@ function PatientSelectorSection({
         <View style={styles.patientSelectorSelectedBadge}>
           <Text style={styles.patientSelectorSelectedBadgeText}>
             {selectedPatientItem
-              ? `Patient ${selectedPatientItem.index + 1} / ${patientCount}`
+              ? `Patient ${
+                  selectedPatientItem.displaySequence ||
+                  selectedPatientItem.index + 1
+                } / ${patientCount}`
               : 'No Patient'}
           </Text>
         </View>

@@ -61,6 +61,7 @@ function SelectedPatientAppointmentSection({
   hidePatientEditAction = false,
   skipPatientDocumentRequirements = false,
   isAppointmentSourceBooking = false,
+  loggedInUser = '',
 }) {
   const {patient = null, index = 0} = selectedPatientItem || EMPTY_OBJECT;
   const patientStatusCode = Number(patient?.bookingPatientStatusCode || 0);
@@ -301,6 +302,7 @@ function SelectedPatientAppointmentSection({
           sampleCollection={sampleCollection}
           canOpenSampleCollection={canUseThisPatientTestActions}
           onOpenSampleCollection={onOpenSampleCollection}
+          loggedInUser={loggedInUser}
         />
       ) : null}
     </>

@@ -47,7 +47,6 @@ function PatientSampleCollectionSection({
   const tubeSummaryRows = allTubeSummaryRows.filter(
     item => !isUndefinedTubeName(item.tubeName),
   );
-
   return (
     <View style={styles.patientSampleSection}>
       <View style={styles.patientSampleSectionHeader}>

@@ -3,12 +3,14 @@ import {ActivityIndicator, Alert, Text, TouchableOpacity, View} from 'react-nati
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 import {BRAND} from '../../styles/appStyles';
+import PrinterSettingsScreen from './PrinterSettingsScreen';
 
 export default function EodScreen({
   styles,
   onClearAppCache,
   onClearAllAppData,
 }) {
+  const [activeToolTab, setActiveToolTab] = useState('maintenance');
   const [storageAction, setStorageAction] = useState('');
   const [storageMessage, setStorageMessage] = useState('');
 
@@ -82,6 +84,43 @@ export default function EodScreen({
 
   return (
     <View style={styles.storageToolsScreen}>
+      <View style={localStyles.toolTabs}>
+        {[
+          {key: 'maintenance', label: 'Maintenance', icon: 'server-outline'},
+          {key: 'printer', label: 'Printer', icon: 'print-outline'},
+        ].map(tab => {
+          const isActive = activeToolTab === tab.key;
+
+          return (
+            <TouchableOpacity
+              key={tab.key}
+              activeOpacity={0.86}
+              style={[localStyles.toolTabButton, isActive && localStyles.toolTabButtonActive]}
+              onPress={() => setActiveToolTab(tab.key)}>
+              <Ionicons
+                name={tab.icon}
+                size={16}
+                style={[
+                  localStyles.toolTabIcon,
+                  isActive && localStyles.toolTabIconActive,
+                ]}
+              />
+              <Text
+                style={[
+                  localStyles.toolTabText,
+                  isActive && localStyles.toolTabTextActive,
+                ]}>
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {activeToolTab === 'printer' ? (
+        <PrinterSettingsScreen />
+      ) : (
+        <>
       <View style={styles.storageToolsHeaderCard}>
         <View style={styles.storageToolsIconWrap}>
           <Ionicons name="server-outline" size={28} style={styles.storageToolsIcon} />
@@ -142,6 +181,47 @@ export default function EodScreen({
       {storageMessage ? (
         <Text style={styles.storageStatusText}>{storageMessage}</Text>
       ) : null}
+        </>
+      )}
     </View>
   );
 }
+
+const localStyles = {
+  toolTabs: {
+    backgroundColor: BRAND.surface,
+    borderColor: BRAND.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    padding: 6,
+  },
+  toolTabButton: {
+    alignItems: 'center',
+    borderRadius: 14,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 7,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  toolTabButtonActive: {
+    backgroundColor: BRAND.primary,
+  },
+  toolTabIcon: {
+    color: BRAND.muted,
+  },
+  toolTabIconActive: {
+    color: BRAND.surface,
+  },
+  toolTabText: {
+    color: BRAND.muted,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  toolTabTextActive: {
+    color: BRAND.surface,
+  },
+};
