@@ -1317,14 +1317,23 @@ export const addAssignedBookingPatientApi = async ({
   accessToken,
   bookingId,
   patient,
+  requestId,
 }) => {
+  const requestHeaders = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${accessToken}`,
+    ...(requestId
+      ? {
+          'X-Request-ID': String(requestId),
+          'Idempotency-Key': String(requestId),
+        }
+      : {}),
+  };
+
   if (patient?.existing_patient_id) {
     const response = await secureFetch(getAssignedBookingPatientsApiUrl(bookingId), {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
+      headers: requestHeaders,
       body: JSON.stringify({
         existing_patient_id: Number(patient.existing_patient_id),
       }),
@@ -1339,7 +1348,7 @@ export const addAssignedBookingPatientApi = async ({
     );
 
     if (errorMessage) {
-      throw new Error(errorMessage);
+      throw createApiError(response, errorMessage, responseData);
     }
 
     return responseData;
@@ -1352,10 +1361,7 @@ export const addAssignedBookingPatientApi = async ({
   if (!documents.length) {
     const response = await secureFetch(getAssignedBookingPatientsApiUrl(bookingId), {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
+      headers: requestHeaders,
       body: JSON.stringify({
         title: String(patient?.title || ''),
         full_name: String(patient?.full_name || ''),
@@ -1392,7 +1398,7 @@ export const addAssignedBookingPatientApi = async ({
     );
 
     if (errorMessage) {
-      throw new Error(errorMessage);
+      throw createApiError(response, errorMessage, responseData);
     }
 
     return responseData;
@@ -1429,6 +1435,12 @@ export const addAssignedBookingPatientApi = async ({
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
+      ...(requestId
+        ? {
+            'X-Request-ID': String(requestId),
+            'Idempotency-Key': String(requestId),
+          }
+        : {}),
     },
     fields,
     files,
@@ -1443,7 +1455,7 @@ export const addAssignedBookingPatientApi = async ({
   );
 
   if (errorMessage) {
-    throw new Error(errorMessage);
+    throw createApiError(response, errorMessage, responseData);
   }
 
   return responseData;

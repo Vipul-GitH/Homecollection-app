@@ -767,14 +767,17 @@ export const useAssignedBookings = ({
     const bookingIdsToRefresh = new Set();
 
     for (const pendingAction of pendingActions) {
+      if (pendingAction.type === 'add') {
+        await removePendingPatientAction(pendingAction.id);
+        warnDebug('Removed legacy offline patient-add action:', {
+          actionId: pendingAction.id,
+          bookingId: pendingAction.bookingId,
+        });
+        continue;
+      }
+
       try {
-        if (pendingAction.type === 'add') {
-          await addAssignedBookingPatientApi({
-            accessToken,
-            bookingId: pendingAction.bookingId,
-            patient: pendingAction.patient,
-          });
-        } else if (pendingAction.type === 'update') {
+        if (pendingAction.type === 'update') {
           await updateAssignedBookingPatientApi({
             accessToken,
             bookingId: pendingAction.bookingId,
@@ -1335,6 +1338,31 @@ export const useAssignedBookings = ({
         return null;
       }
 
+      const bookingStatusCode = Number(
+        booking?.bookingStatusCode ??
+          booking?.booking_status ??
+          booking?.bookingStatus ??
+          0,
+      );
+      const bookingStatusLabel = String(booking?.status || '')
+        .trim()
+        .toLowerCase();
+      const hasKnownAllowedStatus =
+        bookingStatusCode === 1 ||
+        bookingStatusCode === 2 ||
+        bookingStatusLabel === 'assigned' ||
+        bookingStatusLabel === 'started';
+      const hasKnownBlockedStatus =
+        bookingStatusCode > 0 || Boolean(bookingStatusLabel);
+
+      if (hasKnownBlockedStatus && !hasKnownAllowedStatus) {
+        Alert.alert(
+          'Unable to Add Patient',
+          'Patient can be added only when booking is Assigned or Started.',
+        );
+        return null;
+      }
+
       if (!accessToken) {
         Alert.alert(
           'Missing Session',
@@ -1343,52 +1371,28 @@ export const useAssignedBookings = ({
         return null;
       }
 
+      const requestId = `${String(bookingId)}-add-patient-${Date.now()}`;
+
       try {
         setIsAddingPatient(true);
         await addAssignedBookingPatientApi({
           accessToken,
           bookingId,
           patient,
+          requestId,
         });
 
-        const updatedBookingDetail = await fetchAssignedBookingDetailApi({
-          accessToken,
-          booking,
-        });
-        await persistUpdatedBookingDetail({bookingId, updatedBookingDetail});
-
-        showPlatformMessage('Success', 'Patient added successfully.');
-        return updatedBookingDetail;
       } catch (error) {
+        setIsAddingPatient(false);
         if (handleSessionExpired(error)) {
           return null;
         }
         if (isLikelyOfflineError(error)) {
-          const localPatientId = `offline-patient-${Date.now()}`;
-          await queuePendingPatientAction({
-            bookingId,
-            type: 'add',
-            localPatientId,
-            patient,
-          });
-
-          const localBookingDetail = await applyPatientMutationLocally({
-            booking,
-            updater: previousPatients => [
-              ...previousPatients,
-              buildLocalPatientFromPayload({
-                patient,
-                patientId: localPatientId,
-                isOfflinePending: true,
-              }),
-            ],
-          });
-
-          showPlatformMessage(
-            'Saved Offline',
-            'Patient details have been saved and will sync automatically.',
+          Alert.alert(
+            'Internet Required',
+            'Patient can be added only while the app is online. Please check your connection and try again.',
           );
-          return localBookingDetail;
+          return null;
         }
 
         Alert.alert(
@@ -1396,9 +1400,34 @@ export const useAssignedBookings = ({
           error?.message || 'Unable to add the patient right now.',
         );
         return null;
+      }
+
+      let updatedBookingDetail = null;
+      try {
+        updatedBookingDetail = await fetchAssignedBookingDetailApi({
+          accessToken,
+          booking,
+        });
+        await persistUpdatedBookingDetail({bookingId, updatedBookingDetail});
+      } catch (refreshError) {
+        warnDebug('Patient added, but booking detail refresh failed:', refreshError);
+        updatedBookingDetail = await applyPatientMutationLocally({
+          booking,
+          updater: previousPatients => [
+            ...previousPatients,
+            buildLocalPatientFromPayload({
+              patient,
+              patientId: `added-patient-${Date.now()}`,
+              isOfflinePending: false,
+            }),
+          ],
+        });
       } finally {
         setIsAddingPatient(false);
       }
+
+      showPlatformMessage('Success', 'Patient added successfully.');
+      return updatedBookingDetail || booking;
     },
     [
       accessToken,

@@ -1617,7 +1617,7 @@ export const useAppShellController = () => {
             : mergeAppointmentDetailStateWithFreshBooking(
                 buildAppointmentDetailStateFromBooking(freshBooking),
                 previousState || freshCachedDraft,
-                {ignoreDraftTests: true},
+                {ignoreDraftTests: false},
               ),
         );
         if (shouldSkipDraft) {
@@ -1654,7 +1654,7 @@ export const useAppShellController = () => {
                   : mergeAppointmentDetailStateWithFreshBooking(
                       buildAppointmentDetailStateFromBooking(pricedBooking),
                       previousState,
-                      {ignoreDraftTests: true},
+                      {ignoreDraftTests: false},
                     ),
               );
               if (shouldSkipPricedDraft) {
@@ -1713,7 +1713,7 @@ export const useAppShellController = () => {
             : mergeAppointmentDetailStateWithDraft(
                 buildAppointmentDetailStateFromBooking(finalBooking),
                 cachedDraft,
-                {ignoreDraftTests: true},
+                {ignoreDraftTests: false},
               ),
         );
 
@@ -1748,7 +1748,7 @@ export const useAppShellController = () => {
                         state: previousState,
                         selectedBooking: pricedBooking,
                       }),
-                      {ignoreDraftTests: true},
+                      {ignoreDraftTests: false},
                     ),
               );
               if (shouldSkipPricedDraft) {
