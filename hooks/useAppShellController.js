@@ -1445,6 +1445,8 @@ export const useAppShellController = () => {
       const finishScreenTransition = beginScreenTransition(
         nextTab === 'saved'
           ? 'Opening Handover'
+          : nextTab === 'camp'
+          ? 'Opening Camp'
           : nextTab === 'profile'
           ? 'Opening Profile'
           : nextTab === 'appointments'

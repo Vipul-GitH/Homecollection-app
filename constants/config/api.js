@@ -1,7 +1,13 @@
-export const API_BASE_URL = 'https://labmate.bhasinpathlabs.com:2010';
+export const API_BASE_URL = 'https://labmate.bhasinpathlabs.com:2015';
 export const DOCUMENT_BASE_URL = 'https://labmate.bhasinpathlabs.com:4672';
+export const CAMP_API_BASE_URL = 'https://labmate.bhasinpathlabs.com:2015';
 
 export const LOGIN_API_URL = `${API_BASE_URL}/api/v1/auth/login`;
+
+export const CAMP_PATIENTS_API_URL = `${CAMP_API_BASE_URL}/api/v1/camp-patients`;
+
+export const getCampPatientsByCampApiUrl = campId =>
+  `${CAMP_PATIENTS_API_URL}/by-camp/${encodeURIComponent(String(campId || ''))}`;
 
 export const MY_ASSIGNED_BOOKINGS_API_URL =
   `${API_BASE_URL}/api/v1/bookings/my-assigned`;

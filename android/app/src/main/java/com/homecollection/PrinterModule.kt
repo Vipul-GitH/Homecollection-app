@@ -8,7 +8,6 @@ import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import android.util.Log
 import com.caysn.autoreplyprint.AutoReplyPrint
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -566,9 +565,7 @@ class PrinterModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
-  private fun logDebug(message: String) {
-    Log.d(LOG_TAG, message)
-  }
+  private fun logDebug(@Suppress("UNUSED_PARAMETER") message: String) = Unit
 
   private fun getBluetoothAdapter(): BluetoothAdapter? {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
@@ -632,7 +629,6 @@ class PrinterModule(private val reactContext: ReactApplicationContext) :
       PackageManager.PERMISSION_GRANTED
 
   companion object {
-    private const val LOG_TAG = "HCPrinterModule"
     private val PRINTER_CHARSET: Charset = Charsets.US_ASCII
     private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
   }

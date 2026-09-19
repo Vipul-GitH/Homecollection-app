@@ -25,6 +25,7 @@ import AddTestScreen from '../bookings/AddTestScreen';
 import AppointmentDetailsScreen from '../bookings/AppointmentDetailsScreen';
 import AssignedAppointmentsScreen from '../bookings/AssignedAppointmentsScreen';
 import SampleCollectionScreen from '../bookings/SampleCollectionScreen';
+import CampScreen from '../camp/CampScreen';
 import DashboardScreen from './DashboardScreen';
 import EodScreen from '../operations/EodScreen';
 import HandoverScreen from '../operations/HandoverScreen';
@@ -203,6 +204,8 @@ function HomeScreen({
   }
   const containerSpacingStyle = isBookingDetailScreen
     ? styles.detailScreenContainer
+    : activeTab === 'camp'
+      ? styles.campScreenContainer
     : isSmallPhone
       ? styles.homeContainerCompactPadding
       : horizontalPadding >= 28
@@ -560,6 +563,17 @@ function HomeScreen({
       );
     }
 
+    if (activeTab === 'camp') {
+      return (
+        <CampScreen
+          styles={styles}
+          accessToken={accessToken}
+          loggedInUser={loggedInUser}
+          onSessionExpired={onSessionExpired}
+        />
+      );
+    }
+
     return (
       <DashboardScreen
         styles={styles}
@@ -639,6 +653,7 @@ function HomeScreen({
               style={[
                 styles.fixedHeaderWrap,
                 {marginHorizontal: -horizontalPadding},
+                activeTab === 'camp' && styles.campFixedHeaderWrap,
               ]}>
               <AppHeader
                 title={
@@ -714,7 +729,7 @@ function HomeScreen({
               style={[
                 styles.homeContentShell,
                 activeTab === 'home' && styles.homeContentShellWide,
-                activeTab !== 'home' &&
+                activeTab !== 'home' && activeTab !== 'camp' &&
                   !isBookingDetailScreen && {maxWidth: homeContentWidth},
                 isBookingDetailScreen && styles.detailContentShell,
               ]}>
@@ -726,6 +741,7 @@ function HomeScreen({
                     activeTab === 'home' &&
                       isSmallPhone &&
                       styles.contentSurfaceHomeCompact,
+                    activeTab === 'camp' && styles.contentSurfaceCamp,
                     isBookingDetailScreen && styles.contentSurfaceDetail,
                     isBookingDetailScreen &&
                       isSmallPhone &&

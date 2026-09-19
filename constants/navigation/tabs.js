@@ -18,6 +18,12 @@ export const bottomTabs = [
     activeIcon: 'bookmark',
   },
   {
+    key: 'camp',
+    label: 'Camp',
+    icon: 'medkit-outline',
+    activeIcon: 'medkit',
+  },
+  {
     key: 'profile',
     label: 'Profile',
     icon: 'person-outline',

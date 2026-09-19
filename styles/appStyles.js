@@ -430,6 +430,9 @@ const appStyles = StyleSheet.create({
   detailScreenContainer: {
     paddingHorizontal: 6,
   },
+  campScreenContainer: {
+    paddingHorizontal: 0,
+  },
   locationBlockedContainer: {
     flex: 1,
     alignItems: 'center',
@@ -640,6 +643,9 @@ const appStyles = StyleSheet.create({
   },
   fixedHeaderWrap: {
     marginBottom: 8,
+  },
+  campFixedHeaderWrap: {
+    marginHorizontal: 0,
   },
   homeHeader: {
     marginBottom: 18,
@@ -894,6 +900,14 @@ const appStyles = StyleSheet.create({
   contentSurfaceDetail: {
     marginHorizontal: -4,
     paddingHorizontal: 8,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  contentSurfaceCamp: {
+    paddingHorizontal: 0,
+    paddingTop: 10,
     backgroundColor: 'transparent',
     borderWidth: 0,
     shadowOpacity: 0,
