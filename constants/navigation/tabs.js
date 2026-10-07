@@ -17,12 +17,13 @@ export const bottomTabs = [
     icon: 'bookmark-outline',
     activeIcon: 'bookmark',
   },
-  {
-    key: 'camp',
-    label: 'Camp',
-    icon: 'medkit-outline',
-    activeIcon: 'medkit',
-  },
+  // Camp feature temporarily disabled. Keep this configuration for easy restore.
+  // {
+  //   key: 'camp',
+  //   label: 'Camp',
+  //   icon: 'medkit-outline',
+  //   activeIcon: 'medkit',
+  // },
   {
     key: 'profile',
     label: 'Profile',

@@ -12,8 +12,6 @@ import {
   Linking,
   Modal,
   NativeModules,
-  PermissionsAndroid,
-  Platform,
   Text,
   TextInput,
   TouchableOpacity,
@@ -21,11 +19,6 @@ import {
   View,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import GetLocation from 'react-native-get-location';
-import {
-  getLastKnownGeoCapture,
-  persistLastKnownGeoCapture,
-} from '../../utils/location/lastKnownGeoCapture';
 import {getUploadFileName} from '../../screens/bookings/appointmentDetails/helpers';
 import {BRAND} from '../../styles/appStyles';
 import PatientDocumentsList from './patient/PatientDocumentsList';
@@ -243,40 +236,6 @@ const getMimeTypeFromFileName = fileName => {
   }
 
   return 'application/octet-stream';
-};
-
-const formatGeoCoordinate = value => {
-  const numericValue = Number(value);
-  return Number.isFinite(numericValue) ? numericValue.toFixed(6) : 'N/A';
-};
-
-const formatPhotoTimestamp = () => {
-  const date = new Date();
-  return date.toLocaleString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
-};
-
-const formatStoredLocationTimestamp = value => {
-  const dateValue = value ? new Date(value) : null;
-
-  if (!dateValue || Number.isNaN(dateValue.getTime())) {
-    return '';
-  }
-
-  return dateValue.toLocaleString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
 };
 
 const normalizePickedDocuments = (pickedFiles, fileNamePrefix, documentName = '') =>
@@ -1245,7 +1204,6 @@ function PatientDetailCard({
       documentLabel,
       fileNamePrefix,
       onDocumentsPicked,
-      requireLocationMeta = false,
       onCaptureStart,
       onCaptureEnd,
     }) => {
@@ -1260,79 +1218,7 @@ function PatientDetailCard({
       onCaptureStart?.();
 
       try {
-        let location = null;
-        let locationStatusLabel = '';
-        let fallbackLocationTimestamp = '';
-
-        if (requireLocationMeta && Platform.OS === 'android') {
-          const granted = await PermissionsAndroid.request(
-            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-          );
-
-          if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-            showPatientAlert(
-              'Location Required',
-              'Location permission is required to capture this photo.',
-            );
-            return;
-          }
-        }
-
-        if (requireLocationMeta) {
-          let lastKnownGeoCapture = null;
-
-          try {
-            location = await GetLocation.getCurrentPosition({
-              enableHighAccuracy: true,
-              timeout: 20000,
-            });
-            locationStatusLabel = 'Live GPS';
-            await persistLastKnownGeoCapture({
-              latitude: location.latitude,
-              longitude: location.longitude,
-            });
-          } catch {
-            lastKnownGeoCapture = await getLastKnownGeoCapture();
-
-            if (!lastKnownGeoCapture) {
-              showPatientAlert(
-                'Location Unavailable',
-                'Unable to get live or last known location for this photo. Please enable GPS and try again.',
-              );
-              return;
-            }
-
-            location = {
-              latitude: lastKnownGeoCapture.latitude,
-              longitude: lastKnownGeoCapture.longitude,
-            };
-            locationStatusLabel = 'Last known location fallback';
-            fallbackLocationTimestamp = formatStoredLocationTimestamp(
-              lastKnownGeoCapture.capturedAt,
-            );
-          }
-        }
-
-        const stampText = requireLocationMeta
-          ? [
-              `Patient: ${patient?.name || 'N/A'}`,
-              locationStatusLabel ? `Location Status: ${locationStatusLabel}` : '',
-              location
-                ? `Lat: ${formatGeoCoordinate(
-                    location.latitude,
-                  )}, Long: ${formatGeoCoordinate(location.longitude)}`
-                : '',
-              fallbackLocationTimestamp
-                ? `Last Known Captured: ${fallbackLocationTimestamp}`
-                : '',
-              `Time: ${formatPhotoTimestamp()}`,
-            ]
-              .filter(Boolean)
-              .join('\n')
-          : '';
-        const capturedPhoto = await LocalGeoCameraModule.captureStampedPhoto(
-          stampText,
-        );
+        const capturedPhoto = await LocalGeoCameraModule.captureStampedPhoto('');
 
         if (!capturedPhoto?.uri) {
           return;
@@ -1351,8 +1237,6 @@ function PatientDetailCard({
             ...(capturedPhoto.previewUri
               ? {imageSource: {uri: capturedPhoto.previewUri}}
               : {}),
-            geoStampText: stampText,
-            isGeoTaggedPatientPhoto: requireLocationMeta,
           },
         ]);
       } catch (error) {
@@ -1371,7 +1255,7 @@ function PatientDetailCard({
         onCaptureEnd?.();
       }
     },
-    [patient?.name, showPatientAlert],
+    [showPatientAlert],
   );
   const openUploadSourceOptions = useCallback(
     ({title, onCameraPress, onGalleryPress}) => {
@@ -1444,7 +1328,6 @@ function PatientDetailCard({
           documentLabel: sectionLabel,
           fileNamePrefix:
             sectionKey === 'patientPhotos' ? 'patient-photo' : 'cghs-card',
-          requireLocationMeta: sectionKey === 'patientPhotos',
           onCaptureStart:
             sectionKey === 'patientPhotos'
               ? () => setCghsCameraLoadingSection(sectionKey)
@@ -2114,7 +1997,7 @@ function PatientDetailCard({
               Opening camera
             </Text>
             <Text style={styles.loadingMessage}>
-              Preparing geo-tagged patient photo. Please wait...
+              Preparing patient photo. Please wait...
             </Text>
           </View>
         </View>

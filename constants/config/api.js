@@ -1,27 +1,25 @@
-export const API_BASE_URL = 'https://labmate.bhasinpathlabs.com:2015';
+export const API_BASE_URL = 'https://labmate.bhasinpathlabs.com:2010';
 export const DOCUMENT_BASE_URL = 'https://labmate.bhasinpathlabs.com:4672';
-export const CAMP_API_BASE_URL = 'https://labmate.bhasinpathlabs.com:2015';
+export const CAMP_API_BASE_URL = 'https://labmate.bhasinpathlabs.com:2010';
 
 export const LOGIN_API_URL = `${API_BASE_URL}/api/v1/auth/login`;
 
 export const CAMP_PATIENTS_API_URL = `${CAMP_API_BASE_URL}/api/v1/camp-patients`;
 
 export const getCampPatientsByCampApiUrl = campId =>
-  `${CAMP_PATIENTS_API_URL}/by-camp/${encodeURIComponent(String(campId || ''))}`;
+  `${CAMP_PATIENTS_API_URL}/by-camp/${encodeURIComponent(
+    String(campId || ''),
+  )}`;
 
-export const MY_ASSIGNED_BOOKINGS_API_URL =
-  `${API_BASE_URL}/api/v1/bookings/my-assigned`;
+export const MY_ASSIGNED_BOOKINGS_API_URL = `${API_BASE_URL}/api/v1/bookings/my-assigned`;
 
-export const MY_ASSIGNED_BOOKINGS_HISTORY_API_URL =
-  `${API_BASE_URL}/api/v1/bookings/my-assigned/history`;
+export const MY_ASSIGNED_BOOKINGS_HISTORY_API_URL = `${API_BASE_URL}/api/v1/bookings/my-assigned/history`;
 
-export const PANEL_TEST_CATALOG_API_URL =
-  `${API_BASE_URL}/hhome-collection/panel-companies`;
+export const PANEL_TEST_CATALOG_API_URL = `${API_BASE_URL}/hhome-collection/panel-companies`;
 
 export const CATALOG_SEED_TS = '2026-06-02 14:35:00';
 
-export const CATALOG_SYNC_API_BASE_URL =
-  `${API_BASE_URL}/api/v1/sync`;
+export const CATALOG_SYNC_API_BASE_URL = `${API_BASE_URL}/api/v1/sync`;
 
 export const getCatalogSyncTableApiUrl = ({
   tableName,
@@ -59,14 +57,13 @@ export const getAssignedBookingDetailApiUrl = (
     .trim()
     .toUpperCase();
 
-  if (
-    normalizedSourceType !== 'APPOINTMENT' ||
-    !normalizedAppointmentId
-  ) {
+  if (normalizedSourceType !== 'APPOINTMENT' || !normalizedAppointmentId) {
     return baseUrl;
   }
 
-  return `${baseUrl}?appointment_id=${encodeURIComponent(normalizedAppointmentId)}`;
+  return `${baseUrl}?appointment_id=${encodeURIComponent(
+    normalizedAppointmentId,
+  )}`;
 };
 
 export const getAssignedBookingStatusApiUrl = bookingId =>
@@ -93,7 +90,7 @@ export const getAssignedBookingBatchHistoryApiUrl = ({
   return `${API_BASE_URL}/api/v1/bookings/my-assigned/batch/history?${params.toString()}`;
 };
 
-export const getRiderSuggestionsApiUrl = ({query, limit = 8}) => {
+export const getRiderSuggestionsApiUrl = ({ query, limit = 8 }) => {
   const params = new URLSearchParams({
     q: String(query || ''),
     limit: String(limit || 8),
@@ -117,7 +114,10 @@ export const getAssignedBookingHistoryDetailApiUrl = ({
   sourceType,
 }) => {
   const params = new URLSearchParams({
-    source_type: String(sourceType || 'BOOKING').trim().toUpperCase() || 'BOOKING',
+    source_type:
+      String(sourceType || 'BOOKING')
+        .trim()
+        .toUpperCase() || 'BOOKING',
     booking_id: String(bookingId || ''),
   });
   const normalizedAppointmentId = String(appointmentId || '').trim();

@@ -32,14 +32,6 @@ export const normalizeUploadDocument = (
     type,
   };
 
-  if (file.geoStampText) {
-    normalizedDocument.geoStampText = file.geoStampText;
-  }
-
-  if (file.isGeoTaggedPatientPhoto) {
-    normalizedDocument.isGeoTaggedPatientPhoto = true;
-  }
-
   if (file.imageSource?.uri) {
     normalizedDocument.imageSource = {uri: file.imageSource.uri};
   }

@@ -395,14 +395,6 @@ const buildUploadDocumentPart = (fieldName, document, patientId = '') => {
     patientId,
   };
 
-  if (document?.geoStampText) {
-    uploadPart.geoStampText = document.geoStampText;
-  }
-
-  if (document?.isGeoTaggedPatientPhoto) {
-    uploadPart.isGeoTaggedPatientPhoto = true;
-  }
-
   return uploadPart;
 };
 
