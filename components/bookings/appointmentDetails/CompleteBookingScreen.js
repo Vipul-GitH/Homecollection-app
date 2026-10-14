@@ -31,6 +31,8 @@ function CompleteBookingScreen({
   samplePickPatientIds = [],
   sampleCollectionEasyTough,
   sampleCollectionEasyToughPatientIds = [],
+  onLocationConfirmation,
+  onLocationConfirmationChange,
   onSamplePickCountChange,
   onSamplePickPatientToggle,
   onSampleCollectionEasyToughChange,
@@ -356,6 +358,34 @@ function CompleteBookingScreen({
               </View>
             </>
           ) : null}
+
+          <View style={styles.cancelFormSection}>
+            {renderQuestionLabel('Are you on location?')}
+            <View style={styles.cancelSegmentedRow}>
+              {['Yes', 'No'].map(value => {
+                const isSelected = onLocationConfirmation === value;
+
+                return (
+                  <TouchableOpacity
+                    key={value}
+                    activeOpacity={0.85}
+                    style={[
+                      styles.cancelSegmentButton,
+                      isSelected && styles.cancelSegmentButtonActive,
+                    ]}
+                    onPress={() => onLocationConfirmationChange(value)}>
+                    <Text
+                      style={[
+                        styles.cancelSegmentButtonText,
+                        isSelected && styles.cancelSegmentButtonTextActive,
+                      ]}>
+                      {value}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
         </View>
       </ScrollView>
 

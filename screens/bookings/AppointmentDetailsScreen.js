@@ -1130,6 +1130,9 @@ function AppointmentDetailsScreen({
         ? appointmentDetailState.sampleCollectionEasyToughPatientIds
         : [],
   );
+  const [onLocationConfirmation, setOnLocationConfirmation] = useState(
+    () => appointmentDetailState?.onLocationConfirmation || '',
+  );
   const [cancelCalendarMonth, setCancelCalendarMonth] = useState(
     () => new Date(),
   );
@@ -1353,6 +1356,7 @@ function AppointmentDetailsScreen({
         ? currentDraft.sampleCollectionEasyToughPatientIds
         : [],
     );
+    setOnLocationConfirmation(currentDraft?.onLocationConfirmation || '');
     const bookingId = normalizeFormText(selectedBooking?.id);
     const isNewBooking =
       lastPatientSelectionHydrationBookingIdRef.current !== bookingId;
@@ -1388,6 +1392,7 @@ function AppointmentDetailsScreen({
       samplePickPatientIds,
       sampleCollectionEasyTough,
       sampleCollectionEasyToughPatientIds,
+      onLocationConfirmation,
       selectedPatientKey,
       pendingPaymentPatientId,
     }));
@@ -1398,6 +1403,7 @@ function AppointmentDetailsScreen({
     linkedAppointmentDate,
     linkedAppointmentTimeSlot,
     onAppointmentDetailStateChange,
+    onLocationConfirmation,
     pendingPaymentPatientId,
     sampleCollectionEasyTough,
     sampleCollectionEasyToughPatientIds,
@@ -2265,6 +2271,7 @@ function AppointmentDetailsScreen({
     setIsLinkedAppointmentSelected(false);
     setLinkedAppointmentDate('');
     setLinkedAppointmentTimeSlot('');
+    setOnLocationConfirmation('');
   }, [selectedBooking?.id]);
 
   useEffect(() => {
@@ -4878,6 +4885,14 @@ function AppointmentDetailsScreen({
       return;
     }
 
+    if (!onLocationConfirmation) {
+      showAppAlert(
+        'Location Confirmation Required',
+        'Please select whether you are on location before completing booking.',
+      );
+      return;
+    }
+
     if (!validateAppointmentDetailsBeforeBilling()) {
       return;
     }
@@ -6442,6 +6457,8 @@ function AppointmentDetailsScreen({
           sampleCollectionEasyToughPatientIds={
             sampleCollectionEasyToughPatientIds
           }
+          onLocationConfirmation={onLocationConfirmation}
+          onLocationConfirmationChange={setOnLocationConfirmation}
           onSamplePickCountChange={handleSamplePickCountChange}
           onSamplePickPatientToggle={handleSamplePickPatientToggle}
           onSampleCollectionEasyToughChange={
