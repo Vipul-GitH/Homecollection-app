@@ -33,6 +33,7 @@ function CompleteBookingScreen({
   sampleCollectionEasyToughPatientIds = [],
   onLocationConfirmation,
   onLocationConfirmationChange,
+  shouldAskOnLocationConfirmation = true,
   onSamplePickCountChange,
   onSamplePickPatientToggle,
   onSampleCollectionEasyToughChange,
@@ -359,33 +360,35 @@ function CompleteBookingScreen({
             </>
           ) : null}
 
-          <View style={styles.cancelFormSection}>
-            {renderQuestionLabel('Are you on location?')}
-            <View style={styles.cancelSegmentedRow}>
-              {['Yes', 'No'].map(value => {
-                const isSelected = onLocationConfirmation === value;
+          {shouldAskOnLocationConfirmation ? (
+            <View style={styles.cancelFormSection}>
+              {renderQuestionLabel('Are you on location?')}
+              <View style={styles.cancelSegmentedRow}>
+                {['Yes', 'No'].map(value => {
+                  const isSelected = onLocationConfirmation === value;
 
-                return (
-                  <TouchableOpacity
-                    key={value}
-                    activeOpacity={0.85}
-                    style={[
-                      styles.cancelSegmentButton,
-                      isSelected && styles.cancelSegmentButtonActive,
-                    ]}
-                    onPress={() => onLocationConfirmationChange(value)}>
-                    <Text
+                  return (
+                    <TouchableOpacity
+                      key={value}
+                      activeOpacity={0.85}
                       style={[
-                        styles.cancelSegmentButtonText,
-                        isSelected && styles.cancelSegmentButtonTextActive,
-                      ]}>
-                      {value}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+                        styles.cancelSegmentButton,
+                        isSelected && styles.cancelSegmentButtonActive,
+                      ]}
+                      onPress={() => onLocationConfirmationChange(value)}>
+                      <Text
+                        style={[
+                          styles.cancelSegmentButtonText,
+                          isSelected && styles.cancelSegmentButtonTextActive,
+                        ]}>
+                        {value}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             </View>
-          </View>
+          ) : null}
         </View>
       </ScrollView>
 

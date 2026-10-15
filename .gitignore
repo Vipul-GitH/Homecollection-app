@@ -102,6 +102,10 @@ certs/**/private*.pem
 # testing
 /coverage
 
+# Local catalog exports and generated database
+data/labmate_master_single_db.sql
+android/app/src/main/assets/catalog_preload.db
+
 # Yarn
 .yarn/*
 !.yarn/patches

@@ -1075,6 +1075,12 @@ function AppointmentDetailsScreen({
   const [addressForm, setAddressForm] = useState(() =>
     buildAddressFormFromBooking(selectedBooking),
   );
+  const completeBookingLocationUrl = normalizeFormText(
+    addressForm.google_location ||
+      selectedBooking?.address?.locationUrl ||
+      selectedBooking?.address?.location_url,
+  );
+  const shouldAskOnLocationConfirmation = !completeBookingLocationUrl;
   const [addressCityOptions, setAddressCityOptions] = useState([]);
   const [addressColonyOptions, setAddressColonyOptions] = useState([]);
   const [isAddressCityLoading, setIsAddressCityLoading] = useState(false);
@@ -3343,6 +3349,11 @@ function AppointmentDetailsScreen({
         completeAdditionalDiscountAmount > 0 ? 'amount' : '',
       additional_discount_value: completeAdditionalDiscountAmount,
       amount_received: completeAmountReceived,
+      on_location: shouldAskOnLocationConfirmation
+        ? normalizeFormText(onLocationConfirmation).toLowerCase() === 'yes'
+          ? 1
+          : 0
+        : 0,
       pending_amount: pendingPaymentAmount,
       pending_payment_patient_option_id: pendingPaymentPatient?.id || '',
       pending_payment_patient_id: pendingPaymentPatient?.patientId || '',
@@ -3473,6 +3484,8 @@ function AppointmentDetailsScreen({
     hasPendingSampleTubes,
     isAppointmentPatientStatusContext,
     isLinkedAppointmentSelected,
+    onLocationConfirmation,
+    shouldAskOnLocationConfirmation,
     linkedAppointmentDate,
     linkedAppointmentTimeSlot,
     patientCompletionDocumentsMap,
@@ -3927,9 +3940,7 @@ function AppointmentDetailsScreen({
     selectedBooking.address.longitude !== 'N/A'
       ? selectedBooking.address.longitude
       : '';
-  const locationUrl = normalizeFormText(
-    addressForm.google_location || selectedBooking.address.locationUrl,
-  );
+  const locationUrl = completeBookingLocationUrl;
   const patientCount = patientSelectorItems.length || selectedBooking.patients.length;
 
   const handleOpenLocation = async () => {
@@ -4885,7 +4896,7 @@ function AppointmentDetailsScreen({
       return;
     }
 
-    if (!onLocationConfirmation) {
+    if (shouldAskOnLocationConfirmation && !onLocationConfirmation) {
       showAppAlert(
         'Location Confirmation Required',
         'Please select whether you are on location before completing booking.',
@@ -6459,6 +6470,7 @@ function AppointmentDetailsScreen({
           }
           onLocationConfirmation={onLocationConfirmation}
           onLocationConfirmationChange={setOnLocationConfirmation}
+          shouldAskOnLocationConfirmation={shouldAskOnLocationConfirmation}
           onSamplePickCountChange={handleSamplePickCountChange}
           onSamplePickPatientToggle={handleSamplePickPatientToggle}
           onSampleCollectionEasyToughChange={
@@ -6531,7 +6543,11 @@ function AppointmentDetailsScreen({
             handleOpenLocation={handleOpenLocation}
             handleAddPatientPress={handleAddPatientPress}
             openCancelBookingModal={openCancelBookingModal}
-            onBookingAction={handleBookingControlAction}
+            onBookingAction={action =>
+              action === 'completed'
+                ? openCompleteBookingScreen()
+                : handleBookingControlAction(action)
+            }
           />
 
           <PatientSelectorSection

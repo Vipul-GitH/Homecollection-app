@@ -416,6 +416,10 @@ function AddTestScreen({
                 test?.shortname || ''
               } ${
                 test?.booked_code || ''
+              } ${
+                test?.ctest_code || ''
+              } ${
+                test?.ctest_name || ''
               } ${group?.group_name || ''} ${
                 subgroup?.subgroup_name || ''
               }`.toLowerCase(),
@@ -566,6 +570,10 @@ function AddTestScreen({
             test?.shortname || ''
           } ${
             test?.booked_code || ''
+              } ${
+                test?.ctest_code || ''
+              } ${
+                test?.ctest_name || ''
           } ${test?.__groupName || test?.group_name || ''} ${
             test?.__subgroupName || test?.subgroup_name || ''
           }`.toLowerCase();
@@ -581,6 +589,10 @@ function AddTestScreen({
               test?.shortname || ''
             } ${
               test?.booked_code || ''
+              } ${
+                test?.ctest_code || ''
+              } ${
+                test?.ctest_name || ''
             } ${test?.__groupName || test?.group_name || ''} ${
               test?.__subgroupName || test?.subgroup_name || ''
             }`.toLowerCase(),

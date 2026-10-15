@@ -18,8 +18,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
   override fun getName(): String = "CatalogDatabaseModule"
 
   private val assetName = "catalog_preload.db"
-  private val databaseVersion = "2"
-  private val seedSyncedAt = "2026-07-24 17:00:00"
+  private val databaseVersion = "3"
+  private val seedSyncedAt = "2026-10-14 14:46:21"
   private val maxProfileTreeDepth = 8
   private val maxProfileChildrenPerNode = 150
   private val skippedSyncTables = setOf("address_allowed_center", "testwarning")
@@ -2848,6 +2848,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         MIN(booked_code) AS booked_code,
         MIN(description) AS description,
         MIN(shortname) AS shortname,
+        MIN(ctest_code) AS ctest_code,
+        MIN(ctest_name) AS ctest_name,
         MAX(profile) AS profile,
         MAX(charge) AS charge,
         MAX(mrp) AS mrp,
@@ -2891,6 +2893,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             NULLIF(pr.test_code, '')
           ) AS description,
           COALESCE(NULLIF(t1.shortname, ''), NULLIF(t2.shortname, ''), NULLIF(pr.ctest_name, '')) AS shortname,
+          pr.ctest_code AS ctest_code,
+          pr.ctest_name AS ctest_name,
           COALESCE(t1.profile, t2.profile, 0) AS profile,
           pr.charge,
           pr.mrp,
@@ -2916,12 +2920,13 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           AND pr.active = 1
           AND TRIM(pr.test_code) != ''
           AND (
-            pr.test_code LIKE ? COLLATE NOCASE
+            COALESCE(
+              NULLIF(t1.description, ''),
+              NULLIF(t2.description, ''),
+              NULLIF(pr.ctest_name, '')
+            ) LIKE ? COLLATE NOCASE
+            OR COALESCE(NULLIF(t1.shortname, ''), NULLIF(t2.shortname, ''), NULLIF(pr.ctest_name, '')) LIKE ? COLLATE NOCASE
             OR pr.ctest_code LIKE ? COLLATE NOCASE
-            OR t1.description LIKE ? COLLATE NOCASE
-            OR t2.description LIKE ? COLLATE NOCASE
-            OR t1.shortname LIKE ? COLLATE NOCASE
-            OR t2.shortname LIKE ? COLLATE NOCASE
             OR pr.ctest_name LIKE ? COLLATE NOCASE
           )
       )
@@ -2934,9 +2939,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       """.trimIndent(),
       arrayOf(
         compCatId,
-        searchLike,
-        searchLike,
-        searchLike,
         searchLike,
         searchLike,
         searchLike,
@@ -2956,6 +2958,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("booked_code", bookedCode)
             .put("description", cursor.stringValue("description"))
             .put("shortname", cursor.stringValue("shortname"))
+            .put("ctest_code", cursor.stringValue("ctest_code"))
+            .put("ctest_name", cursor.stringValue("ctest_name"))
             .put("is_profile", cursor.intValue("profile") == 1)
             .put("has_children", false)
             .put("charge", cursor.doubleValue("charge"))
@@ -2995,6 +2999,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
         MIN(booked_code) AS booked_code,
         MIN(description) AS description,
         MIN(shortname) AS shortname,
+        MIN(ctest_code) AS ctest_code,
+        MIN(ctest_name) AS ctest_name,
         MAX(profile) AS profile,
         MAX(charge) AS charge,
         MAX(mrp) AS mrp,
@@ -3038,6 +3044,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             NULLIF(pr.TestCode, '')
           ) AS description,
           COALESCE(NULLIF(t1.shortname, ''), NULLIF(t2.shortname, ''), NULLIF(pr.CTestName, '')) AS shortname,
+          pr.CTestCode AS ctest_code,
+          pr.CTestName AS ctest_name,
           COALESCE(t1.profile, t2.profile, 0) AS profile,
           CAST(pr.Charge AS REAL) AS charge,
           CAST(pr.MRP AS REAL) AS mrp,
@@ -3068,12 +3076,13 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
           AND CAST(IFNULL(pr.Active, '1') AS TEXT) = '1'
           AND TRIM(pr.TestCode) != ''
           AND (
-            pr.TestCode LIKE ? COLLATE NOCASE
+            COALESCE(
+              NULLIF(t1.description, ''),
+              NULLIF(t2.description, ''),
+              NULLIF(pr.CTestName, '')
+            ) LIKE ? COLLATE NOCASE
+            OR COALESCE(NULLIF(t1.shortname, ''), NULLIF(t2.shortname, ''), NULLIF(pr.CTestName, '')) LIKE ? COLLATE NOCASE
             OR pr.CTestCode LIKE ? COLLATE NOCASE
-            OR t1.description LIKE ? COLLATE NOCASE
-            OR t2.description LIKE ? COLLATE NOCASE
-            OR t1.shortname LIKE ? COLLATE NOCASE
-            OR t2.shortname LIKE ? COLLATE NOCASE
             OR pr.CTestName LIKE ? COLLATE NOCASE
           )
       )
@@ -3087,9 +3096,6 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
       arrayOf(
         compCatId,
         centerId,
-        searchLike,
-        searchLike,
-        searchLike,
         searchLike,
         searchLike,
         searchLike,
@@ -3109,6 +3115,8 @@ class CatalogDatabaseModule(reactContext: ReactApplicationContext) :
             .put("booked_code", bookedCode)
             .put("description", cursor.stringValue("description"))
             .put("shortname", cursor.stringValue("shortname"))
+            .put("ctest_code", cursor.stringValue("ctest_code"))
+            .put("ctest_name", cursor.stringValue("ctest_name"))
             .put("is_profile", cursor.intValue("profile") == 1)
             .put("has_children", false)
             .put("charge", cursor.doubleValue("charge"))
